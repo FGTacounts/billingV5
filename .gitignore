@@ -1,0 +1,19 @@
+# Dependencies — reinstalled with `npm install`, never committed.
+# One file in here is 109MB, which is over GitHub's 100MB limit.
+/node_modules
+
+# Build output
+/.next
+/out
+/build
+
+# Secrets — never commit these
+.env
+.env.*
+!.env.example
+*.p8
+*.pem
+*.key
+
+# OS noise
+.DS_Store

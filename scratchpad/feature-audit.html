@@ -1,0 +1,545 @@
+<title>FGT Build Ledger</title>
+<style>
+  :root {
+    --paper: #f5f4ef;
+    --paper-raised: #fbfaf6;
+    --ink: #182420;
+    --ink-soft: #4b5a54;
+    --ink-faint: #7c8a83;
+    --line: rgba(24, 36, 32, 0.12);
+    --line-soft: rgba(24, 36, 32, 0.07);
+    --accent: #0e6b5c;
+    --accent-soft: rgba(14, 107, 92, 0.1);
+    --done: #1c7c4c;
+    --done-bg: rgba(28, 124, 76, 0.11);
+    --partial: #a3711a;
+    --partial-bg: rgba(163, 113, 26, 0.12);
+    --notdone: #a3372b;
+    --notdone-bg: rgba(163, 55, 43, 0.1);
+    --blocked: #5b4636;
+    --blocked-bg: rgba(91, 70, 54, 0.1);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #14201c;
+      --paper-raised: #1a2823;
+      --ink: #eef1ee;
+      --ink-soft: #b6c2bc;
+      --ink-faint: #7f8d86;
+      --line: rgba(238, 241, 238, 0.13);
+      --line-soft: rgba(238, 241, 238, 0.07);
+      --accent: #4fb89f;
+      --accent-soft: rgba(79, 184, 159, 0.14);
+      --done: #4fb87a;
+      --done-bg: rgba(79, 184, 122, 0.14);
+      --partial: #d9a44d;
+      --partial-bg: rgba(217, 164, 77, 0.14);
+      --notdone: #e2685a;
+      --notdone-bg: rgba(226, 104, 90, 0.13);
+      --blocked: #c2a98e;
+      --blocked-bg: rgba(194, 169, 142, 0.13);
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #14201c;
+    --paper-raised: #1a2823;
+    --ink: #eef1ee;
+    --ink-soft: #b6c2bc;
+    --ink-faint: #7f8d86;
+    --line: rgba(238, 241, 238, 0.13);
+    --line-soft: rgba(238, 241, 238, 0.07);
+    --accent: #4fb89f;
+    --accent-soft: rgba(79, 184, 159, 0.14);
+    --done: #4fb87a;
+    --done-bg: rgba(79, 184, 122, 0.14);
+    --partial: #d9a44d;
+    --partial-bg: rgba(217, 164, 77, 0.14);
+    --notdone: #e2685a;
+    --notdone-bg: rgba(226, 104, 90, 0.13);
+    --blocked: #c2a98e;
+    --blocked-bg: rgba(194, 169, 142, 0.13);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 56px 24px 96px;
+  }
+
+  header.masthead {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    border-bottom: 2px solid var(--ink);
+    padding-bottom: 18px;
+    margin-bottom: 6px;
+    flex-wrap: wrap;
+  }
+  .masthead-title {
+    font-family: "Fraunces", Georgia, serif;
+    font-weight: 600;
+    font-size: 34px;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+  }
+  .masthead-meta {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 12px;
+    color: var(--ink-faint);
+    text-align: right;
+    line-height: 1.6;
+  }
+
+  .lede {
+    color: var(--ink-soft);
+    font-size: 15.5px;
+    max-width: 62ch;
+    margin: 20px 0 34px;
+  }
+  .lede strong { color: var(--ink); }
+
+  /* Summary strip */
+  .summary {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+    margin-bottom: 12px;
+  }
+  .summary-cell {
+    background: var(--paper-raised);
+    padding: 16px 14px;
+  }
+  .summary-count {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 26px;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    line-height: 1;
+  }
+  .summary-label {
+    margin-top: 6px;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--ink-faint);
+  }
+  .summary-cell.done .summary-count { color: var(--done); }
+  .summary-cell.partial .summary-count { color: var(--partial); }
+  .summary-cell.notdone .summary-count { color: var(--notdone); }
+  .summary-cell.blocked .summary-count { color: var(--blocked); }
+
+  .bar {
+    display: flex;
+    height: 8px;
+    border-radius: 5px;
+    overflow: hidden;
+    margin: 0 0 40px;
+    border: 1px solid var(--line);
+  }
+  .bar span { display: block; height: 100%; }
+  .bar .b-done { background: var(--done); }
+  .bar .b-partial { background: var(--partial); }
+  .bar .b-notdone { background: var(--notdone); }
+  .bar .b-blocked { background: var(--blocked); }
+
+  /* Section */
+  section.group {
+    margin-bottom: 34px;
+  }
+  .group-head {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+  .group-num {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 12px;
+    color: var(--ink-faint);
+    letter-spacing: 0.04em;
+  }
+  .group-title {
+    font-family: "Fraunces", Georgia, serif;
+    font-size: 21px;
+    font-weight: 600;
+  }
+  .group-note {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--ink-faint);
+    font-style: italic;
+  }
+
+  .rows {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--paper-raised);
+  }
+  .row {
+    display: grid;
+    grid-template-columns: 108px 1fr;
+    gap: 14px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--line-soft);
+    align-items: start;
+  }
+  .row:last-child { border-bottom: none; }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    padding: 3px 8px 3px 7px;
+    border-radius: 5px;
+    white-space: nowrap;
+    width: fit-content;
+  }
+  .chip::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 2px;
+    flex-shrink: 0;
+  }
+  .chip.done { color: var(--done); background: var(--done-bg); }
+  .chip.done::before { background: var(--done); }
+  .chip.partial { color: var(--partial); background: var(--partial-bg); }
+  .chip.partial::before { background: var(--partial); }
+  .chip.notdone { color: var(--notdone); background: var(--notdone-bg); }
+  .chip.notdone::before { background: var(--notdone); }
+  .chip.blocked { color: var(--blocked); background: var(--blocked-bg); }
+  .chip.blocked::before { background: var(--blocked); }
+
+  .item-text { color: var(--ink); }
+  .item-note {
+    display: block;
+    margin-top: 3px;
+    font-size: 13px;
+    color: var(--ink-faint);
+  }
+  .item-note.this-session { color: var(--accent); }
+
+  footer.closing {
+    margin-top: 48px;
+    padding-top: 22px;
+    border-top: 1px solid var(--line);
+    color: var(--ink-soft);
+    font-size: 14px;
+    max-width: 62ch;
+  }
+  footer.closing h3 {
+    font-family: "Fraunces", Georgia, serif;
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--ink);
+    margin: 0 0 8px;
+  }
+  footer.closing ul { margin: 8px 0; padding-left: 20px; }
+  footer.closing li { margin-bottom: 4px; }
+
+  @media (max-width: 560px) {
+    .summary { grid-template-columns: repeat(2, 1fr); }
+    .row { grid-template-columns: 1fr; }
+    .masthead { flex-direction: column; }
+    .masthead-meta { text-align: left; }
+  }
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap">
+
+<div class="wrap">
+  <header class="masthead">
+    <div class="masthead-title">Build Ledger</div>
+    <div class="masthead-meta">Famlist General Trading<br>Billing &amp; Order Management<br>28 Aug 2026</div>
+  </header>
+
+  <p class="lede">
+    A line-by-line accounting of every request made across our conversation, checked against what's
+    actually shipped. <strong>Done</strong> means built and verified live in the browser this session.
+  </p>
+
+  <div class="summary">
+    <div class="summary-cell done"><div class="summary-count" id="ct-done">–</div><div class="summary-label">Done</div></div>
+    <div class="summary-cell partial"><div class="summary-count" id="ct-partial">–</div><div class="summary-label">Partial</div></div>
+    <div class="summary-cell notdone"><div class="summary-count" id="ct-notdone">–</div><div class="summary-label">Not done</div></div>
+    <div class="summary-cell blocked"><div class="summary-count" id="ct-blocked">–</div><div class="summary-label">Blocked</div></div>
+  </div>
+  <div class="bar" id="bar"></div>
+
+  <!-- ================= GLOBAL ================= -->
+  <section class="group">
+    <div class="group-head"><span class="group-num">01</span><span class="group-title">Global &amp; Settings</span></div>
+    <div class="rows">
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">Admin can upload a logo, applied app-wide (sidebar + invoice PDFs).</span></div></div>
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">Inbox popup has an arrow through to a real Inbox page.</span></div></div>
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">Logout removed from the top bar, moved into Settings → Account.</span></div></div>
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">Adjust View selections persist until changed (via the shared preferences store).</span></div></div>
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">Notifications stay listed until explicitly cleared, with a Clear button.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Admin can set VAT and currency per country/zone, not just one flat rate.</span><span class="item-note this-session">Zones tab in Settings, Admin-only.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Any user can switch their display currency; figures convert at a live rate.</span><span class="item-note this-session">Still recorded/invoiced in AED underneath.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Settings organized into sidebar tabs.</span><span class="item-note this-session">A real left rail on desktop, collapsing to a horizontal strip on phones where a rail would eat the width. Note: the <strong>Zones</strong> tab is Admin-only — the "admin" login is role Manager, so sign in as <strong>bilal</strong> (the actual Admin account) to see it.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">"Buttons not text" — real button shapes everywhere.</span><span class="item-note this-session">Root cause found, and it was a build-config bug, not a styling oversight: Tailwind's default opacity scale has no 8/12/18 steps, so <code>bg-accent/12</code> (the entire tinted-button tier), <code>hover:bg-accent/18</code> and <code>bg-danger/8</code> were never generated as CSS at all — those buttons rendered with no background whatsoever, which is exactly why they read as plain text. Registered the missing steps and converted the theme colors to RGB channels so opacity modifiers resolve. ~44 tinted surfaces across 20 files went from invisible to visible.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Admin controls at which stage an order starts counting toward reports.</span><span class="item-note this-session">Was hardcoded to "delivered" in 13 places across 5 files; now one shared setting — Approved / Out for delivery / Delivered — applied everywhere at once (dashboard, sales, aging, statements, product insights). Needs <code>scratchpad/report-stage-migration.sql</code>; until it's run the app falls back to exactly the old behaviour, verified by figures being byte-identical after the refactor.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Colorful data option — each category gets its own color.</span><span class="item-note this-session">Off by default, in Settings. Colors are assigned by a hash of the label, so a category keeps the same color everywhere and doesn't change when the sort order does. The app chrome stays neutral, as you specified.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Apple-widget-gallery-style Arrange — drag, minus to remove, categorized gallery, cross-tab borrowing.</span><span class="item-note this-session">An "Arrange" button puts the Dashboard into edit mode: red minus badge per widget, drag handle, Q/H/F size pills, and a gallery sheet that slides up from the bottom, hides while you drag and returns when you stop. The gallery is grouped — <em>This page</em>, <em>Sales</em>, <em>Customers</em> — and widgets from other tabs show "from Sales" / "from Customers" so it's clear you're borrowing. Built on pointer events, not HTML5 drag-and-drop, so it works on the iPad. All verified live: dragging reordered and persisted, minus returned a widget to the gallery, and Top customers borrowed from the Customers tab rendered real data on the Dashboard.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Keyboard shortcuts for navigation — opt-in, with remappable keys.</span><span class="item-note this-session">Off by default as you asked. Press <code>g</code> then a key (g-o for Orders, g-c for Customers…); every key is editable in Settings. Only binds routes your role can reach, and is ignored while you're typing in a field — both verified live.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Default quick-download format preference (PDF / Excel / Both).</span><span class="item-note this-session">In Settings; "Both" shows a PDF and an Excel button on every customer row. Excel stays Manager-only.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Speed pass — measured, not guessed.</span><span class="item-note this-session">A dashboard load was firing <strong>66 requests</strong>, including <code>/api/preferences</code> <strong>six-plus times</strong> (up to 4.2s each) because every component that read a preference ran its own fetch. Replaced with one shared store, and added in-flight deduplication to the settings reads. Now <strong>46 requests, one preferences call</strong> — with identical figures on screen. It also fixed a real bug: a setting changed in Settings now reaches the sidebar immediately instead of needing a page reload.</span></div></div>
+    </div>
+  </section>
+
+  <!-- ================= DASHBOARD ================= -->
+  <section class="group">
+    <div class="group-head"><span class="group-num">02</span><span class="group-title">Dashboard</span></div>
+    <div class="rows">
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">Average Sale and Salesman widgets are proper half-width, matching everything else.</span></div></div>
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">Expanded (enlarged) widgets rebuilt to match your reference mockups, not just scaled-up compact views.</span></div></div>
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">Dedicated expand button removed — the whole widget opens on click now.</span></div></div>
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">Clicking outside an expanded widget closes it.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Category/product-wise sales report widget, hidden by default.</span><span class="item-note this-session">Ranked bars with revenue and units, toggling between category and individual product. Turn it on via the Arrange button — which now has show/hide per widget, a step toward the full Arrange system.</span></div></div>
+    </div>
+  </section>
+
+  <!-- ================= CUSTOMERS ================= -->
+  <section class="group">
+    <div class="group-head"><span class="group-num">03</span><span class="group-title">Customers</span></div>
+    <div class="rows">
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">Status is a colored square, not a pill.</span><span class="item-note">It had shrunk to an unlabeled dot; it's now a visible square with its status name printed beside it.</span></div></div>
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">Quick-download button downloads a PDF.</span></div></div>
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">Customer detail offers both PDF and Excel downloads.</span></div></div>
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">An order can be deselected again in the Log Payment flow.</span></div></div>
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">Cheque bank name and payer details are remembered and pre-filled next time.</span></div></div>
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">Cheque amount is OCR-scanned along with bank/number/date.</span></div></div>
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">New customer form has no City field and matches the intended layout.</span></div></div>
+    </div>
+  </section>
+
+  <!-- ================= PRODUCTS ================= -->
+  <section class="group">
+    <div class="group-head"><span class="group-num">04</span><span class="group-title">Products</span></div>
+    <div class="rows">
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">Sale/Sold columns have a 30/60/90-day window picker.</span></div></div>
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">View switcher trimmed to just List and Gallery.</span></div></div>
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">"Use last price" actually changes the price now.</span><span class="item-note">Root cause: the table it reads from didn't exist at all, and once created, Row Level Security silently blocked every read. Both fixed, verified live with a real price change.</span></div></div>
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">Opening a product shows the last price it was sold at.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Product images.</span><span class="item-note this-session">Three separate bugs, all found and fixed: missing Drive credentials (you provided a new service-account key), the folder lookup querying app_settings as a key/value table when it's actually one row of named columns, and the photo search only checking the top-level Drive folder instead of recursing into the category subfolders your photos actually live in. Verified live — a real product photo renders in Gallery view.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Product photo upload, and "Additional Details" appearing once a photo is added.</span><span class="item-note this-session">The form had no photo field at all before. Now it takes a photo, files it in Drive under the SKU so it shows in the product list, and adding one reveals Additional Details exactly as the design does.</span></div></div>
+    </div>
+  </section>
+
+  <!-- ================= ORDERS ================= -->
+  <section class="group">
+    <div class="group-head"><span class="group-num">05</span><span class="group-title">Orders</span></div>
+    <div class="rows">
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">An order is locked once billed — the update-item route rejects direct edits past draft/pending; only the edit-request flow can touch it after.</span></div></div>
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">Item price defaults to the customer's last-billed price; per-product discount reuse.</span><span class="item-note">Same root-cause fix as "last price" above.</span></div></div>
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">Arrow-key navigation between price/qty columns on the line-item table.</span><span class="item-note">Spreadsheet-style, up/down/left/right.</span></div></div>
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">"New customer (requires Manager approval)" note hidden when the Manager is the one creating the order.</span></div></div>
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">Manager can edit invoice number/customer/salesman/PO on any order.</span><span class="item-note">Includes a real bug fix: the invoice PDF's P.O. No. column was always hardcoded blank, never reading the saved value. Now wired through and confirmed on a live PDF.</span></div></div>
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">Exit-with-unsaved-changes prompt / save as draft.</span></div></div>
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">Role-based note routing (Salesman→Manager, Manager→Salesman or Warehouse, Warehouse→Manager).</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">New Order screen matched against your mockup.</span><span class="item-note this-session">Compared element by element against <code>new order.png</code> and closed every gap: role/Date micro-labels above bold values with the short "28 AUG 2026" date, uppercase CUSTOMER header with the green add button, plain numbers in the table (currency only in the totals), a "+ Search article" row with the camera sitting <em>below</em> the table rather than a toolbar above it, and the totals block now reads Subtotal / GP with its percentage / VAT / <strong>Discount</strong> / Total with AED as a suffix. The Discount line was missing from the app entirely.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Orders summary widget rebuilt to the reference image.</span><span class="item-note this-session">Ring now labelled "Pending", and Warehouse is one block with its four stages inline as pills (Waiting / Picking / Packed / Delivering) — the separate "Delivery" button and the second sub-nav row underneath are gone.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Bulk import via a SKU/Qty two-column file, with a sample download.</span><span class="item-note this-session">Inside New Order. Imported lines still pick up sticky pricing and customer discounts, and unmatched SKUs are reported rather than silently dropped — verified with a real file.</span></div></div>
+    </div>
+  </section>
+
+  <!-- ================= SALES ================= -->
+  <section class="group">
+    <div class="group-head"><span class="group-num">06</span><span class="group-title">Sales</span></div>
+    <div class="rows">
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">Clicking a salesman on the Sales page's own Goal table opens their drill-down.</span><span class="item-note">Reuses the same detail view built earlier for the Dashboard leaderboard.</span></div></div>
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">Page is no longer locked to one salesman by a filter dropdown.</span></div></div>
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">Monthly Detail widget has its own salesman picker.</span></div></div>
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">Salesman trend shows both vs-last-month and vs-last-year comparisons.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Full/Half/Quarter Arrange sizing on Sales.</span><span class="item-note this-session">Sales is now on the same 4-column grid as the Dashboard, with per-widget size control.</span></div></div>
+    </div>
+  </section>
+
+  <!-- ================= PAYMENTS ================= -->
+  <section class="group">
+    <div class="group-head"><span class="group-num">07</span><span class="group-title">Payments</span></div>
+    <div class="rows">
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">GRV has its own separate approval step before it counts.</span></div></div>
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">Confirming a GRV reduces the customer's total balance.</span></div></div>
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">Manager can apply a discount while collecting a payment.</span></div></div>
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">A reason is required whenever a collection doesn't cover the full amount owed.</span></div></div>
+    </div>
+  </section>
+
+  <!-- ================= INVOICES / PDF ================= -->
+  <section class="group">
+    <div class="group-head"><span class="group-num">08</span><span class="group-title">Invoices &amp; PDF</span></div>
+    <div class="rows">
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">Invoices list has search and sort.</span></div></div>
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">Signature block reads "Company: Name, Signature, Mobile No." instead of "Salesman."</span></div></div>
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">A Discount line now prints above the Grand Total when one applies.</span><span class="item-note">Computed from the real gap between list price and what was actually charged — verified on a live invoice.</span></div></div>
+    </div>
+  </section>
+
+  <!-- ================= REPORTS ================= -->
+  <section class="group">
+    <div class="group-head"><span class="group-num">09</span><span class="group-title">Reports</span></div>
+    <div class="rows">
+      <div class="row"><span class="chip done">Done</span><div><span class="item-text">Every report tab (Aging, Statement, Sales, Balance Sheet, Stock, Purchases, GRV) has a working CSV download.</span></div></div>
+    </div>
+  </section>
+
+  <!-- ================= MOCKUP PASS ================= -->
+  <section class="group">
+    <div class="group-head"><span class="group-num">10</span><span class="group-title">Screens matched to your mockups</span></div>
+    <div class="rows">
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">New Product form — rebuilt to <code>new product.png</code>.</span><span class="item-note this-session">Three cards as drawn: SKU / Description / Category (with a picker of your existing categories), a <strong>Details</strong> card with a computed Gross Profit field showing its margin, and an <strong>Additional Details</strong> card. Category moved up out of Additional Details, where it didn't belong.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">VAC, VAC (China), stock arrival date and stock holding days are now typeable.</span><span class="item-note this-session">They're <strong>overrides</strong>, not replacements: each figure keeps computing itself from purchase and sales history, and a value you type wins for that one product. Clear the box and it goes back to computing. That way a catalogue of 1000+ products stays right on its own without anyone typing anything, and you can still correct any product the data gets wrong. The computed figure shows behind each box so you can see what you'd be replacing, and the product detail marks which figures were entered by hand. Stock arrival is stored as a real <em>date</em>, not a day count — a stored count would go stale the moment the day rolled over. All four are cost data, so they follow the same rule as cost and stock: a salesman session never receives them. Migration run and verified end to end: values save, reload correctly, and clearing a box really does hand the figure back to the computed one.</span></div></div>
+      <div class="row"><span class="chip done this-session">Fixed</span><div><span class="item-text">Bug found while checking: "Stock holding days" was showing months in some places and days in others.</span><span class="item-note this-session">The same figure was computed two different ways — the product list and expanded row divided stock by average monthly sales (giving a count of <em>months</em>) while labelling it "days", and the edit form multiplied by 30 (giving actual days). So one product could read 5 in the list and 156 in the form. It's days everywhere now, and all four figures run through one shared function so their units can't drift apart again. Also stopped showing a holding-days figure for products with zero or negative stock — that was producing readings like "−38 days of cover".</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Confirmed the four new figures are hidden from salesmen — the strong version of the test.</span><span class="item-note this-session">A null could just mean "nothing entered", so this was checked properly: real values were saved on a product as Manager (99.99 / 77.70 / 15 Jun / 88), then the same product was fetched from a Shamseer session — all four came back null, alongside cost and stock on hand. The data genuinely never reaches a salesman's browser. Test values removed afterwards.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Product detail — matched to <code>product.png</code>.</span><span class="item-note this-session">Large product image up top, then the same three cards read-only, with the Active state and Edit in the footer.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Payment collection — matched to <code>Payments.png</code>.</span><span class="item-note this-session">The screen is now titled with the customer and their code, the way the mockup does it, and overdue invoices carry the red row tint with a red day count so the collector can see at a glance which ones are urgent. Verified with a real 166-day invoice.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Enlarged Expense widget — matched to <code>dashboard (expense).png</code>.</span><span class="item-note this-session">Two-column legend with square swatches beside the donut, and each expense type gets its own hue. With "colorful data" on those hues come from the shared per-label palette, so a category is the same colour here as on every other screen.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Enlarged Payments widget — matched to <code>dashboard (payments).png</code>.</span><span class="item-note this-session">Bars are now pill-capped like the drawing (the stack is clipped to a rounded column so only the ends round, not every segment join), and Collected / Remaining / Overdue are colour-coded green / grey / red on both label and value.</span></div></div>
+      <div class="row"><span class="chip done this-session">Confirmed</span><div><span class="item-text">The Expense widget's button correctly says "Expense" and goes to the Expense page.</span><span class="item-note this-session">The mockup labelled this link "Payments", which looked like a copy-paste from the Payments widget sitting next to it &mdash; following it literally would have sent you to the wrong page. You confirmed the drawing was wrong. No change needed; verified live that the enlarged Expense widget's only button reads "Expense" and navigates to <code>/expense</code>.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Bug found while checking: opening "Add product" straight after editing one prefilled the form with the old product's data.</span><span class="item-note this-session">React was reusing the component instance, so the form's initial state never re-ran. Fixed here and in the identical case on the customer form.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Salesman leaderboard table — matched to <code>dashboard (salesman).png</code>.</span><span class="item-note this-session">The five summary figures now read compact (200k rather than AED 200,000.00) the way the drawing does, and the ↓↑ pill above the table flips it between best-first and worst-first. Verified rendering live.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Salesman drill-down — rebuilt to <code>sales (salesman).png</code>.</span><span class="item-note this-session">Green rank badge beside the name, a working "Last 30 days" range picker in the header (it was hard-coded to 30 days before), the Sale card with its percentage stacked left of the big figure, % to goal / Goal / Amount left across three columns instead of stacked rows, <strong>Avg. GP%</strong> in place of Avg. Sale, and the Orders list moved into the right column with an item count under each amount.</span></div></div>
+      <div class="row"><span class="chip done this-session">Fixed</span><div><span class="item-text">Bug found while checking: a second panel opened on top of the first was invisible.</span><span class="item-note this-session">Opening a salesman's drill-down from the enlarged leaderboard rendered it, but painted it <em>underneath</em>. The dashboard's drag-to-arrange grid puts a transform on every widget, which traps anything inside it in its own stacking layer — no z-index can escape that. Panels now render at the top of the page instead, which fixes this everywhere it could have happened, not just here.</span></div></div>
+      <div class="row"><span class="chip done this-session">Fixed</span><div><span class="item-text">Bug found while checking: every expense donut's centre read "0k".</span><span class="item-note this-session">The total was being rounded to the nearest thousand, so anything under AED 500 collapsed to zero. It now reads the real figure (AED 120 shows as 120.00). Three donuts were affected.</span></div></div>
+      <div class="row"><span class="chip done this-session">Fixed</span><div><span class="item-text">Bug found while checking: a React warning was firing on every page load.</span><span class="item-note this-session">The shared settings store handed back a brand-new empty object each render, which React reads as "the data changed" and warns about a possible infinite re-render loop. Now a single stable value.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Phone dashboard — matched to your iPhone screenshot.</span><span class="item-note this-session">Sale / Orders / GP / Profit are one packed four-across strip instead of four full-width cards stacked down the screen, and Pending / Waiting / Packed sit side by side rather than stacked. Between them this pulled everything below them back above the fold.</span></div></div>
+      <div class="row"><span class="chip done this-session">Fixed</span><div><span class="item-text">Phone customer list was missing Sale, Payment and Balance entirely.</span><span class="item-note this-session">Those three columns were explicitly hidden on small screens, which left the phone showing only a name and a code — but they're the whole point of the row in your screenshot. They now drop onto their own line under the customer name.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Products Gallery now opens on category folders.</span><span class="item-note this-session">Three across on a phone, each with its name and how many products it holds, exactly as drawn — tap one to drill into its products, with a back link to all categories. Searching skips the folder level, since you're looking for a product then, not a category.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Order rows now carry an item count, and the Expense list is Date / Description / Amt.</span><span class="item-note this-session">Both straight from the phone screenshots — the expense date leads the row now instead of hiding in a subtitle under the description.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Customer detail — matched to both the <code>Manager View</code> and <code>Salesman View</code> mockups.</span><span class="item-note this-session">The customer's overdue window and their salesman now appear in the header, district and VAT sit on one line, and both lists have proper column headers — Date / GP% / Amount for Orders, Date / Inv No. / Amount / Days for the Statement, with the invoice number under the date. The two mockups arrange that header differently by role, so it flips: Manager gets code on the left and the days/salesman on the right, Salesman gets the reverse.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Orders list — rebuilt as the table your desktop mockup draws.</span><span class="item-note this-session">Date / Invoice / Customer Name / Amount / <strong>Received</strong> / <strong>Balance</strong> / Status, with per-row Excel and PDF buttons. Received and Balance are new — they weren't anywhere in the list before. Cross-checked against the customer statement: invoice 4302 reads AED 365.70 billed, AED 200.00 received, AED 165.70 outstanding, which is exactly what the statement shows. Phones keep the stacked row; the table can't fit there.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Customer list — column header row on desktop.</span><span class="item-note this-session">Name / Sale / Payment / Balance / Condition across the top, with the figures aligned under them and the per-row labels dropped (they'd have been said twice). Phones keep the inline labels, since there's no header there.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Expense page — matched to the desktop mockup.</span><span class="item-note this-session">Category legend on the left with the donut large on the right and the total in its centre, and the table is Date / Type / Description / Amount with Type in its own column.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Dashboard is headed by a greeting, and the Sales chart shows its total.</span><span class="item-note this-session">"Hello, Admin" with the role beneath it rather than the word "Dashboard", and the Sale chart header now carries the period total next to its Last Month / Last Year chips, both as drawn.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Products list defaults to the columns your mockup draws.</span><span class="item-note this-session">VAC / GP / Sale / Sold / Stock, rather than the Cost + Stock pair it opened with. The annotated mockup also confirms the four derived figures mean what the app computes: VAC is landing cost, VAC China is cost from China, SAD is arrival date to today, SHD is stock over the last three months' sales.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Salesman-role screens verified on a real salesman login.</span><span class="item-note this-session">Signed in as Shamseer and confirmed the salesman dashboard and Sales page render correctly and show no cost, gross profit or stock figures. Checked at the wire, not just on screen: the products response comes back with <code>cost: null</code> and <code>stock_on_hand: null</code> for that session, so the data never reaches the browser at all.</span></div></div>
+    </div>
+  </section>
+
+  <!-- ================= RESOLVED ================= -->
+  <section class="group">
+    <div class="group-head"><span class="group-num">11</span><span class="group-title">Design pass &mdash; the Apple polish</span></div>
+    <div class="rows">
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">One motion vocabulary for the whole app.</span><span class="item-note this-session">Every component had been inventing its own spring &mdash; 320/28 in one place, 350/30 in another, 300/30 in a third &mdash; so nothing moved quite like anything else. That is the single biggest reason an interface reads as assembled rather than designed. There is now one set of named springs in <code>lib/motion.ts</code>, following Apple's rule: things that <em>enter</em> overshoot very slightly, as though they have mass and settle, and things that <em>leave</em> do not overshoot at all, because a bouncing dismissal reads as indecision.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Optical letter-spacing across the type scale.</span><span class="item-note this-session">Large text now tightens and small text opens up, the way SF does it. A 34px heading at default tracking looks loose and unset next to Apple's own UI &mdash; this is the difference most people read as "polished" without being able to name it.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">The selected page now slides between nav items instead of blinking.</span><span class="item-note this-session">One highlight pill is shared across every sidebar item, so choosing a different page glides the highlight there rather than cross-fading two rectangles. The phone's tab bar does the matching thing: the selected icon lifts and grows slightly, so motion carries the selection rather than colour alone.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Sheets, scrims, pages and lists all move properly now.</span><span class="item-note this-session">The scrim behind a sheet deepens and blurs <em>as the sheet arrives</em>, so the backdrop feels pushed back rather than switched on. Pages rise and fade on navigation. List rows arrive in sequence (~35ms apart, 10px of travel) so a list feels like it settled into place &mdash; capped at the first 14 rows, because past that the tail arrives late enough to read as lag.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Headline figures count into place.</span><span class="item-note this-session">Sales, gross profit, profit and order count settle rather than snapping, eased so most of the distance is covered in the first third &mdash; a figure someone is trying to read should arrive fast and then hold still. Digits are tabular so nothing jitters sideways while it moves.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Buttons, cards and loading states have real physics.</span><span class="item-note this-session">Press is faster than release, the way a physical button gives under a finger and settles back gently. Each button tier gets its own hover treatment &mdash; filled ones deepen and lift, tinted ones gain tint, plain ones gain contrast &mdash; rather than everything sharing one crude opacity fade. Skeletons sweep a sheen down the list instead of flashing in lockstep, which reads as loading rather than as broken grey boxes. A proper four-step elevation ladder replaced the single catch-all shadow.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Keyboard focus, scrolling and selection all behave.</span><span class="item-note this-session">A calm accent focus ring on keyboard navigation only &mdash; never on a mouse press. Momentum scrolling inside panes, no rubber-band flash of the page behind a scrolled-to-the-end list, smooth anchor scrolling, and text selection that picks up your accent colour instead of the browser's blue.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">All of it respects "reduce motion".</span><span class="item-note this-session">Worth calling out because it is the part that usually gets missed: the global CSS rule only neuters CSS transitions, and the spring animations run in JavaScript, so they never saw it. They check the setting directly now. The looping skeleton shimmer &mdash; exactly the kind of thing that setting exists to stop &mdash; falls back to a flat tint.</span></div></div>
+      <div class="row"><span class="chip done this-session">Fixed</span><div><span class="item-text">Sharp corners &mdash; and a bug that was making them worse.</span><span class="item-note this-session">Two real ones from your screenshots. The chart bars were SVG stretched to fill the width, which squashed every corner radius sideways until the pill caps read as square ends; they are laid out as real elements now, so the radius holds at any width. The blocks inside cards were 8px sitting inside a 30px card &mdash; nested corners only look right when the inner radius is the outer minus the gap, so there is a proper concentric scale now (30 / 20 / 14 / 10). <strong>While checking I found the fix had briefly made it worse:</strong> the new radius was computing to <em>0px</em> &mdash; genuinely sharp &mdash; because Tailwind had not picked up the config change until the server restarted. Same silent-class failure as the earlier opacity bug. I only caught it by measuring the computed CSS rather than trusting the class name.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Every page audited for sharp edges and text fit, by measurement.</span><span class="item-note this-session">A script walked every visible element on Dashboard, Customers, Products, Orders, Expense and Sales at both desktop and phone widths, flagging anything with a background or border and no corner radius, any text clipped by its container, and any horizontal overflow. All clear. The only remaining square shapes are bar segments clipped inside a pill-shaped parent &mdash; that is what keeps the joins square while both ends stay round.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Segmented controls rebuilt as a sliding pill.</span><span class="item-note this-session">The old pattern filled the selected segment edge-to-edge inside a clipped box, which left its inner corners square where it met its neighbour. Now a fully rounded pill sits inset in a recessed track and slides to the selection, so every visible corner is curved. Used on the Products view switch and the Expense tabs.</span></div></div>
+      <div class="row"><span class="chip done this-session">Fixed</span><div><span class="item-text">Text that did not fit properly.</span><span class="item-note this-session">"AED 2,827.80" was wrapping onto two lines in the Payments summary while the figures either side of it stayed on one, leaving the row ragged &mdash; the currency moved into the label so all three share a baseline. In the Products table, prices were breaking across two lines and making every row a different height; numeric columns never wrap now, and rows are a uniform 45px.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Rarely-used buttons moved to the bottom of the page.</span><span class="item-note this-session">The top of a page is the most valuable space on it and should carry the one thing you came to do. Arrange, Import, Sample and Export Excel now sit in a quiet strip at the foot of Dashboard, Products, Customers, Orders, Expense and Payments; only the primary action (Add product, New order, Log expense&hellip;) stays in the header. While you <em>are</em> arranging, a Done button appears at the top, where your eye already is.</span></div></div>
+      <div class="row"><span class="chip done this-session">Fixed</span><div><span class="item-text">Sales goals were hardcoded &mdash; every salesman was measured against the same number.</span><span class="item-note this-session">There was a constant in the code, <code>DEFAULT_MONTHLY_TARGET = 100000</code>, used in a dozen places across the Dashboard, Sales page and salesman drill-down. So every &ldquo;% to goal&rdquo;, &ldquo;amount left&rdquo; and team total in the app was measured against a flat AED 100,000 &mdash; and your own mockup disagrees, showing four salesmen on 100,000 and Bilal on 10,000. There was nowhere in the database to store the difference; I checked for a targets table and there was none. Goals are now read per salesman from the database with a company-wide fallback, the team goal is the <em>sum of each person's own goal</em> rather than head-count times a flat number, and you set them in Settings &rarr; Users. The constant is deleted, not just unused &mdash; leaving it there invites a screen to quietly go back to showing everyone the same figure. <strong>Needs one SQL file run:</strong> <code>scratchpad/sales-targets-migration.sql</code>. Until then Settings says so plainly rather than showing goal boxes that could not save &mdash; verified.</span></div></div>
+      <div class="row"><span class="chip done this-session">Verified</span><div><span class="item-text">Every page checked for failing data calls &mdash; all clean.</span><span class="item-note this-session">You asked whether everything is really coming from Supabase. I hooked the browser's network layer and walked Customers, Products, Orders, Expense and Reports: <strong>zero failed requests</strong>. Every figure on those pages is live data. I also searched the codebase for mock, dummy or placeholder data and found none &mdash; the sales goal above was the one genuinely hardcoded business figure, and it is now fixed.</span></div></div>
+      <div class="row"><span class="chip done this-session">Fixed</span><div><span class="item-text">28 native browser alerts replaced with proper in-app messages.</span><span class="item-note this-session">Errors and confirmations were being delivered by the browser's own <code>alert()</code> box &mdash; unstyled, thread-blocking, and the single most unfinished-looking thing left in the app. They are now toasts in the app's own design: glass, rounded, spring-animated, dismissible, sitting above the phone tab bar so they never cover navigation. Errors stay up longer than confirmations, because you may need to read an error and rarely need to read a success. Verified one rendering end to end.</span></div></div>
+            <div class="row"><span class="chip done this-session">Fixed</span><div><span class="item-text">Developer language was leaking into the app.</span><span class="item-note this-session">Messages I had written for you were sitting where a customer would read them &mdash; things like &ldquo;the reports_from_status column may not exist yet&rdquo; and, worse, actual file paths like <code>scratchpad/product-manual-fields-migration.sql</code>. A shop manager reading that has no idea what it means or what to do. They now say what happened in plain words and point at the one action that helps: ask your administrator.</span></div></div>
+      <div class="row"><span class="chip done this-session">Fixed</span><div><span class="item-text">Raw database errors were being shown to users verbatim.</span><span class="item-note this-session">Seventeen places surfaced whatever the database threw &mdash; text like <em>duplicate key value violates unique constraint &ldquo;products_sku_key&rdquo;</em>, which tells a developer exactly what happened and everyone else nothing. Errors now pass through a translator: that one becomes &ldquo;That SKU is already used by another record.&rdquo; A foreign-key failure becomes &ldquo;This is still linked to other records, so it can&rsquo;t be removed.&rdquo; A permissions failure, a dropped connection and an expired session each get their own plain sentence, and anything unrecognised falls back to the caller&rsquo;s own description rather than leaking SQL. Tested against eleven real error strings; one wrong reading (&ldquo;products sku&rdquo; instead of &ldquo;SKU&rdquo;) showed up and was fixed.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Sign out is now where people look for it.</span><span class="item-note this-session">It was buried in Settings &rarr; Account. Your name in the top corner is now a proper menu &mdash; name, Settings, Sign out &mdash; so signing out is two clicks from anywhere. The avatar also shows your initials instead of a fixed company letter, so a signed-in person sees themselves in the corner.</span></div></div>
+      <div class="row"><span class="chip done this-session">Fixed</span><div><span class="item-text">Bug found while building that menu: dropdowns in the top bar were see-through.</span><span class="item-note this-session">The frosted-glass effect works by blurring whatever sits behind an element &mdash; but a glass panel opened <em>inside</em> the glass top bar has nothing of its own to blur, so the page showed straight through the menu and the text was unreadable. Panels anchored inside another glass surface now use a solid background. This affected the profile menu, the inbox popover and the notifications list.</span></div></div>
+            <div class="row"><span class="chip done this-session">Fixed</span><div><span class="item-text">Invoice numbers are now issued when the order is taken, not at approval.</span><span class="item-note this-session">Two problems. The number was assigned in JavaScript by reading every existing number and writing the highest plus one &mdash; two managers approving at the same moment both read the same highest number and both wrote it, and duplicate invoice numbers are an audit finding. And because numbers only appeared at approval they did not follow the order things were taken in: your own data shows order 4302 was created <em>before</em> 4301. Numbers now come from a real database sequence the moment a salesman creates the order, so they can give the customer the number at the counter. Next number is 4303. A unique index makes a duplicate impossible rather than merely unlikely, and I confirmed there are no duplicates today so it applies cleanly. <strong>One consequence to decide on:</strong> a cancelled order still consumed its number, so the series will contain gaps &mdash; keep cancelled orders rather than deleting them, since that record is what explains the gap to an auditor.</span></div></div>
+      <div class="row"><span class="chip done this-session">Verified</span><div><span class="item-text">Final pass: all 10 pages load with real data, zero failed requests.</span><span class="item-note this-session">Walked Dashboard, Orders, Customers, Products, Sales, Payments, Expense, Reports, Invoices, Settings and Inbox. Every one renders real content &mdash; no blank screens, no crashes. Fixed one thing found while checking: the app was firing two requests per page load that were guaranteed to fail (for the sales-goal columns that do not exist yet), filling the console with errors. It now checks once and remembers. Confirmed zero failed requests afterwards.</span></div></div>
+            <div class="row"><span class="chip done this-session">Fixed</span><div><span class="item-text">Every sales figure in the app included VAT. It should not have.</span><span class="item-note this-session">You asked me to verify that sale and GP are before VAT. GP was correct &mdash; computed pre-VAT from line items, and divided by the sale price rather than cost, everywhere. But every <em>sales</em> figure summed <code>orders.total</code>, which includes VAT: month-to-date sales, the trend chart, monthly detail, the year comparison, the salesman leaderboard and every &ldquo;% to goal&rdquo; measured against it. On your data that showed AED 793.50 where the real sale value is <strong>AED 690.00</strong>. And because GP was pre-VAT but divided by a VAT-inclusive figure, margin read 37.7% when it is actually <strong>43.3%</strong>. Revenue now reads <code>subtotal</code>; receivables and balances deliberately still use <code>total</code>, because what a customer owes does include VAT.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Right-click a widget to resize or remove it.</span><span class="item-note this-session">Full width / Half / Quarter / Remove, on right-click or long-press, with a tick against the current size. No mode to enter, which is the actual fix &mdash; the old flow put the whole page behind a panel so nothing else could be clicked while you adjusted one widget. Works on the Dashboard and the Sales page.</span></div></div>
+      <div class="row"><span class="chip done this-session">Fixed</span><div><span class="item-text">Widgets are now a standard size.</span><span class="item-note this-session">Nothing set a shared height, so every card sized to its own content &mdash; which is why Average sale sat visibly shorter than Payments beside it. Chart widgets are all 336px now and line up exactly. The stat strips at the top are exempt on purpose: forcing a chart&rsquo;s height onto a row of four figures left most of the card empty.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">The widget gallery shows previews instead of names.</span><span class="item-note this-session">Each entry renders the real widget, scaled down and inert, so you can see what you are about to place rather than guessing from a label.</span></div></div>
+      <div class="row"><span class="chip done this-session">Fixed</span><div><span class="item-text">Scrolling stalled because the whole catalogue rendered at once.</span><span class="item-note this-session">1,300 product rows and 350 customer rows were all live at the same time, and on Products every row also fired its own photo request. Both lists now page at 50 with a page-size selector (50/100/200/All) and next/previous. The page dropped from 1,000 rendered rows to 50, and the DOM to under a thousand nodes. This also fixed something quieter: the insight columns used to give up entirely above 150 products, so VAC/Sale/Sold/GP silently stayed blank on a full catalogue &mdash; paging means the request is always small enough to run.</span></div></div>
+      <div class="row"><span class="chip done this-session">Fixed</span><div><span class="item-text">Importing products could silently wipe your stock.</span><span class="item-note this-session">The import overwrote <code>stock_on_hand</code> with whatever was in the file &mdash; and a blank stock cell wrote <strong>zero</strong>, so importing a price list with no stock column would have zeroed the entire catalogue. A blank cell now always leaves that product&rsquo;s quantity alone. And when the file contains products you already have, it asks first: keep current stock (for a price list), add the file&rsquo;s quantities (for a delivery), or replace them (after a stock count). The result also reports how many were new versus updated.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Import, Sample and Export moved back to the top.</span><span class="item-note this-session">I had moved them to a footer strip on the grounds that they were occasional. You use them often, so they are back in the header on Products, Customers and Expense &mdash; you were right and I was optimising for the wrong thing.</span></div></div>
+            <div class="row"><span class="chip done this-session">Fixed</span><div><span class="item-text">Product photos: the first one took 18 seconds. Now about 2.</span><span class="item-note this-session">I measured it rather than guessing. Fetching one photo on a cold cache took <strong>17.8 seconds</strong>, because it walked the entire Drive folder tree first &mdash; and there was no guard against doing that more than once, so a page of 50 products fired 50 requests that each walked the whole tree in parallel. That is why photos were slow and why some never appeared: the parallel walks tripped Drive&rsquo;s rate limit and the losers failed outright. Three fixes: concurrent requests now share one walk instead of each doing their own; a cold request answers by asking Drive for that one file directly (~0.3s) while the map builds in the background; and once built the map is served even while it refreshes, so nobody waits for a rebuild. Same measurement afterwards: <strong>2.2 seconds</strong>, and five concurrent photos finish in 2.3s total rather than queueing behind an 18-second walk. Photos also cache in the browser for a day now instead of five minutes, and a product with no photo caches its &ldquo;none&rdquo; answer for an hour instead of re-asking on every page view.</span></div></div>
+      <div class="row"><span class="chip done this-session">Verified</span><div><span class="item-text">Every Settings option was checked to confirm it actually does something.</span><span class="item-note this-session">Walked each setting the page writes and traced where it is read. All of them are honoured. Theme initially looked unused because it is applied differently from the rest &mdash; it writes to browser storage and the page reads that on first paint, so the choice survives a reload and syncs across devices. Working as intended, not a gap.</span></div></div>
+            <div class="row"><span class="chip done this-session">Fixed</span><div><span class="item-text">Bug I introduced with paging: searching from page 2 showed results from the 51st match.</span><span class="item-note this-session">Caught by testing it rather than assuming. Moving to page 2 and then searching left the pager on page 2 of the <em>new</em> results &mdash; so a search returning 60 matches opened at result 51, and one returning 40 would have shown an empty screen. Paging now returns to page 1 whenever the underlying list changes. Verified: page 2 of 1,000 &rarr; search &rarr; &ldquo;1&ndash;50 of 326&rdquo;.</span></div></div>
+      <div class="row"><span class="chip done this-session">Verified</span><div><span class="item-text">Sales page widgets confirmed working, not just written.</span><span class="item-note this-session">Right-click opens the same Quarter / Half / Full width / Remove menu, and the chart widgets are all a uniform 336px. The summary strip keeps its natural height, and the monthly table grows to fit its twelve rows &mdash; both correct rather than forced to a chart&rsquo;s height.</span></div></div>
+            <div class="row"><span class="chip done this-session">Fixed</span><div><span class="item-text">The widget sizing fix was only half a fix &mdash; you were right.</span><span class="item-note this-session">I had made the <em>cards</em> a uniform height but left their <em>contents</em> alone, so a 180px chart sat inside a 336px card with a band of dead space under it. That looked more broken than the original mismatch. The cards are now flex columns and each chart is sized to fill the space it is given: the sale trend fills its card, the payments chart sits above its summary row rather than floating, the expense donut centres in what is left. Grid spacing also came down from 16px to 12px, and the floating Q/H/F pills are gone from arrange mode &mdash; right-click does sizing now, and three overlapping pills on every card was the clutter in your screenshot.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">One shared widget library across every tab.</span><span class="item-note this-session">The gallery had three borrowable widgets. It now carries the detailed sales report you asked for by name, plus goal leaderboard, sales by category, top customers, payments summary and expense breakdown &mdash; grouped under Sales, Customers, Products, Payments and Expense, each showing a live preview. Every one is self-contained and fetches its own data, which is what makes it safe to drop onto any tab. Verified: eleven preview tiles rendering real figures.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Drag a widget straight out of the gallery onto the spot you want.</span><span class="item-note this-session">Pick up any tile in the widget gallery and it follows your pointer, with a dashed &ldquo;Drop here&rdquo; slot showing exactly where it will land as you move across the page. Release and it goes in at that position rather than being appended to the end. Clicking still works if you just want it added quickly. Verified end to end: dragged the Detailed sales report from the Sales category onto the Expense widget&rsquo;s position and it landed there &mdash; fourth in the order, not last &mdash; then removed it again by right-click. Works for widgets borrowed from other tabs and for ones you had taken off this page.</span></div></div>
+            <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Route planning moved to Apple Maps &mdash; and it plans better routes than before.</span><span class="item-note this-session">Apple has no equivalent of the Google setting the old code relied on to reorder stops, so a straight swap would have drawn a route in whatever order the list happened to be in. Instead the ordering now happens in the app: addresses are geocoded, Apple returns real driving times between every pair of stops, and a nearest-neighbour pass with a 2-opt cleanup solves the order. <strong>Tested on real Dubai addresses given deliberately out of order: 135 minutes of driving became 52.</strong> The route it chose is geographically sensible too &mdash; Deira Clocktower, then Al Rigga nearby, then out to Dubai Marina and Jebel Ali. Google Maps is no longer called at all, which also means no per-request billing for this.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">Planning is visible again, and the manager can see any salesman&rsquo;s route.</span><span class="item-note this-session">The page used to be hidden entirely unless a Google key had been pasted into Settings, which is why you may never have seen it. It is now gated on the Apple credentials instead, so it is live. The salesman picker at the top &mdash; All salesmen, or any individual &mdash; is how a manager reviews each person&rsquo;s planned day.</span></div></div>
+      <div class="row"><span class="chip done this-session">Done</span><div><span class="item-text">The Apple signing key is handled the way a signing key should be.</span><span class="item-note this-session">It arrived in Downloads at mode 644 &mdash; readable by any process on the Mac. Tightened to 600 immediately, then base64-encoded into <code>.env.local</code> alongside the Team and Key IDs. It never reaches the browser: the app mints a short-lived token instead, bound to the site&rsquo;s own address so a copied token is useless elsewhere. Verified against Apple: credentials accepted, access token issued, ETA endpoint returning real travel times.</span></div></div>
+            <div class="row"><span class="chip done this-session">Verified</span><div><span class="item-text">Production build passes, light and dark both checked.</span><span class="item-note this-session">Full <code>next build</code> compiles clean with no type errors. Checked the dashboard, customers and orders in both themes at desktop and phone widths. The React "possible infinite loop" warning that used to fire on every page load is gone.</span></div></div>
+    </div>
+  </section>
+
+  <section class="group">
+    <div class="group-head"><span class="group-num">11</span><span class="group-title">What it took to unblock everything</span></div>
+    <div class="rows">
+      <div class="row"><span class="chip done">Run</span><div><span class="item-text">Migration 1 — zones/country/currency tables, customer_prices, customer_discounts, payer_details.</span><span class="item-note">File: <code>scratchpad/zones-and-payer-details-migration.sql</code>. Surfaced a real RLS bug below.</span></div></div>
+      <div class="row"><span class="chip done">Run</span><div><span class="item-text">Migration 2 — an RLS fix plus the po_number column.</span><span class="item-note">Migration 1's four new tables were created with Row Level Security on and no policy, so every logged-in user's read came back empty even after the tables existed. File: <code>scratchpad/customer-prices-rls-fix.sql</code>.</span></div></div>
+      <div class="row"><span class="chip done">Fixed</span><div><span class="item-text">Product photos — three separate bugs, all found and fixed.</span><span class="item-note">Missing Drive credentials (you provided a new service-account key), the folder lookup querying app_settings as a key/value table when it's one row of named columns, and the photo search only checking the top-level Drive folder instead of recursing into the category subfolders your photos actually live in. Verified live with a real image.</span></div></div>
+      <div class="row"><span class="chip done">Run</span><div><span class="item-text">Migration 3 — the report-stage column.</span><span class="item-note">File: <code>scratchpad/report-stage-migration.sql</code>. Confirmed live — <code>app_settings.reports_from_status</code> exists and reads "delivered", so the setting is active and every report figure counts from delivery.</span></div></div>
+      <div class="row"><span class="chip done">Run</span><div><span class="item-text">Migration 4 — hand-editable VAC / VAC (China) / stock arrival &amp; holding days.</span><span class="item-note">File: <code>scratchpad/product-manual-fields-migration.sql</code>. Verified end to end, including that a salesman session cannot see any of the four.</span></div></div>
+      <div class="row"><span class="chip done">Fixed</span><div><span class="item-text">Confirmed the customer and staff data is no longer readable without logging in.</span><span class="item-note">At the start of this build, all customer names, codes and areas plus every staff username, email and phone could be read straight from the database with only the public key that ships to the browser — no login. Re-tested now: <code>users</code>, <code>customers</code>, <code>products</code>, <code>orders</code> and <code>payments</code> all come back empty to an unauthenticated request. Closed.</span></div></div>
+      <div class="row"><span class="chip done this-session">Fixed</span><div><span class="item-text">VAT was set to 15%. It is now 5%.</span><span class="item-note this-session">Found while checking the settings row. <code>app_settings.vat_rate</code> held 0.15, and the invoice PDFs, customer statements and reports all read that value — so every invoice was charging <strong>three times</strong> the correct tax. All three issued invoices confirm it: 4300 billed AED 37.80 tax on AED 252.00, 4301 AED 18.00 on AED 120.00, 4302 AED 47.70 on AED 318.00 — exactly 15% each. UAE VAT is 5%, your original spec said 5%, and the code's own fallback was already 5%; only the stored setting was wrong. Changed the setting and the Default zone to 0.05 with your go-ahead, and verified on a fresh order: AED 132.00 subtotal now shows "VAT (5%) 6.60", total 138.60. <strong>Invoices 4300–4302 still hold their original 15% figures</strong> — I did not touch them, since they are delivered orders with payments already recorded against them and changing their totals would move customer balances. Tell me if you want those three recalculated.</span></div></div>
+      <div class="row"><span class="chip blocked">To run</span><div><span class="item-text">The two database helper functions behind Row Level Security are broken.</span><span class="item-note"><code>current_app_user_id()</code> and <code>current_role_is()</code> both still look up the staff table by a column called <code>auth_id</code>, which was renamed to <code>auth_user_id</code>. Both now fail outright, so every security policy that calls them fails too — that's why a direct query against <code>expenses</code> errors instead of returning rows. <strong>Nothing is broken for users today:</strong> the app does all its reads and writes through a privileged server route that re-checks your role itself, which is why nobody has noticed. But it does mean the database-level protection is currently inert rather than adding a second layer, and anyone who later writes a direct query gets an error instead of the enforcement they expect. Fix in <code>scratchpad/fix-auth-id-functions.sql</code> — read the note at the top first, there's one type name I could not confirm from outside the database.</span></div></div>
+      <div class="row"><span class="chip done">Fixed</span><div><span class="item-text">Invoice PDF's P.O. No. column — always hardcoded blank, never read the saved value.</span><span class="item-note">Found while verifying the migration; fixed and confirmed on a live PDF.</span></div></div>
+      <div class="row"><span class="chip done">Fixed</span><div><span class="item-text">~44 tinted surfaces across 20 files were rendering fully transparent.</span><span class="item-note">Two stacked config bugs: theme colors were declared as hex <code>var()</code>s, which makes any Tailwind opacity modifier compile to invalid CSS; and the opacity scale had no 8/12/18 steps, so those classes were never emitted at all. Between them, the entire tinted-button tier, the colored Pending/Waiting/Packed status blocks, leaderboard row fills and accent pills had no background. This is the concrete reason so much of the app read as flat text rather than your mockup.</span></div></div>
+    </div>
+  </section>
+
+  <footer class="closing">
+    <h3>Reading this honestly</h3>
+    <p>
+      What's left is mostly the largest structural asks — the full drag-and-drop widget gallery,
+      keyboard shortcuts, the New Order screen's exact pixel match against your mockup, the Orders
+      summary widget redesign, and a full app-wide button/spacing sweep. Those are real gaps, not
+      oversights, and worth naming rather than papering over.
+    </p>
+    <p>
+      Three infrastructure problems found while verifying this pass are worth calling out, because between them
+      they explain more of the "it doesn't look like my design" gap than any single missing feature
+      did: theme colors couldn't take an opacity modifier, and the opacity scale was missing the
+      exact steps the design system used. Roughly 44 tinted surfaces were rendering fully
+      transparent. And the app was slow for a measurable reason — every component that read a
+      user preference fetched it separately, so one page load made the same request six times
+      over.
+    </p>
+    <p>Tell me which of the "Not done" rows matters most and I'll take it next.</p>
+  </footer>
+</div>
+
+<script>
+  const counts = { done: 0, partial: 0, notdone: 0, blocked: 0 };
+  document.querySelectorAll('.chip').forEach(c => {
+    if (c.classList.contains('done')) counts.done++;
+    else if (c.classList.contains('partial')) counts.partial++;
+    else if (c.classList.contains('notdone')) counts.notdone++;
+    else if (c.classList.contains('blocked')) counts.blocked++;
+  });
+  document.getElementById('ct-done').textContent = counts.done;
+  document.getElementById('ct-partial').textContent = counts.partial;
+  document.getElementById('ct-notdone').textContent = counts.notdone;
+  document.getElementById('ct-blocked').textContent = counts.blocked;
+  const total = counts.done + counts.partial + counts.notdone + counts.blocked;
+  const bar = document.getElementById('bar');
+  const seg = (cls, n) => { const s = document.createElement('span'); s.className = cls; s.style.width = (n/total*100) + '%'; return s; };
+  bar.appendChild(seg('b-done', counts.done));
+  bar.appendChild(seg('b-partial', counts.partial));
+  bar.appendChild(seg('b-blocked', counts.blocked));
+  bar.appendChild(seg('b-notdone', counts.notdone));
+</script>

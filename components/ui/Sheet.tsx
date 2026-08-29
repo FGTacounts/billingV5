@@ -30,6 +30,18 @@ export default function Sheet({
     return () => document.body.classList.remove("overflow-hidden");
   }, [open]);
 
+  // Escape closes the sheet, the same as clicking the scrim or the X. Every
+  // dialog on the web behaves this way, and someone who has half-filled a
+  // form and changed their mind reaches for it before the mouse.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
   // Portal to <body>. Without this a Sheet opened from inside a Framer
   // Motion `layout` widget (the dashboard's ArrangeGrid) is trapped in that
   // widget's transform-induced stacking context, so a second Sheet opened on

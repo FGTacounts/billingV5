@@ -19,14 +19,21 @@ export interface OrderRow extends Order {
 const ORDER_SELECT =
   "id, status, customer_id, salesman_id, new_customer_note, warehouse_note, manager_note, salesman_note, invoice_number, po_number, rejected_at, total, subtotal, vat_amount, created_at, updated_at";
 
-// `phone` may not exist yet (pre-migration — see scratchpad/preferences-
-// migration.sql) — fall back to the column set that's always been there so
-// a missing column degrades the Salesman No. on invoices, not every order
-// fetch app-wide.
+// `phone` is not on every database yet. When it is absent the salesman's
+// number is left off the invoice rather than the whole order fetch failing.
+//
+// Remembered after the first refusal: every list of orders asks for salesmen,
+// so without this the app sends a request it already knows will fail each
+// time, and pays for a second one to recover from it.
+let salesmanPhoneMissing = false;
+
 async function fetchSalesmen(supabase: SupabaseClient, ids: string[]): Promise<any[]> {
   if (!ids.length) return [];
-  const { data, error } = await supabase.from("users").select("id, full_name, phone").in("id", ids);
-  if (!error) return data ?? [];
+  if (!salesmanPhoneMissing) {
+    const { data, error } = await supabase.from("users").select("id, full_name, phone").in("id", ids);
+    if (!error) return data ?? [];
+    salesmanPhoneMissing = true;
+  }
   const { data: fallback } = await supabase.from("users").select("id, full_name").in("id", ids);
   return fallback ?? [];
 }

@@ -9,7 +9,7 @@ import { useRouter } from "next/navigation";
 import { Download } from "lucide-react";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { usePreferences } from "@/lib/hooks/usePreferences";
-import { useBrandLogo } from "@/lib/hooks/useBrandLogo";
+import { useBrandLogo, refreshBrandLogo } from "@/lib/hooks/useBrandLogo";
 import { useDisplayCurrency } from "@/lib/hooks/useDisplayCurrency";
 import { SUPPORTED_CURRENCIES, type CurrencyCode } from "@/lib/currency";
 import { DEFAULT_NAV_KEYS } from "@/lib/hooks/useNavShortcuts";
@@ -380,7 +380,9 @@ function ReportStageSection() {
       <div>
         <Label>Reports count an order from</Label>
         <p className="text-caption text-secondary">
-          Not available yet — needs the <code>reports_from_status</code> column added first.
+          Not available on your account yet. Reports currently count an order
+          once it is approved. Ask your administrator to turn this on if you
+          need to change it.
         </p>
       </div>
     );
@@ -611,6 +613,7 @@ function BrandLogoSection() {
       const res = await fetch("/api/settings/brand-logo", { method: "POST", body: form });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Upload failed");
+      refreshBrandLogo();
       setPreviewKey((k) => k + 1);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Upload failed");
@@ -624,6 +627,7 @@ function BrandLogoSection() {
     setError(null);
     try {
       await fetch("/api/settings/brand-logo", { method: "DELETE" });
+      refreshBrandLogo();
       setPreviewKey((k) => k + 1);
     } finally {
       setUploading(false);
@@ -985,12 +989,21 @@ function UsersTab({ currentUser }: { currentUser: AppUser }) {
       toast.error("Enter a goal of zero or more, or leave it blank to use the company default.");
       return;
     }
-    const { error } = await supabaseBrowser()
+    // Ask for the changed row back. A write the database declines to apply is
+    // not an error — it reports success and simply changes nothing — so
+    // without this the screen said "Goal saved." while the goal stayed as it
+    // was. An empty result is the only way to tell the difference.
+    const { data: saved, error } = await supabaseBrowser()
       .from("users")
       .update({ monthly_target: target })
-      .eq("id", userId);
+      .eq("id", userId)
+      .select("id");
     if (error) {
       toast.error(friendlyError(error, "Couldn't save the goal."));
+      return;
+    }
+    if (!saved || saved.length === 0) {
+      toast.error("You don't have permission to change goals. Ask your administrator.");
       return;
     }
     toast.success(target === null ? "Goal cleared — using the company default." : "Goal saved.");

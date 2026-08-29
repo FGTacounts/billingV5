@@ -78,7 +78,11 @@ as $$
     from public.users u
     where u.auth_user_id = auth.uid()
       and u.is_active
-      and (u.role = r or (r = 'manager'::public.user_role and u.role = 'admin'::public.user_role))
+      -- `users.role` is a text column, while the parameter is the user_role
+      -- enum, and Postgres has no text = user_role operator. Compared as text
+      -- on both sides. The parameter keeps the enum type so existing policies
+      -- calling current_role_is(user_role) still resolve to this function.
+      and (u.role = r::text or (r::text = 'manager' and u.role = 'admin'))
   )
 $$;
 

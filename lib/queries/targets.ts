@@ -37,7 +37,23 @@ function build(byUser: Map<string, number>, fallback: number): MonthlyTargets {
 // two round-trips for a result we already know.
 let columnsMissing = false;
 
-export async function fetchMonthlyTargets(supabase: SupabaseClient): Promise<MonthlyTargets> {
+// The Dashboard, the Sales page, the drill-down and two widgets all ask for
+// goals as they mount, within the same tick. `columnsMissing` is set from the
+// reply, which has not arrived yet, so every one of them fires its own pair of
+// requests — eleven failures in the console on a database without the columns,
+// and six redundant round-trips on one with them. Sharing the promise means
+// the first caller does the work and the rest wait on it.
+let inFlight: Promise<MonthlyTargets> | null = null;
+
+export function fetchMonthlyTargets(supabase: SupabaseClient): Promise<MonthlyTargets> {
+  if (inFlight) return inFlight;
+  inFlight = load(supabase).finally(() => {
+    inFlight = null;
+  });
+  return inFlight;
+}
+
+async function load(supabase: SupabaseClient): Promise<MonthlyTargets> {
   const byUser = new Map<string, number>();
   if (columnsMissing) return build(byUser, FALLBACK_MONTHLY_TARGET);
 
@@ -69,6 +85,7 @@ export async function fetchMonthlyTargets(supabase: SupabaseClient): Promise<Mon
 /** Called after the migration is run so the app stops assuming it is absent. */
 export function resetTargetsProbe() {
   columnsMissing = false;
+  inFlight = null;
 }
 
 /** Sum of every listed salesman's individual goal — the team target. */

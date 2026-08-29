@@ -142,6 +142,36 @@ export async function POST(req: NextRequest) {
       );
     }
     invoiceNumber = assigned as string;
+
+    // Belt and braces, and it has already earned its keep: a database still
+    // running the old numbering function hands back a number that is already
+    // on another invoice. The uniqueness rule that makes this impossible
+    // arrives with scratchpad/RUN-ME-all-pending.sql, and until that has been
+    // run nothing else would notice — two invoices would quietly share a
+    // number, which is the kind of thing only found at audit.
+    //
+    // So: if the number came back already in use, take it back off this order
+    // and refuse. The order stays approved and simply has no number yet, which
+    // is a state approval already handles — re-approving issues a fresh one
+    // once the numbering is fixed.
+    const { data: clash } = await supabase
+      .from("orders")
+      .select("id")
+      .eq("invoice_number", invoiceNumber)
+      .neq("id", orderId)
+      .limit(1);
+    if (clash && clash.length > 0) {
+      await supabase.from("orders").update({ invoice_number: null }).eq("id", orderId);
+      return NextResponse.json(
+        {
+          error:
+            "Approved, but invoice number " +
+            invoiceNumber +
+            " is already in use, so it wasn't given one. Ask your administrator to finish setting up invoice numbering, then approve it again.",
+        },
+        { status: 500 }
+      );
+    }
   }
 
   return NextResponse.json({ ok: true, invoiceNumber });

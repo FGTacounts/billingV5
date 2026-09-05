@@ -761,7 +761,7 @@ export default function DashboardView({ user }: { user: AppUser }) {
     const prevFrom = new Date(prevTo.getTime() - rangeMs);
 
     if (isManager) {
-      const [s, g, eb, p, w, pk, tr, ptr, pm, sm, lb, oc, ps] = await Promise.all([
+      const [s, g, eb, p, w, pk, tr, ptr, pm, sm, lb, oc] = await Promise.all([
         monthToDateSales(supabase),
         monthToDateGrossProfit(supabase),
         fetchExpenseBreakdown(supabase),
@@ -774,7 +774,6 @@ export default function DashboardView({ user }: { user: AppUser }) {
         fetchSalesByMonth(supabase),
         fetchLeaderboard(supabase),
         countOrdersThisMonth(supabase),
-        fetchPaymentsSummary(supabase),
       ]);
       setSales(s);
       setGp(g);
@@ -788,12 +787,16 @@ export default function DashboardView({ user }: { user: AppUser }) {
       setPaymentsByMonth(pm);
       setLeaderboard(lb);
       setOrdersThisMonth(oc);
-      setPaySummary(ps);
+      // Collected / Remaining / Overdue means walking every order, every
+      // payment and every return — about a second on its own. The rest of
+      // the dashboard no longer waits behind it; the tile fills in when it
+      // lands.
+      fetchPaymentsSummary(supabase).then(setPaySummary).catch(() => {});
       fetchMonthlyTargets(supabase).then(setTargets).catch(() => {});
       const prevMonth = sm.length >= 2 ? sm[sm.length - 2].value : 0;
       setPrevSales(prevMonth);
     } else if (isSalesman) {
-      const [s, d, w, ap, rj, tr, ptr, pm, sm, ps, oc] = await Promise.all([
+      const [s, d, w, ap, rj, tr, ptr, pm, sm, oc] = await Promise.all([
         monthToDateSales(supabase, salesmanId),
         countByStatus(supabase, ["draft"], salesmanId),
         countByStatus(supabase, ["pending"], salesmanId),
@@ -803,7 +806,6 @@ export default function DashboardView({ user }: { user: AppUser }) {
         fetchSaleTrend(supabase, { salesmanId, from: prevFrom, to: prevTo }),
         fetchPaymentsByMonthSegmented(supabase, { collectedBy: user.id }),
         fetchSalesByMonth(supabase, { salesmanId }),
-        fetchPaymentsSummary(supabase, { salesmanId, collectedBy: user.id }),
         countOrdersThisMonth(supabase, salesmanId),
       ]);
       setSales(s);
@@ -815,8 +817,12 @@ export default function DashboardView({ user }: { user: AppUser }) {
       setPrevTrend(ptr);
       setPaymentsByMonth(pm);
       setSalesByMonth(sm);
-      setPaySummary(ps);
       setOrdersThisMonth(oc);
+      // Same as the manager's: the receivables walk fills in after the page
+      // is already up rather than holding it back.
+      fetchPaymentsSummary(supabase, { salesmanId, collectedBy: user.id })
+        .then(setPaySummary)
+        .catch(() => {});
       fetchMonthlyTargets(supabase).then(setTargets).catch(() => {});
       const prevMonth = sm.length >= 2 ? sm[sm.length - 2].value : 0;
       setPrevSales(prevMonth);

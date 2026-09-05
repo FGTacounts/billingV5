@@ -168,18 +168,21 @@ export default function CustomersView({ user, isManager }: { user: AppUser; isMa
   const activeCustomerView = CUSTOMER_VIEWS.find((v) => v.key === preferences.customerView) ?? CUSTOMER_VIEWS[0];
   const activeCustomerColumns = (preferences.customerColumns as CustomerColumnKey[] | undefined) ?? activeCustomerView.columns;
 
+  // The list does not wait for the ledger. Names, codes and districts are one
+  // quick query; working out what every customer owes means walking every
+  // order, payment and return, which took the whole page down with it. The
+  // balances now fill in a moment after the list is already on screen.
   const load = useCallback(async () => {
     setLoading(true);
     const supabase = supabaseBrowser();
-    const [rows, invoices] = await Promise.all([
-      fetchCustomers(supabase, { search: search || undefined }),
-      // includeSettled=true — the Sale/Payment columns need lifetime totals,
-      // not just what's still outstanding.
-      fetchOutstandingInvoices(supabase, undefined, true).catch(() => []),
-    ]);
-    setCustomers(rows);
-    setAging(summarizeByCustomer(invoices));
+
+    setCustomers(await fetchCustomers(supabase, { search: search || undefined }));
     setLoading(false);
+
+    // includeSettled=true — the Sale/Payment columns need lifetime totals,
+    // not just what's still outstanding.
+    const invoices = await fetchOutstandingInvoices(supabase, undefined, true).catch(() => []);
+    setAging(summarizeByCustomer(invoices));
   }, [search]);
 
   useEffect(() => {
@@ -400,9 +403,13 @@ export default function CustomersView({ user, isManager }: { user: AppUser; isMa
             // always shows, it's the one figure that answers "do they owe
             // us money" at a glance.
             const financialCols: { key: string; label: string; value: string; emphasis?: boolean }[] = [];
-            if (activeCustomerColumns.includes("sale")) financialCols.push({ key: "sale", label: "Sale", value: formatAed(g.totalSale) });
-            if (activeCustomerColumns.includes("payment")) financialCols.push({ key: "payment", label: "Payment", value: formatAed(paymentColumnValue) });
-            financialCols.push({ key: "balance", label: "Balance", value: formatAed(g.totalDue), emphasis: true });
+            // Until the ledger has been walked these are unknown, not zero.
+            // A balance that reads "AED 0.00" and then jumps to five
+            // thousand is worse than one that says nothing for a moment.
+            const money = (v: number) => (g.hasData ? formatAed(v) : "—");
+            if (activeCustomerColumns.includes("sale")) financialCols.push({ key: "sale", label: "Sale", value: money(g.totalSale) });
+            if (activeCustomerColumns.includes("payment")) financialCols.push({ key: "payment", label: "Payment", value: money(paymentColumnValue) });
+            financialCols.push({ key: "balance", label: "Balance", value: money(g.totalDue), emphasis: true });
             const gridColsClass = financialCols.length === 3 ? "grid-cols-3" : financialCols.length === 2 ? "grid-cols-2" : "grid-cols-1";
             const showVat = activeCustomerColumns.includes("vat") && g.members.length === 1 && g.members[0].vat_number;
             return (

@@ -9,11 +9,12 @@ import { fetchCountedStatuses } from "@/lib/reportStage";
 // the role-based column masking that the view used to.
 export async function fetchProducts(
   supabase: SupabaseClient,
-  opts: { activeOnly?: boolean; search?: string } = {}
+  opts: { activeOnly?: boolean; search?: string; limit?: number } = {}
 ): Promise<Product[]> {
   const params = new URLSearchParams();
   if (opts.activeOnly === false) params.set("activeOnly", "false");
   if (opts.search) params.set("search", opts.search);
+  if (opts.limit) params.set("limit", String(opts.limit));
   const res = await fetch(`/api/products?${params.toString()}`);
   const data = await res.json();
   if (!res.ok) throw new Error(data.error ?? "Failed to load products");

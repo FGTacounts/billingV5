@@ -43,10 +43,13 @@ const RESTRICTED_COLS =
 
 export async function fetchProductsServer(
   admin: SupabaseClient,
-  opts: { isManager: boolean; activeOnly?: boolean; search?: string } = { isManager: false }
+  opts: { isManager: boolean; activeOnly?: boolean; search?: string; limit?: number } = { isManager: false }
 ): Promise<Product[]> {
   const run = async (cols: string) => {
     let q = admin.from("products").select(cols).order("sku");
+    // The first screenful is asked for on its own so a thousand-row
+    // catalogue does not stand between the user and the page.
+    if (opts.limit) q = q.limit(opts.limit);
     if (opts.activeOnly !== false) q = q.eq("is_active", true);
     if (opts.search) {
       q = q.or(`sku.ilike.%${opts.search}%,description.ilike.%${opts.search}%,barcode.ilike.%${opts.search}%`);

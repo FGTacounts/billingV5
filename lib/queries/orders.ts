@@ -1,4 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { invalidateOrderFacts } from "@/lib/queries/dashboard";
+import { invalidateAging } from "@/lib/queries/aging";
 import type {
   Order,
   OrderItem,
@@ -327,6 +329,11 @@ export async function updateOrderStatus(
     .update({ status, ...extra })
     .eq("id", orderId);
   if (error) throw error;
+  // Every figure on the Dashboard, Sales and Customers pages is built from a
+  // briefly-held copy of the orders. Moving one has to drop it, or a screen
+  // could show the old total for a few seconds after the change.
+  invalidateOrderFacts();
+  invalidateAging();
 }
 
 // picked_qty updates go through /api/orders/update-picked-qty (service-role)

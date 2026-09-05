@@ -1,7 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { UserRole } from "@/lib/types/db";
-import { fetchCountedStatuses } from "@/lib/reportStage";
-import { saleValue } from "@/lib/queries/dashboard";
+import { saleValue, revenueIn } from "@/lib/queries/dashboard";
 
 export interface LeaderboardEntry {
   salesmanId: string;
@@ -65,13 +64,12 @@ export async function fetchLeaderboard(
     .select("id, full_name, role, is_active");
   if (usersErr) throw usersErr;
 
-  const { data: orders, error } = await supabase
-    .from("orders")
-    .select("salesman_id, subtotal, total")
-    .in("status", await fetchCountedStatuses(supabase))
-    .gte("updated_at", start)
-    .lt("updated_at", end);
-  if (error) throw error;
+  // Shares the one fetch of counted orders the rest of the page uses, rather
+  // than pulling the whole set again for the leaderboard alone.
+  const orders = await revenueIn(supabase, {
+    from: new Date(start),
+    to: new Date(new Date(end).getTime() - 1),
+  });
 
   const totalsBySalesman = new Map<string, number>();
   for (const o of orders ?? []) {

@@ -302,11 +302,25 @@ export default function ProductsView({ isManager, user }: { isManager: boolean; 
     PRODUCT_VIEWS[0];
   const activeColumns = (preferences.productColumns as ColumnKey[] | undefined) ?? activeView.columns;
 
+  // Two passes on purpose. The first screenful arrives on its own and the
+  // page is usable straight away; the rest of the catalogue follows and
+  // replaces it a moment later, so search, sort and the filters still work
+  // across everything. A thousand rows in one go is what made this page sit
+  // there doing nothing.
   const load = useCallback(async () => {
     setLoading(true);
     const supabase = supabaseBrowser();
-    setProducts(await fetchProducts(supabase, { search: search || undefined }));
+    const term = search || undefined;
+
+    const firstPage = await fetchProducts(supabase, { search: term, limit: 50 });
+    setProducts(firstPage);
     setLoading(false);
+
+    if (firstPage.length === 50) {
+      const everything = await fetchProducts(supabase, { search: term });
+      // A newer search may have landed while this was in flight.
+      setProducts((current) => (current === firstPage ? everything : current));
+    }
   }, [search]);
 
   useEffect(() => {

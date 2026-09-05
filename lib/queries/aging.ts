@@ -78,12 +78,49 @@ export async function getOverdueThresholdDays(supabase: SupabaseClient): Promise
   return thresholdInFlight;
 }
 
+// The Customers page, the Payments page and the Dashboard all ask for the
+// same reconstruction — every counted order, its confirmed payments, its
+// share of any approved return — within a second of each other. Building it
+// once and holding it briefly turns three passes over the whole ledger into
+// one. Ten seconds: long enough for a page load, short enough that nothing
+// on screen is meaningfully behind, and dropped outright the moment an order
+// or a payment is written.
+const AGING_TTL_MS = 10_000;
+const agingCache = new Map<string, { at: number; rows: InvoiceAging[] }>();
+const agingInFlight = new Map<string, Promise<InvoiceAging[]>>();
+
+export function invalidateAging() {
+  agingCache.clear();
+}
+
 export async function fetchOutstandingInvoices(
   supabase: SupabaseClient,
   customerId?: string,
   includeSettled = false,
   // Whose orders to age. The Payments page's own figures are scoped this way
   // for a salesman, the same as the phone's Aging.swift does it.
+  salesmanId?: string
+): Promise<InvoiceAging[]> {
+  const key = `${customerId ?? ""}|${includeSettled}|${salesmanId ?? ""}`;
+  const hit = agingCache.get(key);
+  if (hit && Date.now() - hit.at < AGING_TTL_MS) return hit.rows;
+  const pending = agingInFlight.get(key);
+  if (pending) return pending;
+
+  const work = buildOutstandingInvoices(supabase, customerId, includeSettled, salesmanId)
+    .then((rows) => {
+      agingCache.set(key, { at: Date.now(), rows });
+      return rows;
+    })
+    .finally(() => agingInFlight.delete(key));
+  agingInFlight.set(key, work);
+  return work;
+}
+
+async function buildOutstandingInvoices(
+  supabase: SupabaseClient,
+  customerId?: string,
+  includeSettled = false,
   salesmanId?: string
 ): Promise<InvoiceAging[]> {
   // extended_due_date may not exist yet — it's a new column the Manager
@@ -112,28 +149,32 @@ export async function fetchOutstandingInvoices(
   if (orderRows.length === 0) return [];
   const orderIds = orderRows.map((o) => o.id);
 
-  const { data: links, error: linksErr } = await supabase
-    .from("payment_orders")
-    .select("payment_id, order_id, allocated_amount")
-    .in("order_id", orderIds);
+  // Naming five hundred order ids in a URL costs more than reading the whole
+  // allocation table, which is tiny — so past a certain point, ask for all of
+  // it and match up here. Below that (one customer's statement) the filter is
+  // still the cheaper side.
+  const BULK = 100;
+  const linkQuery = supabase.from("payment_orders").select("payment_id, order_id, allocated_amount");
+  const { data: linkRows, error: linksErr } =
+    orderIds.length > BULK ? await linkQuery : await linkQuery.in("order_id", orderIds);
   if (linksErr) throw linksErr;
+  const wanted = new Set(orderIds);
+  const links = (linkRows ?? []).filter((l) => wanted.has(l.order_id as string));
 
   // A payment can span multiple orders (§6) — payment_orders.allocated_amount
   // is the per-order slice, not payments.amount (the whole collection).
-  const paymentIds = [...new Set((links ?? []).map((l) => l.payment_id))];
+  const paymentIds = [...new Set(links.map((l) => l.payment_id))];
   const confirmedPaymentIds = new Set<string>();
   if (paymentIds.length) {
-    const { data: payments, error: payErr } = await supabase
-      .from("payments")
-      .select("id, status")
-      .in("id", paymentIds)
-      .eq("status", "confirmed");
+    const payQuery = supabase.from("payments").select("id, status").eq("status", "confirmed");
+    const { data: payments, error: payErr } =
+      paymentIds.length > BULK ? await payQuery : await payQuery.in("id", paymentIds);
     if (payErr) throw payErr;
     for (const p of payments ?? []) confirmedPaymentIds.add(p.id);
   }
 
   const paidByOrder = new Map<string, number>();
-  for (const link of links ?? []) {
+  for (const link of links) {
     if (!confirmedPaymentIds.has(link.payment_id)) continue;
     paidByOrder.set(link.order_id, (paidByOrder.get(link.order_id) ?? 0) + (link.allocated_amount ?? 0));
   }

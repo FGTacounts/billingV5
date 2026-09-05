@@ -1,4 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { invalidateAging } from "@/lib/queries/aging";
+import { invalidateOrderFacts } from "@/lib/queries/dashboard";
 import type { Payment, Customer, PaymentExtensionRequest, AppUser, Order } from "@/lib/types/db";
 
 export interface PaymentRow extends Payment {
@@ -141,6 +143,7 @@ export async function createPayment(
     );
     if (linkErr) throw linkErr;
   }
+  balancesChanged();
   return data.id as string;
 }
 
@@ -210,9 +213,16 @@ export async function updatePayment(
   if (error) throw error;
 }
 
+/** What a customer owes has changed — drop the briefly-held copies. */
+function balancesChanged() {
+  invalidateAging();
+  invalidateOrderFacts();
+}
+
 export async function confirmPayment(supabase: SupabaseClient, id: string) {
   const { error } = await supabase.from("payments").update({ status: "confirmed" }).eq("id", id);
   if (error) throw error;
+  balancesChanged();
 }
 
 export async function setChequeStatus(
@@ -222,6 +232,7 @@ export async function setChequeStatus(
 ) {
   const { error } = await supabase.from("payments").update({ cheque_status: status }).eq("id", id);
   if (error) throw error;
+  balancesChanged();
 }
 
 export async function requestExtension(

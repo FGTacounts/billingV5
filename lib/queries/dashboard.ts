@@ -16,6 +16,79 @@ export function saleValue(o: { subtotal?: number | null; total?: number | null }
   return o.subtotal ?? o.total ?? 0;
 }
 
+// One trip for the orders every figure on this page is made of.
+//
+// The Dashboard and the Sales page each ask eight or nine different
+// questions of the same set of orders — month to date, the trend line, today
+// against the same day last month and last year, twelve months of history,
+// last year's twelve for the comparison, the leaderboard, the receivables
+// split. Each one used to fetch the whole set again: on the live database
+// that is 535 rows and about 800ms, eight or nine times over, before a
+// single number appears.
+//
+// They now share one fetch. The window is bounded to the last twenty-five
+// months, which is everything any of those figures reach back to, and it is
+// held for ten seconds — long enough to cover one page load, short enough
+// that nothing on screen is meaningfully behind. `invalidateOrderFacts()`
+// drops it the moment an order is written.
+export interface RevenueOrder {
+  id: string;
+  salesman_id: string | null;
+  subtotal: number | null;
+  total: number | null;
+  updated_at: string;
+}
+
+const REVENUE_TTL_MS = 10_000;
+const REVENUE_MONTHS_BACK = 25;
+let revenueCache: { at: number; rows: RevenueOrder[] } | null = null;
+let revenueInFlight: Promise<RevenueOrder[]> | null = null;
+
+export function invalidateOrderFacts() {
+  revenueCache = null;
+}
+
+function revenueWindowIso(): string {
+  const d = new Date();
+  return new Date(d.getFullYear(), d.getMonth() - REVENUE_MONTHS_BACK, 1).toISOString();
+}
+
+async function revenueOrders(supabase: SupabaseClient): Promise<RevenueOrder[]> {
+  if (revenueCache && Date.now() - revenueCache.at < REVENUE_TTL_MS) return revenueCache.rows;
+  if (revenueInFlight) return revenueInFlight;
+
+  revenueInFlight = (async () => {
+    const { data, error } = await supabase
+      .from("orders")
+      .select("id, salesman_id, subtotal, total, updated_at")
+      .in("status", await fetchCountedStatuses(supabase))
+      .gte("updated_at", revenueWindowIso());
+    if (error) throw error;
+    const rows = (data as RevenueOrder[]) ?? [];
+    revenueCache = { at: Date.now(), rows };
+    return rows;
+  })().finally(() => {
+    revenueInFlight = null;
+  });
+
+  return revenueInFlight;
+}
+
+/** The counted orders in a window, for one salesman or the whole team. */
+export async function revenueIn(
+  supabase: SupabaseClient,
+  opts: { from?: Date; to?: Date; salesmanId?: string } = {}
+): Promise<RevenueOrder[]> {
+  const rows = await revenueOrders(supabase);
+  const fromMs = opts.from ? opts.from.getTime() : -Infinity;
+  const toMs = opts.to ? opts.to.getTime() : Infinity;
+  return rows.filter((o) => {
+    if (opts.salesmanId && o.salesman_id !== opts.salesmanId) return false;
+    const t = new Date(o.updated_at).getTime();
+    return t >= fromMs && t <= toMs;
+  });
+}
+
 function startOfMonthIso(): string {
   const d = new Date();
   return new Date(d.getFullYear(), d.getMonth(), 1).toISOString();
@@ -36,15 +109,8 @@ export async function monthToDateSales(
   supabase: SupabaseClient,
   salesmanId?: string
 ): Promise<number> {
-  let q = supabase
-    .from("orders")
-    .select("subtotal, total")
-    .in("status", await fetchCountedStatuses(supabase))
-    .gte("updated_at", startOfMonthIso());
-  if (salesmanId) q = q.eq("salesman_id", salesmanId);
-  const { data, error } = await q;
-  if (error) throw error;
-  return (data ?? []).reduce((sum, o) => sum + saleValue(o), 0);
+  const rows = await revenueIn(supabase, { from: new Date(startOfMonthIso()), salesmanId });
+  return rows.reduce((sum, o) => sum + saleValue(o), 0);
 }
 
 export async function countOrdersThisMonth(
@@ -83,15 +149,8 @@ export async function monthToDateGrossProfit(
   supabase: SupabaseClient,
   salesmanId?: string
 ): Promise<number> {
-  let orderQ = supabase
-    .from("orders")
-    .select("id")
-    .in("status", await fetchCountedStatuses(supabase))
-    .gte("updated_at", startOfMonthIso());
-  if (salesmanId) orderQ = orderQ.eq("salesman_id", salesmanId);
-  const { data: orders, error } = await orderQ;
-  if (error) throw error;
-  const orderIds = (orders ?? []).map((o) => o.id);
+  const orders = await revenueIn(supabase, { from: new Date(startOfMonthIso()), salesmanId });
+  const orderIds = orders.map((o) => o.id);
   if (orderIds.length === 0) return 0;
 
   const { data: items, error: itemsErr } = await supabase
@@ -115,15 +174,8 @@ export async function salesmanAvgGpPercent(
   from: Date,
   to: Date
 ): Promise<number | null> {
-  const { data: orders, error } = await supabase
-    .from("orders")
-    .select("id")
-    .eq("salesman_id", salesmanId)
-    .in("status", await fetchCountedStatuses(supabase))
-    .gte("updated_at", from.toISOString())
-    .lte("updated_at", to.toISOString());
-  if (error) throw error;
-  const orderIds = (orders ?? []).map((o) => o.id);
+  const orders = await revenueIn(supabase, { from, to, salesmanId });
+  const orderIds = orders.map((o) => o.id);
   if (orderIds.length === 0) return null;
 
   const { data: items, error: itemsErr } = await supabase
@@ -191,15 +243,7 @@ export async function fetchSaleTrend(
   end.setHours(23, 59, 59, 999);
   const totalDays = Math.max(1, Math.round((end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000)) + 1);
 
-  let q = supabase
-    .from("orders")
-    .select("subtotal, total, updated_at")
-    .in("status", await fetchCountedStatuses(supabase))
-    .gte("updated_at", start.toISOString())
-    .lte("updated_at", end.toISOString());
-  if (opts.salesmanId) q = q.eq("salesman_id", opts.salesmanId);
-  const { data, error } = await q;
-  if (error) throw error;
+  const data = await revenueIn(supabase, { from: start, to: end, salesmanId: opts.salesmanId });
 
   const byDay = new Map<string, number>();
   for (const o of data ?? []) {
@@ -231,16 +275,8 @@ export async function salesOnDay(
   const end = new Date(date);
   end.setHours(23, 59, 59, 999);
 
-  let q = supabase
-    .from("orders")
-    .select("subtotal, total")
-    .in("status", await fetchCountedStatuses(supabase))
-    .gte("updated_at", start.toISOString())
-    .lte("updated_at", end.toISOString());
-  if (salesmanId) q = q.eq("salesman_id", salesmanId);
-  const { data, error } = await q;
-  if (error) throw error;
-  return (data ?? []).reduce((sum, o) => sum + saleValue(o), 0);
+  const rows = await revenueIn(supabase, { from: start, to: end, salesmanId });
+  return rows.reduce((sum, o) => sum + saleValue(o), 0);
 }
 
 export interface MonthPoint {
@@ -315,15 +351,13 @@ export async function fetchSalesByMonth(
   const start = new Date(now.getFullYear() - yearsAgo, now.getMonth() - 11, 1);
   const end = new Date(now.getFullYear() - yearsAgo, now.getMonth() + 1, 1);
 
-  let q = supabase
-    .from("orders")
-    .select("subtotal, total, updated_at")
-    .in("status", await fetchCountedStatuses(supabase))
-    .gte("updated_at", start.toISOString())
-    .lt("updated_at", end.toISOString());
-  if (opts.salesmanId) q = q.eq("salesman_id", opts.salesmanId);
-  const { data, error } = await q;
-  if (error) throw error;
+  // `end` is exclusive here (the first of next month), so step back a
+  // millisecond rather than including it.
+  const data = await revenueIn(supabase, {
+    from: start,
+    to: new Date(end.getTime() - 1),
+    salesmanId: opts.salesmanId,
+  });
 
   const byMonth = new Map<string, number>();
   for (const o of data ?? []) {

@@ -28,6 +28,7 @@ export async function GET(req: NextRequest) {
       isManager: (user.role === "manager" || user.role === "admin"),
       activeOnly: req.nextUrl.searchParams.get("activeOnly") !== "false",
       search: req.nextUrl.searchParams.get("search") ?? undefined,
+      limit: Number(req.nextUrl.searchParams.get("limit")) || undefined,
     });
     return NextResponse.json({ products });
   } catch (e) {

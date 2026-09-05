@@ -1,5 +1,7 @@
 "use client";
 
+import ErrorBoundary from "@/components/ErrorBoundary";
+
 import { usePathname } from "next/navigation";
 
 // Re-runs the rise-in animation whenever the route changes, by keying the
@@ -14,7 +16,10 @@ export default function PageTransition({ children }: { children: React.ReactNode
   const pathname = usePathname();
   return (
     <div key={pathname} className="rise-in">
-      {children}
+      {/* A screen that throws while rendering is replaced on its own here,
+          leaving the nav and the rest of the chrome standing, rather than
+          taking the whole app down to a blank page. */}
+      <ErrorBoundary resetKey={pathname}>{children}</ErrorBoundary>
     </div>
   );
 }

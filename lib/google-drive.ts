@@ -67,7 +67,13 @@ async function authHeader(): Promise<Record<string, string>> {
 // which never matched any row — the real reason product photos always
 // 502'd with "is not set" even after the folder ID and Drive credentials
 // were both configured correctly.
-export async function getSetting(column: "product_photos_drive_folder_id" | "private_uploads_drive_folder_id"): Promise<string | null> {
+type FolderColumn =
+  | "product_photos_drive_folder_id"
+  | "private_uploads_drive_folder_id"
+  | "cheque_drive_folder_id"
+  | "invoice_proof_drive_folder_id";
+
+export async function getSetting(column: FolderColumn): Promise<string | null> {
   const supabase = supabaseServer();
   const { data } = await supabase
     .from("app_settings")
@@ -87,6 +93,68 @@ export async function privateUploadsFolderId(): Promise<string> {
   const id = await getSetting("private_uploads_drive_folder_id");
   if (!id) throw new Error("app_settings.private_uploads_drive_folder_id is not set");
   return id;
+}
+
+/**
+ * Where delivery proof photos go. Falls back to the general private uploads
+ * folder when the dedicated one has not been set, so proof is never lost just
+ * because a folder is unconfigured.
+ *
+ * The column does not exist before RUN-ME-5, and asking for a column that
+ * isn't there is an error rather than an empty answer, so that case is caught
+ * and treated as "not set".
+ */
+export async function invoiceProofFolderId(): Promise<string> {
+  try {
+    const id = await getSetting("invoice_proof_drive_folder_id");
+    if (id) return id;
+  } catch {
+    // Column not added yet.
+  }
+  return privateUploadsFolderId();
+}
+
+/** Where cheque photos go. Same fallback for the same reason. */
+export async function chequeFolderId(): Promise<string> {
+  try {
+    const id = await getSetting("cheque_drive_folder_id");
+    if (id) return id;
+  } catch {
+    // Column not added yet.
+  }
+  return privateUploadsFolderId();
+}
+
+/**
+ * Delivery proof file name, e.g. INV4300_30AUG26.
+ *
+ * The invoice number is what makes a proof findable later: the Invoices screen
+ * looks up proof by this prefix rather than from a column on the order, since
+ * the order table has nowhere to store it. An order without a number yet falls
+ * back to its id so the upload still has a stable name.
+ */
+export function deliveryProofName(invoiceNumber: string | null, orderId: string, when: Date, index = 0): string {
+  const months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+  const day = String(when.getDate()).padStart(2, "0");
+  const stamp = `${day}${months[when.getMonth()]}${String(when.getFullYear()).slice(-2)}`;
+  const base = invoiceNumber ? `INV${invoiceNumber}` : `ORD${orderId.slice(0, 8)}`;
+  // A second photo of the same delivery gets _2, _3 … so nothing overwrites.
+  return index === 0 ? `${base}_${stamp}` : `${base}_${stamp}_${index + 1}`;
+}
+
+/** The prefix the Invoices screen searches to find every proof for an invoice. */
+export function deliveryProofPrefix(invoiceNumber: string): string {
+  return `INV${invoiceNumber}_`;
+}
+
+/**
+ * Cheque photo file name, e.g. CUSTOMERNAME1 — the customer's name followed by
+ * how many cheques they have had. Letters and digits only, so the name is safe
+ * as a file name whatever the customer is called.
+ */
+export function chequePhotoName(customerName: string, paymentNumber: number): string {
+  const cleaned = customerName.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return `${cleaned || "CUSTOMER"}${paymentNumber}`;
 }
 
 interface DriveFile {
@@ -308,4 +376,38 @@ export async function uploadToDrive(
     throw new Error(`Drive upload failed (${res.status}): ${await res.text()}`);
   }
   return res.json();
+}
+
+export interface DriveProofFile {
+  id: string;
+  name: string;
+  webViewLink: string;
+  thumbnailLink: string | null;
+}
+
+/**
+ * Every file in a folder whose name starts with `prefix`.
+ *
+ * This is how proof photos are found. The orders table has no column to record
+ * an uploaded file against, so the file name carries the link instead — which
+ * is the reason the naming format matters rather than being cosmetic.
+ */
+export async function findFilesByPrefix(folderId: string, prefix: string): Promise<DriveProofFile[]> {
+  const headers = await authHeader();
+  // A single quote inside a Drive query string has to be escaped or the query
+  // is rejected outright.
+  const safePrefix = prefix.replace(/'/g, "\\'");
+  const q = `'${folderId}' in parents and name contains '${safePrefix}' and trashed = false`;
+  const params = new URLSearchParams({
+    q,
+    fields: "files(id,name,webViewLink,thumbnailLink)",
+    pageSize: "50",
+    supportsAllDrives: "true",
+    includeItemsFromAllDrives: "true",
+  });
+  const res = await fetch(`${DRIVE_BASE}/files?${params}`, { headers });
+  if (!res.ok) return [];
+  const data = (await res.json()) as { files?: DriveProofFile[] };
+  // `name contains` matches anywhere in the name, so keep only true prefixes.
+  return (data.files ?? []).filter((f) => f.name.startsWith(prefix));
 }

@@ -27,6 +27,29 @@ const ORDER_SELECT =
 // time, and pays for a second one to recover from it.
 let salesmanPhoneMissing = false;
 
+// The trash columns arrive with RUN-ME-12. Until they do, every list behaves
+// exactly as it did before — nothing is filtered and the Trash is empty —
+// rather than every order query failing over a column that isn't there yet.
+let trashColumnsMissing = false;
+
+export function orderTrashSupported(): boolean {
+  return !trashColumnsMissing;
+}
+
+// Runs a query that filters out deleted orders, and quietly runs it again
+// without that filter on a database that has no such column.
+async function withoutDeleted<R extends { error: { code?: string } | null }>(
+  build: (filterDeleted: boolean) => PromiseLike<R>
+): Promise<R> {
+  if (!trashColumnsMissing) {
+    const first = await build(true);
+    if (!first.error) return first;
+    if (first.error.code !== "42703") return first;
+    trashColumnsMissing = true;
+  }
+  return build(false);
+}
+
 async function fetchSalesmen(supabase: SupabaseClient, ids: string[]): Promise<any[]> {
   if (!ids.length) return [];
   if (!salesmanPhoneMissing) {
@@ -79,6 +102,11 @@ export async function fetchOrders(
     salesmanId?: string;
     customerId?: string;
     limit?: number;
+    // Revenue window, matched on `updated_at` — the same column every sales
+    // figure is bucketed by (see saleValue/fetchSaleTrend), so a list built
+    // with these agrees with the totals beside it.
+    from?: Date;
+    to?: Date;
   } = {}
 ): Promise<OrderRow[]> {
   let q = supabase
@@ -89,10 +117,14 @@ export async function fetchOrders(
   if (opts.status?.length) q = q.in("status", opts.status);
   if (opts.excludeStatus?.length) q = q.not("status", "in", `(${opts.excludeStatus.join(",")})`);
   if (opts.salesmanId) q = q.eq("salesman_id", opts.salesmanId);
+  if (opts.from) q = q.gte("updated_at", opts.from.toISOString());
+  if (opts.to) q = q.lte("updated_at", opts.to.toISOString());
   if (opts.customerId) q = q.eq("customer_id", opts.customerId);
   if (opts.limit) q = q.limit(opts.limit);
 
-  const { data, error } = await q;
+  const { data, error } = await withoutDeleted((filterDeleted) =>
+    filterDeleted ? q.is("deleted_at", null) : q
+  );
   if (error) throw error;
   return attachRelations(supabase, (data as Order[]) ?? []);
 }
@@ -106,7 +138,9 @@ export async function countOrders(
   let q = supabase.from("orders").select("id", { count: "exact", head: true });
   if (opts.status?.length) q = q.in("status", opts.status);
   if (opts.salesmanId) q = q.eq("salesman_id", opts.salesmanId);
-  const { count, error } = await q;
+  const { count, error } = await withoutDeleted((filterDeleted) =>
+    filterDeleted ? q.is("deleted_at", null) : q
+  );
   if (error) throw error;
   return count ?? 0;
 }
@@ -154,7 +188,9 @@ export async function fetchOrdersPage(
     );
   }
 
-  const { data, error } = await q;
+  const { data, error } = await withoutDeleted((filterDeleted) =>
+    filterDeleted ? q.is("deleted_at", null) : q
+  );
   if (error) throw error;
   const rows = (data as Order[]) ?? [];
   const hasMore = rows.length > pageSize;
@@ -164,6 +200,62 @@ export async function fetchOrdersPage(
     : null;
   return { rows: await attachRelations(supabase, pageRows), nextCursor };
 }
+
+// The Trash in Orders (§Orders: "ability to delete orders… it should be in
+// the trash can in the orders"). Deleted orders keep their invoice number and
+// their history; they are simply out of every list and every total until
+// somebody restores them or empties them out for good.
+export interface TrashedOrderRow extends OrderRow {
+  deleted_at: string | null;
+  deleted_by: string | null;
+  deleted_from_status: string | null;
+}
+
+export async function fetchTrashedOrders(
+  supabase: SupabaseClient,
+  opts: { salesmanId?: string } = {}
+): Promise<TrashedOrderRow[]> {
+  if (trashColumnsMissing) return [];
+  let q = supabase
+    .from("orders")
+    .select(`${ORDER_SELECT}, deleted_at, deleted_by, deleted_from_status`)
+    .not("deleted_at", "is", null)
+    .order("deleted_at", { ascending: false });
+  if (opts.salesmanId) q = q.eq("salesman_id", opts.salesmanId);
+
+  const { data, error } = await q;
+  if (error) {
+    if (error.code === "42703") trashColumnsMissing = true;
+    return [];
+  }
+  const rows = (data as unknown as Order[]) ?? [];
+  return (await attachRelations(supabase, rows)) as TrashedOrderRow[];
+}
+
+async function trashAction(path: string, orderId: string) {
+  const res = await fetch(`/api/orders/${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ orderId }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error ?? "That didn't work.");
+  return data as {
+    ok: true;
+    invoiceNumber?: string | null;
+    stockRestored?: number;
+    stockTaken?: number;
+    paymentsReleased?: number;
+    status?: string;
+  };
+}
+
+/** Move an order to the trash: stock back, payments released, out of every total. */
+export const deleteOrder = (orderId: string) => trashAction("delete", orderId);
+/** Put it back at the stage it was deleted from. */
+export const restoreOrder = (orderId: string) => trashAction("restore", orderId);
+/** Empty one order out of the trash for good. Manager only. */
+export const purgeOrder = (orderId: string) => trashAction("purge", orderId);
 
 export async function fetchOrder(
   supabase: SupabaseClient,
@@ -190,7 +282,7 @@ export interface OrderItemRow extends OrderItem {
   // off). A lookup failure (e.g. broken RLS on the raw products table — see
   // the pending security-fix SQL) degrades to no rack/discount shown, not a
   // broken order screen.
-  product: Pick<Product, "id" | "rack_location" | "price"> | null;
+  product: Pick<Product, "id" | "rack_location" | "price" | "stock_on_hand"> | null;
 }
 
 // order_items_safe exists and carries everything except rack_location —
@@ -208,11 +300,11 @@ export async function fetchOrderItems(
   if (rows.length === 0) return [];
 
   const productIds = [...new Set(rows.map((r) => r.product_id))];
-  const byId = new Map<string, Pick<Product, "id" | "rack_location" | "price">>();
+  const byId = new Map<string, Pick<Product, "id" | "rack_location" | "price" | "stock_on_hand">>();
   try {
     const { data: products, error: pErr } = await supabase
       .from("products")
-      .select("id, rack_location, price")
+      .select("id, rack_location, price, stock_on_hand")
       .in("id", productIds);
     if (pErr) throw pErr;
     for (const p of products ?? []) byId.set(p.id, p as any);
@@ -262,34 +354,180 @@ export async function notify(
   await supabase.from("notifications").insert({ user_id: userId, type, title, body, is_read: false });
 }
 
+// ---- Telling people their order moved ----
+//
+// An order changing hands is the whole point of the pipeline, and until now
+// only two events in the entire app produced a notification. A salesman had
+// no way of learning their order was accepted, rejected, packed or approved
+// short of opening it and looking. These put every handover in the right
+// person's bell, which is what the previous version of this app did.
+//
+// Notification writes are deliberately best-effort: a bell that fails must
+// never roll back a status change that already succeeded.
+
+interface OrderRef {
+  salesmanId: string | null;
+  invoice: string;
+  customerName: string | null;
+}
+
+async function orderRef(supabase: SupabaseClient, orderId: string): Promise<OrderRef> {
+  // Two plain reads rather than a PostgREST embed: the rest of this file
+  // joins by hand for the same reason (no confirmed FK constraint names),
+  // and a failed embed here would silently cost someone their notification.
+  const { data } = await supabase
+    .from("orders")
+    .select("salesman_id, invoice_number, new_customer_note, customer_id")
+    .eq("id", orderId)
+    .maybeSingle();
+
+  let customerName = (data?.new_customer_note as string | null) ?? null;
+  if (data?.customer_id) {
+    const { data: c } = await supabase
+      .from("customers")
+      .select("name")
+      .eq("id", data.customer_id)
+      .maybeSingle();
+    customerName = c?.name ?? customerName;
+  }
+
+  return {
+    salesmanId: (data?.salesman_id as string | null) ?? null,
+    // Before approval there is no invoice number, so say something a person
+    // can still act on rather than "#null".
+    invoice: data?.invoice_number ? `#${data.invoice_number}` : "the order",
+    customerName,
+  };
+}
+
+/** The order's own salesman, skipping the case where they did it themselves. */
+async function notifySalesman(
+  supabase: SupabaseClient,
+  orderId: string,
+  actorId: string,
+  type: string,
+  title: (ref: OrderRef) => string,
+  body?: (ref: OrderRef) => string
+) {
+  try {
+    const ref = await orderRef(supabase, orderId);
+    if (!ref.salesmanId || ref.salesmanId === actorId) return;
+    await notify(supabase, ref.salesmanId, type, title(ref), body?.(ref));
+  } catch {
+    // Best-effort by design — see above.
+  }
+}
+
+async function notifyManagers(
+  supabase: SupabaseClient,
+  actorId: string,
+  type: string,
+  title: (ref: OrderRef) => string,
+  orderId: string,
+  body?: (ref: OrderRef) => string
+) {
+  try {
+    const ref = await orderRef(supabase, orderId);
+    const { data: managers } = await supabase
+      .from("users")
+      .select("id")
+      .in("role", ["manager", "admin"])
+      .eq("is_active", true);
+    for (const m of managers ?? []) {
+      if (m.id === actorId) continue;
+      await notify(supabase, m.id, type, title(ref), body?.(ref));
+    }
+  } catch {
+    // Best-effort by design — see above.
+  }
+}
+
 export async function sendDraft(supabase: SupabaseClient, orderId: string, actorId: string) {
   await updateOrderStatus(supabase, orderId, "pending");
   await logStatus(supabase, orderId, actorId);
+  await notifyManagers(
+    supabase,
+    actorId,
+    "order_pending",
+    () => "New order to review",
+    orderId,
+    (r) => (r.customerName ? `${r.customerName} — ${r.invoice}` : r.invoice)
+  );
 }
 
 export async function acceptOrder(supabase: SupabaseClient, orderId: string, actorId: string) {
   await updateOrderStatus(supabase, orderId, "waiting");
   await logStatus(supabase, orderId, actorId);
+  await notifySalesman(
+    supabase,
+    orderId,
+    actorId,
+    "order_accepted",
+    (r) => `Order accepted — ${r.invoice}`,
+    () => "The manager accepted it. It is now with the warehouse."
+  );
 }
 
 export async function rejectOrder(supabase: SupabaseClient, orderId: string, actorId: string) {
   await updateOrderStatus(supabase, orderId, "rejected", { rejected_at: new Date().toISOString() });
   await logStatus(supabase, orderId, actorId);
+  await notifySalesman(
+    supabase,
+    orderId,
+    actorId,
+    "order_rejected",
+    (r) => `Order rejected — ${r.invoice}`,
+    () => "Open it to see the manager's note. Resubmit within 30 days or it is deleted."
+  );
 }
 
 export async function resubmitOrder(supabase: SupabaseClient, orderId: string, actorId: string) {
   await updateOrderStatus(supabase, orderId, "pending", { rejected_at: null });
   await logStatus(supabase, orderId, actorId);
+  await notifyManagers(
+    supabase,
+    actorId,
+    "order_pending",
+    (r) => `Order resubmitted — ${r.invoice}`,
+    orderId,
+    (r) => r.customerName ?? ""
+  );
 }
 
 export async function startPicking(supabase: SupabaseClient, orderId: string, actorId: string) {
   await updateOrderStatus(supabase, orderId, "picking");
   await logStatus(supabase, orderId, actorId);
+  await notifySalesman(
+    supabase,
+    orderId,
+    actorId,
+    "order_picking",
+    (r) => `Picking started — ${r.invoice}`,
+    () => "The warehouse has started picking this order."
+  );
 }
 
 export async function markPacked(supabase: SupabaseClient, orderId: string, actorId: string) {
   await updateOrderStatus(supabase, orderId, "packed");
   await logStatus(supabase, orderId, actorId);
+  // The manager is the one who has to act next: approving is what issues the
+  // invoice and moves the stock.
+  await notifyManagers(
+    supabase,
+    actorId,
+    "order_packed",
+    (r) => `Packed, waiting for approval — ${r.invoice}`,
+    orderId,
+    (r) => r.customerName ?? ""
+  );
+  await notifySalesman(
+    supabase,
+    orderId,
+    actorId,
+    "order_packed",
+    (r) => `Order packed — ${r.invoice}`,
+    () => "The warehouse has finished picking it."
+  );
 }
 
 export async function requestEdit(supabase: SupabaseClient, orderId: string, actorId: string) {
@@ -305,16 +543,39 @@ export async function denyEditRequest(supabase: SupabaseClient, orderId: string,
 export async function startDelivering(supabase: SupabaseClient, orderId: string, actorId: string) {
   await updateOrderStatus(supabase, orderId, "delivering");
   await logStatus(supabase, orderId, actorId);
+  await notifySalesman(
+    supabase,
+    orderId,
+    actorId,
+    "order_delivering",
+    (r) => `Out for delivery — ${r.invoice}`,
+    (r) => (r.customerName ? `On its way to ${r.customerName}.` : "")
+  );
 }
 
 export async function confirmDelivery(supabase: SupabaseClient, orderId: string, actorId: string) {
   await updateOrderStatus(supabase, orderId, "delivered");
   await logStatus(supabase, orderId, actorId);
+  await notifySalesman(
+    supabase,
+    orderId,
+    actorId,
+    "order_delivered",
+    (r) => `Delivered — ${r.invoice}`,
+    (r) => (r.customerName ? `${r.customerName} has received it.` : "")
+  );
 }
 
 export async function cancelOrder(supabase: SupabaseClient, orderId: string, actorId: string) {
   await updateOrderStatus(supabase, orderId, "cancelled");
   await logStatus(supabase, orderId, actorId);
+  await notifySalesman(
+    supabase,
+    orderId,
+    actorId,
+    "order_cancelled",
+    (r) => `Order cancelled — ${r.invoice}`
+  );
 }
 
 // ---- Order editing ----
@@ -330,4 +591,59 @@ export function daysUntilPurge(rejectedAt: string | null): number | null {
   const rejected = new Date(rejectedAt).getTime();
   const purgeAt = rejected + REJECTED_TTL_DAYS * 24 * 60 * 60 * 1000;
   return Math.max(0, Math.ceil((purgeAt - Date.now()) / (24 * 60 * 60 * 1000)));
+}
+
+export interface ResumePoint {
+  orderId: string;
+  invoiceNumber: string | null;
+  customerName: string | null;
+  status: string;
+  pickedAt: string;
+}
+
+/**
+ * The order this person was last picking, if it is still open.
+ *
+ * Picking a large order is interrupted — a delivery arrives, a shift ends —
+ * and finding your place again meant remembering the customer and hunting for
+ * them in a list. This is that place.
+ *
+ * Read from the last line they actually picked rather than from the order's
+ * own timestamps, because an order can be touched by more than one person and
+ * "where I left off" is personal.
+ */
+export async function fetchResumePoint(
+  supabase: SupabaseClient,
+  userId: string
+): Promise<ResumePoint | null> {
+  const { data: lastPick, error } = await supabase
+    .from("order_items")
+    .select("order_id, picked_at")
+    .eq("picked_by_id", userId)
+    .not("picked_at", "is", null)
+    .order("picked_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error || !lastPick) return null;
+
+  const { data: order } = await supabase
+    .from("orders")
+    .select("id, invoice_number, status, customer:customers(name)")
+    .eq("id", lastPick.order_id)
+    .maybeSingle();
+  if (!order) return null;
+
+  // Only worth offering while there is still something to do on it.
+  if (!["waiting", "picking", "accepted"].includes(order.status)) return null;
+
+  const customer = order.customer as { name?: string } | { name?: string }[] | null;
+  const customerName = Array.isArray(customer) ? customer[0]?.name ?? null : customer?.name ?? null;
+
+  return {
+    orderId: order.id,
+    invoiceNumber: order.invoice_number ?? null,
+    customerName,
+    status: order.status,
+    pickedAt: lastPick.picked_at as string,
+  };
 }

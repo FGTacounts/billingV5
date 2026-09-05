@@ -6,6 +6,9 @@ import { supabaseBrowser } from "@/lib/supabase/client";
 import { fetchExpenses, createExpense, updateExpense, fetchSalesmen } from "@/lib/queries/expenses";
 import { fetchExpenseBreakdown, type ExpenseSlice } from "@/lib/queries/dashboard";
 import type { AppUser, Expense, ExpenseType } from "@/lib/types/db";
+import type { Seller } from "@/lib/queries/sales";
+import { toast } from "@/lib/toast";
+import { friendlyError } from "@/lib/errors";
 import { formatAed, formatCompact } from "@/lib/money";
 import Button from "@/components/ui/Button";
 import Sheet from "@/components/ui/Sheet";
@@ -44,7 +47,7 @@ const SORT_LABELS: Record<SortKey, string> = {
 
 export default function ExpenseView({ user }: { user: AppUser }) {
   const [topTab, setTopTab] = useState<"overview" | "salesman">("overview");
-  const [salesmen, setSalesmen] = useState<{ id: string; name: string }[]>([]);
+  const [salesmen, setSalesmen] = useState<Seller[]>([]);
   const [selectedSalesman, setSelectedSalesman] = useState("");
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [breakdown, setBreakdown] = useState<{ slices: ExpenseSlice[]; total: number }>({ slices: [], total: 0 });
@@ -77,11 +80,28 @@ export default function ExpenseView({ user }: { user: AppUser }) {
     load();
   }, [load]);
 
+  // Whose expense it is. `salesman_id` is the answer when it has been set;
+  // `logged_by` is only who typed it in, and since logging is Manager-gated
+  // that was every row — which is why the Salesman tab used to be empty.
+  // Older rows entered by a salesman keep working through the fallback.
+  const attributedTo = useCallback(
+    (e: Expense): string | null => {
+      if (e.salesman_id) return e.salesman_id;
+      // Only a salesman's own entry falls back this way. A manager appears
+      // in the same list because a manager can carry an expense too, but
+      // "the manager typed it in" is not "it is the manager's expense".
+      return salesmen.some((s) => s.id === e.logged_by && s.role === "salesman") ? e.logged_by : null;
+    },
+    [salesmen]
+  );
+
   const visible = useMemo(() => {
     let rows = expenses;
     if (topTab === "salesman") {
-      const salesmanIds = new Set(salesmen.map((s) => s.id));
-      rows = rows.filter((e) => salesmanIds.has(e.logged_by) && (!selectedSalesman || e.logged_by === selectedSalesman));
+      rows = rows.filter((e) => {
+        const owner = attributedTo(e);
+        return owner !== null && (!selectedSalesman || owner === selectedSalesman);
+      });
     }
     if (search.trim()) {
       const q = search.trim().toLowerCase();
@@ -97,10 +117,10 @@ export default function ExpenseView({ user }: { user: AppUser }) {
       case "amount_asc": sorted.sort((a, b) => a.amount - b.amount); break;
     }
     return sorted;
-  }, [expenses, topTab, salesmen, selectedSalesman, search, sortKey]);
+  }, [expenses, topTab, attributedTo, selectedSalesman, search, sortKey]);
 
   const totalShown = visible.reduce((s, e) => s + e.amount, 0);
-  const salesmanName = (id: string) => salesmen.find((s) => s.id === id)?.name;
+  const salesmanName = (id: string | null) => (id ? salesmen.find((s) => s.id === id)?.name : undefined);
 
   return (
     <div className="p-4 md:p-6 max-w-[1600px] mx-auto">
@@ -124,6 +144,7 @@ export default function ExpenseView({ user }: { user: AppUser }) {
                 { key: "DATE", required: true },
                 { key: "DESCRIPTION" },
                 { key: "NOTES" },
+                { key: "SALESMAN" },
               ],
               example: {
                 TYPE: "fixed",
@@ -132,6 +153,7 @@ export default function ExpenseView({ user }: { user: AppUser }) {
                 DATE: new Date().toISOString().slice(0, 10),
                 DESCRIPTION: "",
                 NOTES: "",
+                SALESMAN: "",
               },
             }}
           />
@@ -264,7 +286,10 @@ export default function ExpenseView({ user }: { user: AppUser }) {
       {loading ? (
         <SkeletonList rows={5} />
       ) : visible.length === 0 ? (
-        <EmptyState icon={CreditCard} title="No expenses logged" />
+        <EmptyState
+          icon={CreditCard}
+          title={topTab === "salesman" ? "No expenses against a salesman yet" : "No expenses logged"}
+        />
       ) : (
         <>
           <div className="text-right text-subhead font-semibold tabular-nums mb-2">
@@ -304,7 +329,7 @@ export default function ExpenseView({ user }: { user: AppUser }) {
                     </span>
                     <span className="block text-caption text-secondary truncate">
                       {e.category ?? ""}
-                      {topTab === "overview" && salesmanName(e.logged_by) ? ` · ${salesmanName(e.logged_by)}` : ""}
+                      {salesmanName(attributedTo(e)) ? ` · ${salesmanName(attributedTo(e))}` : ""}
                     </span>
                   </span>
                   <span className="flex items-center justify-end gap-2 shrink-0">
@@ -321,12 +346,19 @@ export default function ExpenseView({ user }: { user: AppUser }) {
       )}
 
       {showNew && (
-        <ExpenseEditor onClose={() => setShowNew(false)} onSaved={() => { setShowNew(false); load(); }} user={user} />
+        <ExpenseEditor
+          onClose={() => setShowNew(false)}
+          onSaved={() => { setShowNew(false); load(); }}
+          user={user}
+          salesmen={salesmen}
+          defaultSalesmanId={topTab === "salesman" ? selectedSalesman : ""}
+        />
       )}
       {editing && (
         <ExpenseEditor
           expense={editing}
           user={user}
+          salesmen={salesmen}
           onClose={() => setEditing(null)}
           onSaved={() => { setEditing(null); load(); }}
         />
@@ -338,11 +370,17 @@ export default function ExpenseView({ user }: { user: AppUser }) {
 function ExpenseEditor({
   expense,
   user,
+  salesmen,
+  defaultSalesmanId = "",
   onClose,
   onSaved,
 }: {
   expense?: Expense;
   user: AppUser;
+  salesmen: Seller[];
+  // Logging from the Salesman tab with someone selected starts on that
+  // person, rather than making the manager pick them twice.
+  defaultSalesmanId?: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -352,15 +390,28 @@ function ExpenseEditor({
   const [amount, setAmount] = useState(expense ? String(expense.amount) : "");
   const [date, setDate] = useState(expense?.date ?? new Date().toISOString().slice(0, 10));
   const [notes, setNotes] = useState(expense?.notes ?? "");
+  const [salesmanId, setSalesmanId] = useState(expense?.salesman_id ?? defaultSalesmanId ?? "");
   const [saving, setSaving] = useState(false);
 
   async function save() {
     setSaving(true);
     try {
-      const payload = { type, category, description: description || null, amount: Number(amount), date, notes: notes || null };
+      const payload = {
+        type,
+        category,
+        description: description || null,
+        amount: Number(amount),
+        date,
+        notes: notes || null,
+        salesman_id: salesmanId || null,
+      };
       if (expense) await updateExpense(supabaseBrowser(), expense.id, payload);
       else await createExpense(supabaseBrowser(), { ...payload, logged_by: user.id });
       onSaved();
+    } catch (e) {
+      // This used to throw into nothing: the sheet stayed open with no
+      // explanation and the expense was not saved.
+      toast.error(friendlyError(e, "Failed to save the expense"));
     } finally {
       setSaving(false);
     }
@@ -389,6 +440,22 @@ function ExpenseEditor({
       </select>
       <Label>Category</Label>
       <TextInput placeholder="e.g. Rent, Utility, Salary" value={category} onChange={(e) => setCategory(e.target.value)} />
+      {/* Whose expense it is (§Expense: the Salesman view). Left blank for
+          anything that belongs to the business rather than to a person. */}
+      <Label>Salesman (optional)</Label>
+      <select
+        className="w-full px-3.5 py-2.5 rounded-card border border-hairline bg-canvas text-subhead"
+        value={salesmanId}
+        onChange={(e) => setSalesmanId(e.target.value)}
+      >
+        <option value="">Not for a particular salesman</option>
+        {salesmen.map((s) => (
+          <option key={s.id} value={s.id}>
+            {s.name}
+            {s.role === "salesman" ? "" : ` (${s.role})`}
+          </option>
+        ))}
+      </select>
       <div className="grid grid-cols-2 gap-3">
         <div>
           <Label>Amount (AED)</Label>

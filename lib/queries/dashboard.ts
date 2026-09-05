@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { OrderStatus } from "@/lib/types/db";
-import { fetchApprovedGrvCreditByCustomer } from "@/lib/queries/grv";
+import { fetchOutstandingInvoices, getOverdueThresholdDays } from "@/lib/queries/aging";
 import { fetchCountedStatuses } from "@/lib/reportStage";
 
 // Sales goals used to be a hardcoded 100,000 here, because the schema had
@@ -175,11 +175,17 @@ export async function fetchSaleTrend(
   // Explicit from/to (custom date-range picker, §Dashboard) wins over the
   // days-back shorthand when both could apply.
   const to = opts.to ?? new Date();
-  const start = opts.from ?? (() => {
-    const d = new Date(to);
-    d.setDate(d.getDate() - ((opts.days ?? 30) - 1));
-    return d;
-  })();
+  // A copy: this used to call setHours on the caller's own Date, so anything
+  // else the caller passed that same object to saw a window that had quietly
+  // moved underneath it.
+  const start = new Date(
+    opts.from ??
+      (() => {
+        const d = new Date(to);
+        d.setDate(d.getDate() - ((opts.days ?? 30) - 1));
+        return d;
+      })()
+  );
   start.setHours(0, 0, 0, 0);
   const end = new Date(to);
   end.setHours(23, 59, 59, 999);
@@ -381,103 +387,52 @@ export interface PaymentsSummary {
   pendingCount: number;
   received: number;
   overdue: number;
-  // Dollar sum of outstanding balance not yet past the overdue threshold
+  // Outstanding balance still inside its payment terms
   // (§Next Updates dashboard mockup: "Collected / Remaining / Overdue").
   remaining: number;
 }
 
-// Pending = count of outstanding (unpaid) invoices that aren't yet past the
-// customer's overdue threshold. Received = confirmed payments this month.
-// Overdue = balance on invoices past threshold. Scoped to a salesman's own
-// orders when salesmanId is given (dashboard "own numbers" scoping).
+// Collected = confirmed payments this month.
+// Remaining = what is still owed and still inside its terms — younger than
+//   the overdue threshold (90 days by default, or whatever a customer's own
+//   threshold says), including anything whose due date has been extended.
+// Overdue = what is owed past that threshold and has not been extended.
+// Pending = how many invoices make up Remaining.
+// Scoped to a salesman's own orders when salesmanId is given.
 export async function fetchPaymentsSummary(
   supabase: SupabaseClient,
   opts: { salesmanId?: string; collectedBy?: string } = {}
 ): Promise<PaymentsSummary> {
-  let orderQ = supabase
-    .from("orders")
-    .select("id, customer_id, total, updated_at")
-    .in("status", await fetchCountedStatuses(supabase));
-  if (opts.salesmanId) orderQ = orderQ.eq("salesman_id", opts.salesmanId);
-  const { data: orders, error } = await orderQ;
-  if (error) throw error;
-  const orderRows = orders ?? [];
-  if (orderRows.length === 0) {
-    const received = await monthToDateConfirmedPayments(supabase, opts.collectedBy);
-    return { pendingCount: 0, received, overdue: 0, remaining: 0 };
-  }
+  // One reading of what a customer owes, shared with the Customers page and
+  // the statements: confirmed payments and approved returns already taken
+  // off, and an order whose due date has been extended aged from the new
+  // date rather than from delivery.
+  const [invoices, defaultDays] = await Promise.all([
+    fetchOutstandingInvoices(supabase, undefined, false, opts.salesmanId),
+    getOverdueThresholdDays(supabase),
+  ]);
 
-  const orderIds = orderRows.map((o) => o.id);
-  const { data: links } = await supabase
-    .from("payment_orders")
-    .select("payment_id, order_id, allocated_amount")
-    .in("order_id", orderIds);
-  // A payment can span multiple orders (§6) — allocated_amount is the
-  // per-order slice, not payments.amount (the whole collection).
-  const paymentIds = [...new Set((links ?? []).map((l) => l.payment_id))];
-  const confirmedPaymentIds = new Set<string>();
-  if (paymentIds.length) {
-    const { data: payments } = await supabase
-      .from("payments")
-      .select("id, status")
-      .in("id", paymentIds)
-      .eq("status", "confirmed");
-    for (const p of payments ?? []) confirmedPaymentIds.add(p.id);
-  }
-  const paidByOrder = new Map<string, number>();
-  for (const link of links ?? []) {
-    if (!confirmedPaymentIds.has(link.payment_id)) continue;
-    paidByOrder.set(link.order_id, (paidByOrder.get(link.order_id) ?? 0) + (link.allocated_amount ?? 0));
-  }
-
-  const customerIds = [...new Set(orderRows.map((o) => o.customer_id).filter(Boolean))] as string[];
+  const customerIds = [...new Set(invoices.map((inv) => inv.customerId).filter(Boolean))];
   const { data: customers } = customerIds.length
     ? await supabase.from("customers").select("id, overdue_threshold_days").in("id", customerIds)
-    : { data: [] as any[] };
-  const thresholdById = new Map((customers ?? []).map((c: any) => [c.id, c.overdue_threshold_days ?? 30]));
+    : { data: [] as { id: string; overdue_threshold_days: number | null }[] };
+  const thresholdById = new Map(
+    (customers ?? []).map((c) => [c.id as string, (c.overdue_threshold_days ?? defaultDays) as number])
+  );
 
-  // An approved GRV is a credit note — apply it against the customer's
-  // oldest outstanding orders first, same as fetchOutstandingInvoices does.
-  const creditByCustomer = await fetchApprovedGrvCreditByCustomer(supabase, customerIds);
-  const balanceById = new Map<string, number>();
-  if (creditByCustomer.size > 0) {
-    const byCustomer = new Map<string, typeof orderRows>();
-    for (const o of orderRows) {
-      const custId = o.customer_id as string | null;
-      if (!custId) continue;
-      if (!byCustomer.has(custId)) byCustomer.set(custId, []);
-      byCustomer.get(custId)!.push(o);
-    }
-    for (const [custId, custOrders] of byCustomer) {
-      let credit = creditByCustomer.get(custId) ?? 0;
-      custOrders.sort((a, b) => new Date(a.updated_at as string).getTime() - new Date(b.updated_at as string).getTime());
-      for (const o of custOrders) {
-        const paid = paidByOrder.get(o.id) ?? 0;
-        let balance = Math.max(0, (o.total ?? 0) - paid);
-        if (credit > 0) {
-          const applied = Math.min(balance, credit);
-          balance -= applied;
-          credit -= applied;
-        }
-        balanceById.set(o.id, balance);
-      }
-    }
-  }
-
-  const now = Date.now();
   let pendingCount = 0;
   let overdue = 0;
   let remaining = 0;
-  for (const o of orderRows) {
-    const paid = paidByOrder.get(o.id) ?? 0;
-    const balance = balanceById.get(o.id) ?? Math.max(0, (o.total ?? 0) - paid);
-    if (balance <= 0.01) continue;
-    const days = Math.floor((now - new Date(o.updated_at as string).getTime()) / (24 * 60 * 60 * 1000));
-    const threshold = o.customer_id ? thresholdById.get(o.customer_id) ?? 30 : 30;
-    if (days > threshold) overdue += balance;
+  for (const inv of invoices) {
+    if (inv.balance <= 0.01) continue;
+    const threshold = thresholdById.get(inv.customerId) ?? defaultDays;
+    // Remaining is what is still inside its terms; overdue is what has run
+    // past them and has not been extended. An extension moves an invoice
+    // back into Remaining until the new date passes.
+    if (inv.daysOutstanding > threshold) overdue += inv.balance;
     else {
       pendingCount += 1;
-      remaining += balance;
+      remaining += inv.balance;
     }
   }
 

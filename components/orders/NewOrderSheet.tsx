@@ -19,6 +19,7 @@ import { Label, TextInput, Recommended } from "@/components/ui/Field";
 import BarcodeScanButton from "@/components/ui/BarcodeScanButton";
 import LogPaymentSheet from "@/components/payments/LogPaymentSheet";
 import ImportOrderLinesButton, { type ImportedLine } from "./ImportOrderLinesButton";
+import ScanOrderButton, { type ScannedOrderLine } from "./ScanOrderButton";
 
 interface Line {
   product: Product;
@@ -31,10 +32,15 @@ export default function NewOrderSheet({
   user,
   onClose,
   onCreated,
+  initialProducts,
 }: {
   user: AppUser;
   onClose: () => void;
   onCreated: () => void;
+  // Products chosen on the Products screen before the order was opened, so
+  // picking happens where the photos and prices are rather than in a search
+  // box inside this sheet.
+  initialProducts?: Product[];
 }) {
   const [customerSearch, setCustomerSearch] = useState("");
   const [customerResults, setCustomerResults] = useState<Customer[]>([]);
@@ -42,7 +48,9 @@ export default function NewOrderSheet({
   const [newCustomerNote, setNewCustomerNote] = useState("");
   const [useNewCustomer, setUseNewCustomer] = useState(false);
 
-  const [addingProduct, setAddingProduct] = useState(false);
+  // The article search is always available rather than hidden behind a
+  // button — typing an article is the main thing this screen is for.
+  const [addingProduct, setAddingProduct] = useState(true);
   const [showPhotoPicker, setShowPhotoPicker] = useState(false);
   const [productSearch, setProductSearch] = useState("");
   const [productResults, setProductResults] = useState<Product[]>([]);
@@ -180,6 +188,16 @@ export default function NewOrderSheet({
   // Bulk SKU/Qty import (§Orders). Same sticky-price / customer-discount
   // resolution addProduct() does per line, but with one batched
   // customer_prices lookup instead of one request per imported row.
+  // Seeded once, on open. Reuses the import path so a pre-picked product gets
+  // the same sticky customer price and default quantity as any other line.
+  const seeded = useRef(false);
+  useEffect(() => {
+    if (seeded.current || !initialProducts || initialProducts.length === 0) return;
+    seeded.current = true;
+    addImportedLines(initialProducts.map((product) => ({ product, qty: product.default_qty || 1 })));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialProducts]);
+
   async function addImportedLines(imported: ImportedLine[]) {
     const priceByProduct = new Map<string, number>();
     if (customer) {
@@ -193,16 +211,25 @@ export default function NewOrderSheet({
 
     setLines((prev) => {
       const next = [...prev];
-      for (const { product, qty } of imported) {
+      for (const { product, qty, price: stated } of imported) {
         const existing = next.findIndex((l) => l.product.id === product.id);
         if (existing !== -1) {
-          next[existing] = { ...next[existing], qty: next[existing].qty + qty };
+          next[existing] = {
+            ...next[existing],
+            qty: next[existing].qty + qty,
+            ...(stated != null ? { price: stated } : {}),
+          };
           continue;
         }
         const sticky = priceByProduct.get(product.id);
         let price = product.price;
         let recommendedReason: Line["recommendedReason"] = null;
-        if (sticky != null) {
+        if (stated != null) {
+          // A price written on the document that was imported or scanned is
+          // what was agreed with the customer, so it wins over the price we
+          // would otherwise remember for them.
+          price = stated;
+        } else if (sticky != null) {
           price = sticky;
           recommendedReason = "sticky_price";
         } else if (customerDiscount) {
@@ -213,6 +240,31 @@ export default function NewOrderSheet({
       }
       return next;
     });
+  }
+
+  // Lines read off a photographed order pad or invoice. They arrive already
+  // matched to real products by /api/scan-order, so they go in through the
+  // same path as an import — which means sticky pricing and the customer's
+  // discount still apply to any line the paper didn't put a price on.
+  async function addScannedLines(scanned: ScannedOrderLine[], scannedCustomer: string | null) {
+    const supabase = supabaseBrowser();
+    const ids = scanned.map((l) => l.productId).filter((id): id is string => !!id);
+    if (ids.length === 0) return;
+    const all = await fetchProducts(supabase);
+    const byId = new Map(all.map((p) => [p.id, p]));
+    const lines: ImportedLine[] = scanned.flatMap((l) => {
+      const product = l.productId ? byId.get(l.productId) : undefined;
+      if (!product) return [];
+      return [{ product, qty: l.quantity, ...(l.scannedPrice != null ? { price: l.scannedPrice } : {}) }];
+    });
+    await addImportedLines(lines);
+
+    // The customer is only ever a suggestion — the scan reads a shop name off
+    // a piece of paper, and picking the wrong account here would put the
+    // order on someone else's statement. Offer it, never apply it.
+    if (scannedCustomer && !customer && !useNewCustomer) {
+      setCustomerSearch(scannedCustomer);
+    }
   }
 
   async function addProduct(p: Product) {
@@ -245,7 +297,9 @@ export default function NewOrderSheet({
     });
     setProductSearch("");
     setProductResults([]);
-    setAddingProduct(false);
+    // Deliberately not closing the search row: an order is usually several
+    // lines, and closing it after each one meant pressing + again before you
+    // could type the next article.
     setShowPhotoPicker(false);
   }
 
@@ -508,6 +562,7 @@ export default function NewOrderSheet({
           <Label>Items</Label>
           <div className="flex items-center gap-3">
             <ImportOrderLinesButton onImported={addImportedLines} />
+            <ScanOrderButton onLines={addScannedLines} />
             <button
               onClick={() => setAddingProduct((v) => !v)}
               className="w-7 h-7 rounded-full border border-hairline grid place-items-center text-secondary hover:text-accent hover:border-accent/50"
@@ -562,7 +617,7 @@ export default function NewOrderSheet({
         )}
 
         {lines.length === 0 ? (
-          <p className="text-caption text-secondary py-2">No items yet — tap + to add a product.</p>
+          <p className="text-caption text-secondary py-2">No items yet — search for an article above.</p>
         ) : (
           <div className="border border-hairline rounded-card overflow-x-auto">
             <table className="w-full text-subhead min-w-[480px]">

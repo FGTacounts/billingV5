@@ -24,10 +24,12 @@ export async function fetchPurchases(supabase: SupabaseClient, limit = 100): Pro
   if (rows.length === 0) return [];
 
   const productIds = [...new Set(rows.map((r) => r.product_id))];
-  const { data: products } = await supabase.from("products_safe").select("id, sku, name").in("id", productIds);
+  // products_safe does not exist in this database, and the name is held in
+  // `description`. Cost is not selected, so this stays readable to every role.
+  const { data: products } = await supabase.from("products").select("id, sku, description").in("id", productIds);
   const byId = new Map((products ?? []).map((p) => [p.id, p]));
 
-  return rows.map((r) => ({ ...r, sku: byId.get(r.product_id)?.sku ?? null, name: byId.get(r.product_id)?.name ?? null }));
+  return rows.map((r) => ({ ...r, sku: byId.get(r.product_id)?.sku ?? null, name: byId.get(r.product_id)?.description ?? null }));
 }
 
 // Logs a GRN (goods received) entry and adds the received qty to

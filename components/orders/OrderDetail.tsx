@@ -27,7 +27,9 @@ import {
   type OrderItemRow,
 } from "@/lib/queries/orders";
 import { requestExtension } from "@/lib/queries/payments";
+import { deleteOrder } from "@/lib/queries/orders";
 import { fetchSalesmen } from "@/lib/queries/expenses";
+import type { Seller } from "@/lib/queries/sales";
 import { fetchCustomers } from "@/lib/queries/customers";
 import type { AppUser } from "@/lib/types/db";
 import { subtotal, vat, total, formatAed, effectiveQty } from "@/lib/money";
@@ -57,6 +59,8 @@ export default function OrderDetail({
   const [pendingSyncIds, setPendingSyncIds] = useState<string[]>(() => getQueuedPickItemIds());
   const [editingRackId, setEditingRackId] = useState<string | null>(null);
   const [rackDraft, setRackDraft] = useState("");
+  const [editingStockId, setEditingStockId] = useState<string | null>(null);
+  const [stockDraft, setStockDraft] = useState("");
   // Line-item qty/price edits on not-yet-accepted orders (§Next Updates
   // Orders: "make order data editable") — scoped server-side to
   // draft/pending, see app/api/orders/update-item/route.ts.
@@ -64,6 +68,12 @@ export default function OrderDetail({
   const [qtyDraft, setQtyDraft] = useState("");
   const [editingPriceId, setEditingPriceId] = useState<string | null>(null);
   const [priceDraft, setPriceDraft] = useState("");
+  // Manager pricing tools: set a line's price from a target margin, or set
+  // the whole order's subtotal and let the lines follow.
+  const [editingGpId, setEditingGpId] = useState<string | null>(null);
+  const [gpDraft, setGpDraft] = useState("");
+  const [editingSubtotal, setEditingSubtotal] = useState(false);
+  const [subtotalDraft, setSubtotalDraft] = useState("");
   // §Orders: Warehouse can send a note to the Manager during picking.
   const [editingManagerNote, setEditingManagerNote] = useState(false);
   const [managerNoteDraft, setManagerNoteDraft] = useState("");
@@ -200,6 +210,23 @@ export default function OrderDetail({
     load();
   }
 
+  async function saveStock(item: OrderItemRow) {
+    const value = Number(stockDraft);
+    setEditingStockId(null);
+    if (!Number.isFinite(value) || value < 0) return;
+    if (value === (item.product?.stock_on_hand ?? -1)) return;
+    const res = await fetch("/api/products/stock", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ productId: item.product_id, stockOnHand: value }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      toast.error(data.error ?? "Couldn't save the stock figure");
+    }
+    load();
+  }
+
   async function saveItemField(itemId: string, patch: { orderedQty?: number } | { unitPrice?: number }) {
     setEditingQtyId(null);
     setEditingPriceId(null);
@@ -213,6 +240,66 @@ export default function OrderDetail({
       toast.error(data.error ?? "Failed to save");
     }
     load();
+  }
+
+  // Pricing from the margin instead of the price. A manager quotes in gross
+  // profit far more often than in dirhams per unit, and working the price out
+  // by hand is where mistakes happen.
+  //
+  // price = cost / (1 − gp/100). Cost is never touched — it is what was paid,
+  // and the invoice's discount column is derived from the gap between the
+  // list price and what is actually charged.
+  async function saveLineGpPercent(item: OrderItemRow, targetPct: number) {
+    setEditingGpId(null);
+    if (item.unit_cost == null || item.unit_cost <= 0) {
+      toast.error("This line has no cost recorded, so a margin can't be worked back from it.");
+      return;
+    }
+    // 100% would need an infinite price; below -500% is a typo, not an intent.
+    const pct = Math.max(-500, Math.min(99, targetPct));
+    const price = Math.round((item.unit_cost / (1 - pct / 100)) * 100) / 100;
+    await saveItemField(item.id, { unitPrice: price });
+  }
+
+  // Agreeing a round number for the whole order. Every line's price moves by
+  // the same proportion, so the mix of the order is preserved and the invoice
+  // shows the difference as a discount per line.
+  async function applySubtotalOverride(target: number) {
+    setEditingSubtotal(false);
+    const current = subtotal(items);
+    if (!(target > 0) || current <= 0) return;
+    if (Math.abs(target - current) < 0.005) return;
+    const factor = target / current;
+    if (
+      !confirm(
+        `Change every line's price so the subtotal becomes ${formatAed(target)}? ` +
+          `That is ${factor < 1 ? "a reduction" : "an increase"} of ${Math.abs(Math.round((1 - factor) * 1000) / 10)}% across ${items.length} line${items.length === 1 ? "" : "s"}.`
+      )
+    )
+      return;
+
+    setBusy(true);
+    try {
+      for (const it of items) {
+        const price = Math.round(it.unit_price * factor * 100) / 100;
+        if (price === it.unit_price) continue;
+        const res = await fetch("/api/orders/update-item", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ itemId: it.id, unitPrice: price }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error ?? "Couldn't change that line");
+        }
+      }
+      await load();
+      onChanged();
+    } catch (e) {
+      toast.error(friendlyError(e, "Couldn't set the subtotal"));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function saveManagerNote() {
@@ -272,6 +359,11 @@ export default function OrderDetail({
   // existing pick/edit-request flow instead.
   const canEditItems =
     ["draft", "pending"].includes(order.status) && (isManager || order.salesman_id === user.id);
+  // A manager may delete any order; a salesman only their own, and only
+  // while it is still theirs to change.
+  const canDelete =
+    isManager ||
+    (order.salesman_id === user.id && ["draft", "pending"].includes(order.status));
 
   return (
     <>
@@ -304,6 +396,42 @@ export default function OrderDetail({
           {isManager && (
             <Button tier="tinted" onClick={() => setShowEditFields(true)} className="!px-3 !py-1.5 text-caption">
               Edit details
+            </Button>
+          )}
+          {/* §Orders: an order can be deleted, and deleting it puts the
+              stock back and takes it off the statement. It goes to the Trash
+              rather than away, so nothing is lost by a mis-tap. */}
+          {canDelete && (
+            <Button
+              tier="plain"
+              disabled={busy}
+              onClick={() => {
+                const label = order.invoice_number ? `Invoice ${order.invoice_number}` : "This order";
+                if (
+                  !confirm(
+                    `${label} moves to the Trash.\n\n` +
+                      "Its stock goes back on the shelf, any payment applied to it is released back to the customer, " +
+                      "and it stops counting on statements and sales. You can restore it from Orders → Trash."
+                  )
+                ) {
+                  return;
+                }
+                run(async () => {
+                  const result = await deleteOrder(order.id);
+                  const parts: string[] = ["Moved to the Trash."];
+                  if (result.stockRestored) parts.push(`${result.stockRestored} back in stock.`);
+                  if (result.paymentsReleased) {
+                    parts.push(
+                      `${result.paymentsReleased} payment${result.paymentsReleased === 1 ? "" : "s"} released.`
+                    );
+                  }
+                  toast.success(parts.join(" "));
+                  onClose();
+                });
+              }}
+              className="!px-3 !py-1.5 text-caption text-[--status-danger]"
+            >
+              Delete
             </Button>
           )}
         </div>
@@ -418,6 +546,9 @@ export default function OrderDetail({
                 ((isWarehouse || isManager) && ["waiting", "picking"].includes(order.status))) && (
                 <th className="px-3 py-2.5 font-medium">Rack</th>
               )}
+              {(isWarehouse || isManager) && ["waiting", "picking"].includes(order.status) && (
+                <th className="px-3 py-2.5 font-medium text-right">SOH</th>
+              )}
               <th className="px-3 py-2.5 font-medium text-right">Qty</th>
               <th className="px-3 py-2.5 font-medium text-right tabular-nums">Price</th>
               <th className="px-3 py-2.5 font-medium text-right tabular-nums">Total</th>
@@ -470,6 +601,39 @@ export default function OrderDetail({
                         </button>
                       ) : (
                         it.product?.rack_location || ""
+                      )}
+                    </td>
+                  )}
+                  {/* The shelf count, correctable right here. A mismatch is
+                      found while picking, and making someone report it later
+                      is how the figure stays wrong. */}
+                  {canPick && (
+                    <td className="px-3 py-2.5 text-right tabular-nums">
+                      {editingStockId === it.id ? (
+                        <input
+                          autoFocus
+                          type="number"
+                          min={0}
+                          className="w-16 px-1.5 py-1 rounded-inner border border-hairline text-right tabular-nums"
+                          value={stockDraft}
+                          onChange={(e) => setStockDraft(e.target.value)}
+                          onKeyDown={(e) => e.key === "Enter" && saveStock(it)}
+                          onBlur={() => saveStock(it)}
+                        />
+                      ) : (
+                        <button
+                          className={`flex items-center gap-1 ml-auto hover:text-accent ${
+                            (it.product?.stock_on_hand ?? 0) <= 0 ? "text-[--status-danger]" : "text-secondary"
+                          }`}
+                          title="Correct the shelf count"
+                          onClick={() => {
+                            setStockDraft(String(it.product?.stock_on_hand ?? 0));
+                            setEditingStockId(it.id);
+                          }}
+                        >
+                          {it.product?.stock_on_hand ?? "—"}
+                          <Pencil size={11} />
+                        </button>
                       )}
                     </td>
                   )}
@@ -575,7 +739,40 @@ export default function OrderDetail({
                           : "text-[--status-danger]"
                       }`}
                     >
-                      {it.unit_cost == null ? "—" : `${formatAed(lineGp)} · ${Math.round(lineGpPct)}%`}
+                      {it.unit_cost == null ? (
+                        "—"
+                      ) : canEditItems ? (
+                        // Typing a margin here sets the price. Cost stays put.
+                        editingGpId === it.id ? (
+                          <input
+                            autoFocus
+                            type="number"
+                            step="0.1"
+                            max={99}
+                            className="w-16 px-1.5 py-1 rounded-inner border border-hairline text-right tabular-nums"
+                            value={gpDraft}
+                            onChange={(e) => setGpDraft(e.target.value)}
+                            onKeyDown={(e) =>
+                              e.key === "Enter" && saveLineGpPercent(it, Number(gpDraft))
+                            }
+                            onBlur={() => saveLineGpPercent(it, Number(gpDraft))}
+                          />
+                        ) : (
+                          <button
+                            className="flex items-center gap-1 hover:text-accent ml-auto"
+                            title="Set the price from a target margin"
+                            onClick={() => {
+                              setGpDraft(lineGpPct.toFixed(1));
+                              setEditingGpId(it.id);
+                            }}
+                          >
+                            {formatAed(lineGp)} · {Math.round(lineGpPct)}%
+                            <Pencil size={11} />
+                          </button>
+                        )
+                      ) : (
+                        `${formatAed(lineGp)} · ${Math.round(lineGpPct)}%`
+                      )}
                     </td>
                   )}
                 </tr>
@@ -591,7 +788,38 @@ export default function OrderDetail({
           they're the authoritative billed amounts (real vat_rate from
           app_settings), so prefer those over recomputing. */}
       <div className="ml-auto w-full max-w-[260px] space-y-1.5 text-subhead">
-        <Row label="Subtotal" value={formatAed(order.subtotal || subtotal(items))} />
+        {isManager && canEditItems ? (
+          <div className="flex justify-between items-center text-secondary">
+            <span>Subtotal</span>
+            {editingSubtotal ? (
+              <input
+                autoFocus
+                type="number"
+                min={0}
+                step="0.01"
+                className="w-24 px-2 py-1 rounded-inner border border-hairline text-right tabular-nums"
+                value={subtotalDraft}
+                onChange={(e) => setSubtotalDraft(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && applySubtotalOverride(Number(subtotalDraft))}
+                onBlur={() => applySubtotalOverride(Number(subtotalDraft))}
+              />
+            ) : (
+              <button
+                className="tabular-nums flex items-center gap-1 hover:text-accent"
+                title="Set a subtotal and let the line prices follow"
+                onClick={() => {
+                  setSubtotalDraft(subtotal(items).toFixed(2));
+                  setEditingSubtotal(true);
+                }}
+              >
+                {formatAed(order.subtotal || subtotal(items))}
+                <Pencil size={11} />
+              </button>
+            )}
+          </div>
+        ) : (
+          <Row label="Subtotal" value={formatAed(order.subtotal || subtotal(items))} />
+        )}
         <Row label="VAT" value={formatAed(order.vat_amount || vat(items))} />
         <Row label="Total" value={formatAed(order.total || total(items))} bold />
         {isManager && items.some((it) => it.unit_cost != null) && (
@@ -642,7 +870,7 @@ function EditOrderFieldsSheet({
   const [customerResults, setCustomerResults] = useState<{ id: string; name: string; code: string }[]>([]);
   const [customerId, setCustomerId] = useState(order.customer_id ?? "");
   const [customerName, setCustomerName] = useState(order.customer?.name ?? "");
-  const [salesmen, setSalesmen] = useState<{ id: string; name: string }[]>([]);
+  const [salesmen, setSalesmen] = useState<Seller[]>([]);
   const [salesmanId, setSalesmanId] = useState(order.salesman_id ?? "");
   const [saving, setSaving] = useState(false);
 
@@ -680,7 +908,7 @@ function EditOrderFieldsSheet({
           orderId: order.id,
           invoice_number: invoiceNumber.trim() || null,
           customer_id: customerId || null,
-          salesman_id: salesmanId || null,
+          ...(salesmanId ? { salesman_id: salesmanId } : {}),
           ...(poSupported ? { po_number: poNumber.trim() || null } : {}),
         }),
       });
@@ -744,15 +972,26 @@ function EditOrderFieldsSheet({
         </>
       )}
 
+      {/* An order always names whoever billed it — there is no "none" any
+          more, and the server refuses one. Someone who has since left the
+          roster still appears here while they are on this order, so saving
+          the sheet cannot quietly reassign the sale to the first name in
+          the list. */}
       <Label>Salesman</Label>
       <select
         className="w-full px-3.5 py-2.5 rounded-card border border-hairline bg-canvas text-subhead"
         value={salesmanId}
         onChange={(e) => setSalesmanId(e.target.value)}
       >
-        <option value="">— none —</option>
+        {!salesmanId && <option value="">— choose —</option>}
+        {order.salesman && !salesmen.some((s) => s.id === order.salesman!.id) && (
+          <option value={order.salesman.id}>{order.salesman.full_name}</option>
+        )}
         {salesmen.map((s) => (
-          <option key={s.id} value={s.id}>{s.name}</option>
+          <option key={s.id} value={s.id}>
+            {s.name}
+            {s.role === "salesman" ? "" : ` (${s.role})`}
+          </option>
         ))}
       </select>
     </Sheet>

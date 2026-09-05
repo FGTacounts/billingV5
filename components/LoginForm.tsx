@@ -1,18 +1,40 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { motion } from "framer-motion";
 import { springEnter, EASE_OUT, durations, usePrefersReducedMotion, respectMotion } from "@/lib/motion";
 
+// The three roles, kept apart at the door (§Login, as the Sheets app had
+// it: "I AM A" — Salesman / Manager / Warehouse). Picking one is not
+// decoration: an account registered as one thing cannot sign in as another,
+// so a shared tablet in the warehouse cannot quietly become a manager's
+// session. Admin is the exception, as it always has been — it is a superset
+// of every role.
+const ROLES = ["Salesman", "Manager", "Warehouse"] as const;
+type LoginRole = (typeof ROLES)[number];
+const ROLE_MEMORY_KEY = "fgt-login-role";
+
 export default function LoginForm() {
   const router = useRouter();
+  const [role, setRole] = useState<LoginRole>("Salesman");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const reduced = usePrefersReducedMotion();
+
+  // The device remembers which door it came in by — a warehouse tablet is a
+  // warehouse tablet every morning.
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(ROLE_MEMORY_KEY);
+      if (saved && (ROLES as readonly string[]).includes(saved)) setRole(saved as LoginRole);
+    } catch {
+      // Private browsing, or storage switched off. The default stands.
+    }
+  }, []);
 
   async function submit() {
     if (!username || !password) return;
@@ -51,6 +73,29 @@ export default function LoginForm() {
       setError("Unknown username or password.");
       setLoading(false);
       return;
+    }
+
+    // The account has to be the kind of account they said it was. Checked
+    // after signing in rather than before, because `users` is not readable
+    // to a stranger — which is the right way round.
+    const { data: profile } = await supabase
+      .from("users")
+      .select("role, is_active")
+      .eq("auth_user_id", (await supabase.auth.getUser()).data.user?.id ?? "")
+      .maybeSingle();
+
+    const actual = (profile?.role ?? "").toLowerCase();
+    if (profile && actual !== "admin" && actual !== role.toLowerCase()) {
+      await supabase.auth.signOut();
+      setError(`That account is registered as ${actual.charAt(0).toUpperCase()}${actual.slice(1)}.`);
+      setLoading(false);
+      return;
+    }
+
+    try {
+      localStorage.setItem(ROLE_MEMORY_KEY, role);
+    } catch {
+      // Nothing to remember it with; sign-in still stands.
     }
 
     router.replace("/");
@@ -98,6 +143,27 @@ export default function LoginForm() {
           animate={{ opacity: 1, y: 0 }}
           transition={respectMotion({ duration: durations.normal, ease: EASE_OUT, delay: 0.1 }, reduced)}
         >
+          <label className="block text-[12px] font-semibold tracking-wide text-white/90 mt-1 mb-1.5">
+            I AM A
+          </label>
+          <div className="grid grid-cols-3 gap-1.5">
+            {ROLES.map((r) => (
+              <button
+                key={r}
+                type="button"
+                onClick={() => setRole(r)}
+                aria-pressed={role === r}
+                className={`py-2 rounded-card text-[13px] font-semibold transition ${
+                  role === r
+                    ? "bg-white text-[#2f8c70] shadow-raised"
+                    : "bg-white/20 text-white hover:bg-white/30"
+                }`}
+              >
+                {r}
+              </button>
+            ))}
+          </div>
+
           <label className="block text-[12px] font-semibold tracking-wide text-white/90 mt-3.5 mb-1.5">
             USERNAME OR EMAIL
           </label>

@@ -247,11 +247,29 @@ export async function decideExtension(
   status: "approved" | "rejected",
   approvedBy: string
 ) {
+  // Read the request first: approving one has to move the order's due date,
+  // or the extension is a note in a table nobody ages against — the invoice
+  // stays overdue and the salesman is still chased for it.
+  const { data: request, error: readErr } = await supabase
+    .from("payment_extension_requests")
+    .select("order_id, requested_due_date")
+    .eq("id", id)
+    .maybeSingle();
+  if (readErr) throw readErr;
+
   const { error } = await supabase
     .from("payment_extension_requests")
     .update({ status, approved_by: approvedBy })
     .eq("id", id);
   if (error) throw error;
+
+  if (status === "approved" && request?.order_id && request.requested_due_date) {
+    const { error: orderErr } = await supabase
+      .from("orders")
+      .update({ extended_due_date: request.requested_due_date })
+      .eq("id", request.order_id);
+    if (orderErr) throw orderErr;
+  }
 }
 
 export async function addDelayNote(

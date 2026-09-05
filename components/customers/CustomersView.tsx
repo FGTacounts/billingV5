@@ -3,6 +3,8 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { Search, Plus, Users, FileDown, FileSpreadsheet, SlidersHorizontal } from "lucide-react";
 import { usePreferences } from "@/lib/hooks/usePreferences";
+import { requestCustomerChange } from "@/lib/queries/customerRequests";
+import { toast } from "@/lib/toast";
 import PinnableOptionsButton from "@/components/ui/PinnableOptions";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { fetchCustomers, createCustomer, updateCustomer } from "@/lib/queries/customers";
@@ -27,6 +29,7 @@ import { CUSTOMER_ALIASES } from "@/lib/importAliases";
 import Sheet from "@/components/ui/Sheet";
 import { Label, TextInput } from "@/components/ui/Field";
 import CustomerDetailView from "./CustomerDetailView";
+import { DEFAULT_OVERDUE_DAYS } from "@/lib/queries/aging";
 
 const CONDITION_TONE: Record<Condition, "accent" | "warning" | "danger"> = {
   excellent: "accent",
@@ -200,7 +203,7 @@ export default function CustomersView({ user, isManager }: { user: AppUser; isMa
       // just use a dash").
       const hasData = g.members.some((c) => aging.has(c.id));
       const condition = hasData ? conditionForDays(oldest) : null;
-      const groupThreshold = Math.min(...g.members.map((c) => c.overdue_threshold_days ?? 30));
+      const groupThreshold = Math.min(...g.members.map((c) => c.overdue_threshold_days ?? DEFAULT_OVERDUE_DAYS));
       return { ...g, totalDue, totalSale, totalPaid, oldest, condition, hasData, groupThreshold, overdue: oldest > groupThreshold };
     });
   }, [customers, aging]);
@@ -272,11 +275,12 @@ export default function CustomersView({ user, isManager }: { user: AppUser; isMa
             />
           )}
           {isManager && <ExportLink type="customers" />}
-          {isManager && (
-            <Button tier="primary" onClick={() => setEditing("new")} className="flex items-center gap-1.5">
-              <Plus size={16} /> Add customer
-            </Button>
-          )}
+          {/* Anyone can start a customer; only a manager's lands straight
+              away. The label says which is happening rather than letting
+              someone find out after typing it all in. */}
+          <Button tier="primary" onClick={() => setEditing("new")} className="flex items-center gap-1.5">
+            <Plus size={16} /> {isManager ? "Add customer" : "Suggest customer"}
+          </Button>
         </div>
       </div>
 
@@ -468,8 +472,10 @@ export default function CustomersView({ user, isManager }: { user: AppUser; isMa
 
       <Pagination {...pager} noun="customers" />
 
-      {isManager && editing && (
+      {editing && (
         <CustomerEditor
+          asRequest={!isManager}
+          requestedBy={user.id}
           // Same remount guard as ProductEditor — without it, going from
           // editing a customer to "Add customer" reuses the instance and
           // opens the new-customer form prefilled with the old data.
@@ -501,10 +507,17 @@ function CustomerEditor({
   customer,
   onClose,
   onSaved,
+  // A manager writes straight to the record. Anyone else is raising a change
+  // for a manager to look at, and the screen says so rather than pretending
+  // the edit has landed.
+  asRequest = false,
+  requestedBy,
 }: {
   customer: Customer | null;
   onClose: () => void;
   onSaved: () => void;
+  asRequest?: boolean;
+  requestedBy?: string;
 }) {
   const [form, setForm] = useState({
     code: customer?.code ?? "",
@@ -544,6 +557,24 @@ function CustomerEditor({
     setSaving(true);
     const supabase = supabaseBrowser();
     try {
+      if (asRequest) {
+        const result = await requestCustomerChange(supabase, {
+          customerId: customer?.id ?? null,
+          payload: customer ? form : { ...form, is_active: true },
+          requestedBy: requestedBy ?? "",
+        });
+        if (!result.ok) {
+          toast.error(result.error ?? "Couldn't send that for approval.");
+          return;
+        }
+        toast.success(
+          customer
+            ? "Sent to your manager to approve."
+            : "New customer sent to your manager to approve."
+        );
+        onSaved();
+        return;
+      }
       if (customer) await updateCustomer(supabase, customer.id, form);
       else await createCustomer(supabase, { ...form, is_active: true });
       onSaved();
@@ -558,7 +589,15 @@ function CustomerEditor({
     <Sheet
       open
       onClose={onClose}
-      title={customer ? "Edit customer" : "Add customer"}
+      title={
+        asRequest
+          ? customer
+            ? "Suggest a change"
+            : "Suggest a customer"
+          : customer
+            ? "Edit customer"
+            : "Add customer"
+      }
       footer={
         <>
           <Button tier="plain" onClick={onClose}>Cancel</Button>

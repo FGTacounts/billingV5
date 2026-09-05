@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { DEFAULT_OVERDUE_DAYS } from "@/lib/queries/aging";
 
 // Route-planning priority list (§Next Updates Planning: "prioritizing
 // overdue-payment customers, 'excellent' customers idle 1+ months,
@@ -64,7 +65,7 @@ export async function fetchRoutePriorities(
   const overdueByCustomer = new Map<string, number>();
   for (const o of outstanding ?? []) {
     const cust = customers.find((c) => c.id === o.customer_id);
-    const threshold = cust?.overdue_threshold_days ?? 90;
+    const threshold = cust?.overdue_threshold_days ?? DEFAULT_OVERDUE_DAYS;
     const days = Math.floor((now - new Date(o.updated_at as string).getTime()) / (24 * 60 * 60 * 1000));
     if (days > threshold) {
       overdueByCustomer.set(o.customer_id, (overdueByCustomer.get(o.customer_id) ?? 0) + (Number(o.total) || 0));

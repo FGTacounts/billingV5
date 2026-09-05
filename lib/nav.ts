@@ -99,11 +99,30 @@ const PRIMARY_BY_ROLE: Record<UserRole, NavItem[]> = {
   admin: [ALL.dashboard, ALL.orders, ALL.customers, ALL.sales],
 };
 
-export function primaryNavFor(role: UserRole): NavItem[] {
+/** How many destinations fit across the bottom bar before it gets cramped. */
+export const MAX_PRIMARY_NAV = 4;
+
+/**
+ * The destinations in the bottom bar.
+ *
+ * `chosen` is the user's own selection from Settings, kept as hrefs. Anything
+ * in it that this role cannot reach is ignored rather than trusted — the list
+ * is a display preference, never a grant of access.
+ */
+export function primaryNavFor(role: UserRole, chosen?: string[]): NavItem[] {
+  const allowed = BY_ROLE[role];
+  if (chosen && chosen.length > 0) {
+    const picked = chosen
+      .map((href) => allowed.find((i) => i.href === href))
+      .filter((i): i is NavItem => Boolean(i))
+      .slice(0, MAX_PRIMARY_NAV);
+    if (picked.length > 0) return picked;
+  }
   return PRIMARY_BY_ROLE[role];
 }
 
-export function secondaryNavFor(role: UserRole): NavItem[] {
-  const primaryHrefs = new Set(PRIMARY_BY_ROLE[role].map((i) => i.href));
+/** Everything else, reached through More. */
+export function secondaryNavFor(role: UserRole, chosen?: string[]): NavItem[] {
+  const primaryHrefs = new Set(primaryNavFor(role, chosen).map((i) => i.href));
   return BY_ROLE[role].filter((i) => !primaryHrefs.has(i.href));
 }

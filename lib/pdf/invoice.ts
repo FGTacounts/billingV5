@@ -5,6 +5,7 @@ import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf
 import { InvoiceTemplate, invoiceDate, amountInWordsInvoice, dueDate } from "@/lib/invoice-template";
 import type { OrderRow, OrderItemRow } from "@/lib/queries/orders";
 import { FALLBACK_VAT_RATE } from "@/lib/money";
+import { DEFAULT_OVERDUE_DAYS } from "@/lib/queries/aging";
 
 const AED = (n: number) => n.toFixed(2);
 const A4 = { w: 595.28, h: 841.89 };
@@ -170,7 +171,7 @@ function drawInfoBox(ctx: Ctx, x: number, w: number, top: number, bottom: number
     ["Inv Date", invoiceDate(order.updated_at ?? order.created_at)],
     [
       "Due Date",
-      dueDate(order.updated_at ?? order.created_at, order.customer?.overdue_threshold_days ?? 30),
+      dueDate(order.updated_at ?? order.created_at, order.customer?.overdue_threshold_days ?? DEFAULT_OVERDUE_DAYS),
     ],
     ["CR No.", "—"],
   ];

@@ -1,9 +1,21 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Plus, FileText, ChevronDown, ChevronRight, Search, SlidersHorizontal } from "lucide-react";
+import { Plus, FileText, ChevronDown, ChevronRight, Search, SlidersHorizontal, PackageCheck, Trash2 } from "lucide-react";
 import { supabaseBrowser } from "@/lib/supabase/client";
-import { fetchOrders, fetchOrdersPage, countOrders, type OrderRow, type OrderCursor } from "@/lib/queries/orders";
+import {
+  fetchOrders,
+  fetchOrdersPage,
+  countOrders,
+  fetchTrashedOrders,
+  restoreOrder,
+  purgeOrder,
+  type OrderRow,
+  type OrderCursor,
+  type TrashedOrderRow,
+} from "@/lib/queries/orders";
+import { toast } from "@/lib/toast";
+import { friendlyError } from "@/lib/errors";
 import { countOrdersThisMonth, orderItemCounts } from "@/lib/queries/dashboard";
 import { fetchPaidByOrder } from "@/lib/queries/aging";
 import { useRealtimeTable } from "@/lib/realtime/useRealtimeTable";
@@ -14,6 +26,7 @@ import PageFooterActions from "@/components/ui/PageFooterActions";
 import { Card } from "@/components/ui/Card";
 import { RingProgress } from "@/components/ui/charts";
 import ScrollAwayTabs from "@/components/ui/ScrollAwayTabs";
+import { fetchDeliveryEnabled } from "@/lib/deliveryStep";
 import { EmptyState, SkeletonList } from "@/components/ui/Empty";
 import { StaggerList } from "@/components/ui/StaggerList";
 import { OrderStatusPill } from "@/components/ui/Badge";
@@ -21,6 +34,8 @@ import { usePreferences } from "@/lib/hooks/usePreferences";
 import { formatAed } from "@/lib/money";
 import NewOrderSheet from "./NewOrderSheet";
 import OrderDetail from "./OrderDetail";
+import ImportCsvButton from "@/components/ui/ImportCsvButton";
+import { ORDER_ALIASES } from "@/lib/importAliases";
 
 // Orders Adjust View (§Next Updates: "Adjust View option in the all orders
 // subtab") — optional extra columns shown per row, same split as the
@@ -69,6 +84,56 @@ function OrdersAdjustViewPopover({
   );
 }
 
+// Sorting the list. The previous version of this app had exactly these seven
+// orderings and people work from them — an accounts query starts with the
+// biggest invoice, a chase starts with the oldest.
+const ORDER_SORTS = [
+  { key: "newest", label: "Newest first" },
+  { key: "oldest", label: "Oldest first" },
+  { key: "invoice_desc", label: "Invoice # (high to low)" },
+  { key: "invoice_asc", label: "Invoice # (low to high)" },
+  { key: "total_desc", label: "Amount (high to low)" },
+  { key: "total_asc", label: "Amount (low to high)" },
+  { key: "salesman", label: "Salesman (A–Z)" },
+] as const;
+type OrderSort = (typeof ORDER_SORTS)[number]["key"];
+
+// Invoice numbers are text in the database, so "9" must not sort above "10".
+function invoiceValue(o: OrderRow): number {
+  const digits = (o.invoice_number ?? "").replace(/^INV-?/i, "").match(/\d+/);
+  return digits ? Number(digits[0]) : -1;
+}
+
+function sortOrders(rows: OrderRow[], sort: OrderSort): OrderRow[] {
+  const out = [...rows];
+  switch (sort) {
+    case "oldest":
+      return out.sort((a, b) => +new Date(a.created_at) - +new Date(b.created_at));
+    case "invoice_desc":
+      return out.sort((a, b) => invoiceValue(b) - invoiceValue(a));
+    case "invoice_asc":
+      // Orders with no number yet belong at the end, not ahead of invoice 1.
+      return out.sort((a, b) => {
+        const av = invoiceValue(a);
+        const bv = invoiceValue(b);
+        if (av < 0 && bv < 0) return 0;
+        if (av < 0) return 1;
+        if (bv < 0) return -1;
+        return av - bv;
+      });
+    case "total_desc":
+      return out.sort((a, b) => (b.total ?? 0) - (a.total ?? 0));
+    case "total_asc":
+      return out.sort((a, b) => (a.total ?? 0) - (b.total ?? 0));
+    case "salesman":
+      return out.sort((a, b) =>
+        (a.salesman?.full_name ?? "").localeCompare(b.salesman?.full_name ?? "")
+      );
+    default:
+      return out.sort((a, b) => +new Date(b.created_at) - +new Date(a.created_at));
+  }
+}
+
 const PIPELINE: OrderStatus[] = [
   "accepted",
   "waiting",
@@ -89,7 +154,10 @@ const WAREHOUSE_STAGE_LABEL: Record<WarehouseStage, string> = {
   waiting: "Waiting",
   picking: "Picking",
   packed: "Packed",
-  delivering: "Delivering",
+  // Everything the manager has approved sits here until it is confirmed
+  // delivered, so this is the warehouse's round for the day rather than only
+  // the orders already out.
+  delivering: "Delivery",
 };
 
 export default function OrdersView({
@@ -111,6 +179,7 @@ export default function OrdersView({
   // customer name or invoice number, applied regardless of which subtab is
   // active so it works everywhere the request asked for.
   const [search, setSearch] = useState("");
+  const [sort, setSort] = useState<OrderSort>("newest");
   const { preferences, update: updatePrefs } = usePreferences();
   const activeOrderColumns = (preferences.ordersColumns as OrderColumnKey[] | undefined) ?? [];
   // Manager's Orders/New Orders/Warehouse switcher (§1.3) — the other roles
@@ -163,13 +232,15 @@ export default function OrdersView({
 
   const searchedOrders = useMemo(() => {
     const term = search.trim().toLowerCase();
-    if (!term) return orders;
-    return orders.filter((o) => {
-      const name = (o.customer?.name ?? o.new_customer_note ?? "").toLowerCase();
-      const invoice = (o.invoice_number ?? "").toLowerCase();
-      return name.includes(term) || invoice.includes(term);
-    });
-  }, [orders, search]);
+    const matched = !term
+      ? orders
+      : orders.filter((o) => {
+          const name = (o.customer?.name ?? o.new_customer_note ?? "").toLowerCase();
+          const invoice = (o.invoice_number ?? "").toLowerCase();
+          return name.includes(term) || invoice.includes(term);
+        });
+    return sortOrders(matched, sort);
+  }, [orders, search, sort]);
 
   const sections: Sections = useMemo(() => {
     if (user.role === "salesman") {
@@ -220,11 +291,56 @@ export default function OrdersView({
     };
   }, [orders, isManager, scope, totalCount, monthCount]);
 
+  // The manager has always been able to step through the warehouse stages.
+  // The warehouse itself could not: it saw one flat queue mixing orders not yet
+  // started with ones half-picked and ones already packed, which is the wrong
+  // shape for the person actually doing the work.
+  const isWarehouse = user.role === "warehouse";
+  const showsWarehouseStages = isWarehouse && scope !== "picking";
+
+  // Whether this business tracks deliveries at all. Starts true so the tab is
+  // not missing on first paint for the businesses that do use it.
+  const [deliveryEnabled, setDeliveryEnabled] = useState(true);
+  useEffect(() => {
+    fetchDeliveryEnabled(supabaseBrowser()).then(setDeliveryEnabled).catch(() => {});
+  }, []);
+  const stages = useMemo(
+    () => (deliveryEnabled ? WAREHOUSE_STAGES : WAREHOUSE_STAGES.filter((st) => st !== "delivering")),
+    [deliveryEnabled]
+  );
+
+  // If delivery is switched off while that tab is open, fall back rather than
+  // showing an empty tab that no longer has a button.
+  useEffect(() => {
+    if (!deliveryEnabled && warehouseStage === "delivering") setWarehouseStage("packed");
+  }, [deliveryEnabled, warehouseStage]);
   const warehouseRows = useMemo(() => {
-    if (!isManager) return [];
+    if (!isManager && !showsWarehouseStages) return [];
+    // "Accepted" is an order that has reached the warehouse but nobody has
+    // picked yet, so it belongs under Waiting rather than in a stage of its own.
     if (warehouseStage === "waiting") return searchedOrders.filter((o) => ["waiting", "accepted"].includes(o.status));
+    // An approved order has not left yet but is the warehouse's to take out,
+    // so Delivery holds both it and anything already on the road.
+    if (warehouseStage === "delivering") {
+      return searchedOrders.filter((o) => ["approved", "delivering"].includes(o.status));
+    }
     return searchedOrders.filter((o) => o.status === warehouseStage);
-  }, [searchedOrders, isManager, warehouseStage]);
+  }, [searchedOrders, isManager, showsWarehouseStages, warehouseStage]);
+
+  // Counts sit on the tabs so the warehouse can see where the work is without
+  // opening each one.
+  const warehouseStageCounts = useMemo(() => {
+    const count = (stage: WarehouseStage) => {
+      if (stage === "waiting") {
+        return searchedOrders.filter((o) => ["waiting", "accepted"].includes(o.status)).length;
+      }
+      if (stage === "delivering") {
+        return searchedOrders.filter((o) => ["approved", "delivering"].includes(o.status)).length;
+      }
+      return searchedOrders.filter((o) => o.status === stage).length;
+    };
+    return Object.fromEntries(WAREHOUSE_STAGES.map((st) => [st, count(st)])) as Record<WarehouseStage, number>;
+  }, [searchedOrders]);
 
   if (loading) return <SkeletonList rows={6} />;
 
@@ -234,7 +350,37 @@ export default function OrdersView({
         <h1 className="text-large-title font-bold">
           {scope === "picking" ? "Picking" : "Orders"}
         </h1>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-4 flex-wrap">
+          {/* A day's orders taken on paper or in a supplier's sheet, brought
+              in as whole orders for review rather than typed again. */}
+          {isManager && (
+            <ImportCsvButton
+              endpoint="/api/orders/import"
+              onImported={load}
+              label="Import orders"
+              unit="order"
+              aliases={ORDER_ALIASES}
+              sample={{
+                filename: "orders_sample.csv",
+                headers: [
+                  { key: "Invoice" },
+                  { key: "Customer", required: true },
+                  { key: "Article", required: true },
+                  { key: "Quantity", required: true },
+                  { key: "Price" },
+                  { key: "Salesman" },
+                ],
+                example: {
+                  Invoice: "A-1",
+                  Customer: "20001",
+                  Article: "TTS100",
+                  Quantity: 12,
+                  Price: "",
+                  Salesman: "",
+                },
+              }}
+            />
+          )}
           {user.role !== "warehouse" && (
             <Button tier="primary" onClick={() => setShowNew(true)} className="flex items-center gap-1.5">
               <Plus size={16} /> New order
@@ -243,14 +389,28 @@ export default function OrdersView({
         </div>
       </div>
 
-      <div className="relative mb-5 max-w-sm">
-        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-secondary" />
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search by customer or invoice #"
-          className="w-full pl-9 pr-3 py-2.5 rounded-card border border-hairline bg-surface text-subhead"
-        />
+      <div className="flex items-center gap-3 mb-5 flex-wrap">
+        <div className="relative flex-1 min-w-[220px] max-w-sm">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-secondary" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by customer or invoice #"
+            className="w-full pl-9 pr-3 py-2.5 rounded-card border border-hairline bg-surface text-subhead"
+          />
+        </div>
+        <select
+          value={sort}
+          onChange={(e) => setSort(e.target.value as OrderSort)}
+          aria-label="Sort orders"
+          className="px-3 py-2.5 rounded-card border border-hairline bg-surface text-subhead"
+        >
+          {ORDER_SORTS.map((s) => (
+            <option key={s.key} value={s.key}>
+              {s.label}
+            </option>
+          ))}
+        </select>
       </div>
 
       {switcherStats && (
@@ -295,7 +455,7 @@ export default function OrdersView({
                     <span className="text-caption text-secondary tabular-nums">{switcherStats.warehouseCount}</span>
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
-                    {WAREHOUSE_STAGES.map((stage) => {
+                    {stages.map((stage) => {
                       const isActive = managerView === "warehouse" && warehouseStage === stage;
                       return (
                         <button
@@ -336,7 +496,49 @@ export default function OrdersView({
         <Section title={WAREHOUSE_STAGE_LABEL[warehouseStage]} rows={warehouseRows} onOpen={setOpenId} />
       )}
 
-      {(!isManager || managerView === "all") && (
+      {showsWarehouseStages && (
+        <>
+          <div className="flex items-center gap-2 flex-wrap mb-4">
+            {stages.map((stage) => {
+              const isActive = warehouseStage === stage;
+              return (
+                <button
+                  key={stage}
+                  onClick={() => setWarehouseStage(stage)}
+                  aria-pressed={isActive}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-card text-caption font-semibold border transition-colors ${
+                    isActive
+                      ? "bg-accent text-white border-accent"
+                      : "border-hairline text-secondary hover:text-primary"
+                  }`}
+                >
+                  {WAREHOUSE_STAGE_LABEL[stage]}
+                  <span
+                    className={`tabular-nums px-1.5 py-0.5 rounded-full ${
+                      isActive ? "bg-white/20" : "bg-black/5 dark:bg-white/10"
+                    }`}
+                  >
+                    {warehouseStageCounts[stage]}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          {warehouseRows.length > 0 ? (
+            <Section title={WAREHOUSE_STAGE_LABEL[warehouseStage]} rows={warehouseRows} onOpen={setOpenId} />
+          ) : (
+            // Section renders nothing at all when it has no rows, which on a
+            // stage tab leaves the page blank and looks like a failure rather
+            // than an empty stage.
+            <EmptyState
+              icon={PackageCheck}
+              title={`Nothing ${WAREHOUSE_STAGE_LABEL[warehouseStage].toLowerCase()} right now.`}
+            />
+          )}
+        </>
+      )}
+
+      {(!isManager || managerView === "all") && !showsWarehouseStages && (
         <>
           {isManager && (
             <div className="mb-4 flex items-center gap-2">
@@ -397,6 +599,7 @@ export default function OrdersView({
               onOpen={setOpenId}
               refreshKey={refreshKey}
               search={search}
+              sort={sort}
             />
           )}
           {isManager && (!statusFilter || statusFilter === "delivered") && (
@@ -407,12 +610,15 @@ export default function OrdersView({
               refreshKey={refreshKey}
               search={search}
               columns={activeOrderColumns}
+              sort={sort}
             />
           )}
           {sections.other && sections.other.length > 0 && <Section title="Other" rows={sections.other} onOpen={setOpenId} columns={isManager ? activeOrderColumns : undefined} />}
           {sections.rejected && <Section title="Rejected" rows={sections.rejected} onOpen={setOpenId} columns={isManager ? activeOrderColumns : undefined} />}
         </>
       )}
+
+      <TrashSection user={user} refreshKey={refreshKey} onChanged={load} />
 
       <PageFooterActions>
         {(user.role === "manager" || user.role === "admin") && <ExportLink type="orders" />}
@@ -465,6 +671,129 @@ function SwitchButton({
   );
 }
 
+// The Trash (§Orders: "ability to delete orders… it should be in the trash
+// can in the orders"). A deleted order keeps its invoice number and its
+// history and counts nowhere; from here it can come back to the stage it
+// left, or be emptied out for good by a manager.
+function TrashSection({
+  user,
+  refreshKey,
+  onChanged,
+}: {
+  user: AppUser;
+  refreshKey: number;
+  onChanged: () => void;
+}) {
+  const isManager = user.role === "manager" || user.role === "admin";
+  const [rows, setRows] = useState<TrashedOrderRow[]>([]);
+  const [open, setOpen] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    const supabase = supabaseBrowser();
+    // A salesman sees what they deleted; a manager sees everything.
+    setRows(await fetchTrashedOrders(supabase, isManager ? {} : { salesmanId: user.id }));
+  }, [isManager, user.id]);
+
+  useEffect(() => {
+    load();
+  }, [load, refreshKey]);
+
+  // The warehouse never deletes anything, so it never needs the bin.
+  if (user.role === "warehouse") return null;
+
+  async function act(id: string, fn: () => Promise<{ stockTaken?: number; status?: string }>, done: string) {
+    setBusyId(id);
+    try {
+      const result = await fn();
+      toast.success(
+        result.stockTaken ? `${done} ${result.stockTaken} taken back out of stock.` : done
+      );
+      await load();
+      onChanged();
+    } catch (e) {
+      toast.error(friendlyError(e, "That didn't work."));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <div className="mb-8 mt-2">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-2 text-caption font-semibold text-secondary uppercase tracking-wide mb-2"
+      >
+        {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        <Trash2 size={13} />
+        Trash <span className="tabular-nums">({rows.length})</span>
+      </button>
+
+      {open && (
+        rows.length === 0 ? (
+          <div className="text-subhead text-secondary px-1 py-2">Nothing deleted.</div>
+        ) : (
+          <div className="bg-surface border border-hairline rounded-card divide-y divide-hairline">
+            {rows.map((o) => (
+              <div key={o.id} className="flex items-center justify-between gap-3 px-4 py-3">
+                <div className="min-w-0">
+                  <div className="text-subhead font-medium truncate">
+                    {o.customer?.name ?? o.new_customer_note ?? "Unnamed customer"}
+                    {o.invoice_number && (
+                      <span className="text-secondary"> · #{o.invoice_number}</span>
+                    )}
+                  </div>
+                  <div className="text-caption text-secondary truncate">
+                    {formatAed(o.total ?? 0)}
+                    {o.deleted_from_status && ` · was ${o.deleted_from_status}`}
+                    {o.deleted_at &&
+                      ` · deleted ${new Date(o.deleted_at).toLocaleDateString("en-GB", {
+                        day: "2-digit",
+                        month: "short",
+                      })}`}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {isManager && (
+                    <>
+                      <Button
+                        tier="tinted"
+                        disabled={busyId === o.id}
+                        className="!px-3 !py-1.5 text-caption"
+                        onClick={() => act(o.id, () => restoreOrder(o.id), "Put back.")}
+                      >
+                        Restore
+                      </Button>
+                      <Button
+                        tier="plain"
+                        disabled={busyId === o.id}
+                        className="!px-3 !py-1.5 text-caption text-[--status-danger]"
+                        onClick={() => {
+                          const label = o.invoice_number ? `Invoice ${o.invoice_number}` : "This order";
+                          if (
+                            !confirm(
+                              `${label} and its lines are removed for good. This cannot be undone.`
+                            )
+                          ) {
+                            return;
+                          }
+                          act(o.id, () => purgeOrder(o.id), "Deleted for good.");
+                        }}
+                      >
+                        Delete for good
+                      </Button>
+                    </>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )
+      )}
+    </div>
+  );
+}
+
 function Section({
   title,
   rows,
@@ -498,6 +827,7 @@ function PaginatedOrderSection({
   refreshKey,
   search,
   columns,
+  sort,
 }: {
   title?: string;
   statusOnly: OrderStatus[];
@@ -506,6 +836,7 @@ function PaginatedOrderSection({
   refreshKey: number;
   search?: string;
   columns?: OrderColumnKey[];
+  sort?: OrderSort;
 }) {
   const [rows, setRows] = useState<OrderRow[]>([]);
   const [cursor, setCursor] = useState<OrderCursor | null>(null);
@@ -541,13 +872,17 @@ function PaginatedOrderSection({
   }
 
   const term = (search ?? "").trim().toLowerCase();
-  const visibleRows = term
+  const matchedRows = term
     ? rows.filter((o) => {
         const name = (o.customer?.name ?? o.new_customer_note ?? "").toLowerCase();
         const invoice = (o.invoice_number ?? "").toLowerCase();
         return name.includes(term) || invoice.includes(term);
       })
     : rows;
+  // This archive is paged from the server newest-first, so the chosen order
+  // applies to what has been loaded. Pressing "Load more" brings in older
+  // rows and re-sorts them in with the rest.
+  const visibleRows = sortOrders(matchedRows, sort ?? "newest");
 
   if (!loaded || rows.length === 0) return null;
   return (

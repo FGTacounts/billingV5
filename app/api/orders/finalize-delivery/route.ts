@@ -3,7 +3,12 @@ import { getAppUser } from "@/lib/auth";
 import { supabaseServer } from "@/lib/supabase/server";
 import { fetchOrder, fetchOrderItems } from "@/lib/queries/orders";
 import { buildInvoicePdf } from "@/lib/pdf/invoice";
-import { uploadToDrive, privateUploadsFolderId } from "@/lib/google-drive";
+import {
+  uploadToDrive,
+  privateUploadsFolderId,
+  invoiceProofFolderId,
+  deliveryProofName,
+} from "@/lib/google-drive";
 
 export const runtime = "nodejs";
 
@@ -22,7 +27,12 @@ export async function POST(req: NextRequest) {
 
   const form = await req.formData();
   const orderId = form.get("orderId");
-  const photo = form.get("photo") as File | null;
+  // More than one photo is normal: a pallet, a signature, a shop front. The
+  // single-photo field is still accepted so nothing that already posts one
+  // has to change.
+  const photos = [...form.getAll("photos"), ...form.getAll("photo")].filter(
+    (p): p is File => p instanceof File && p.size > 0
+  );
   if (typeof orderId !== "string") {
     return NextResponse.json({ error: "orderId is required" }, { status: 400 });
   }
@@ -31,21 +41,30 @@ export async function POST(req: NextRequest) {
   const order = await fetchOrder(supabase, orderId);
   if (!order) return NextResponse.json({ error: "Order not found" }, { status: 404 });
 
-  let proofUrl: string | null = null;
+  const proofUrls: string[] = [];
   let invoicePdfUrl: string | null = null;
 
   try {
-    const folderId = await privateUploadsFolderId();
+    // Proof goes to its own folder so it can be found again by name; the
+    // invoice PDF stays with the other private uploads.
+    const [proofFolder, folderId] = await Promise.all([
+      invoiceProofFolderId(),
+      privateUploadsFolderId(),
+    ]);
 
-    if (photo && photo.size > 0) {
+    const now = new Date();
+    for (const [index, photo] of photos.entries()) {
       const bytes = Buffer.from(await photo.arrayBuffer());
+      // INV4300_30AUG26 — the invoice number in the file name is what lets the
+      // Invoices screen find this again, since no column records it.
+      const name = deliveryProofName(order.invoice_number ?? null, order.id, now, index);
       const uploaded = await uploadToDrive(
-        folderId,
-        `delivery-${order.invoice_number ?? order.id}-${Date.now()}.jpg`,
+        proofFolder,
+        `${name}.jpg`,
         bytes,
         photo.type || "image/jpeg"
       );
-      proofUrl = uploaded.webViewLink;
+      proofUrls.push(uploaded.webViewLink);
     }
 
     const [items, settings] = await Promise.all([
@@ -78,5 +97,5 @@ export async function POST(req: NextRequest) {
     .from("order_status_log")
     .insert({ order_id: orderId, changed_by: user.id, changed_at: nowIso });
 
-  return NextResponse.json({ ok: true, proofUrl, invoicePdfUrl });
+  return NextResponse.json({ ok: true, proofUrls, invoicePdfUrl });
 }

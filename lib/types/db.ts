@@ -102,6 +102,10 @@ export interface UserPreferences {
   // between things." Off by default; colours repeating labels (categories,
   // expense types) by a stable per-label hue.
   colorfulData?: boolean;
+  // Which destinations sit in the bottom bar rather than behind More.
+  // Stored as hrefs so it survives a label change. Empty or absent means the
+  // sensible default for the role.
+  primaryNav?: string[];
   // Per-widget Full/Half/Quarter overrides, keyed by widget id.
   dashboardSizes?: Record<string, "full" | "half" | "quarter">;
   salesSizes?: Record<string, "full" | "half" | "quarter">;
@@ -297,7 +301,12 @@ export interface Expense {
   description: string | null;
   notes: string | null;
   date: string;
-  logged_by: string; // required
+  logged_by: string; // required — who typed it in (always a Manager)
+  // Whose expense it is, which is not the same question as who logged it.
+  // Null for anything that belongs to the business rather than a person
+  // (rent, utilities). Optional because the column arrives with
+  // scratchpad/RUN-ME-8-stock-floor-and-salesman-expenses.sql.
+  salesman_id?: string | null;
 }
 
 export interface Notification {

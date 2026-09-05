@@ -1,18 +1,12 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Expense, ExpenseType } from "@/lib/types/db";
+import { fetchSellers, type Seller } from "@/lib/queries/sales";
 
 // For the Expense page's "Salesman" tab (§Expense: "separate views for
-// both salesman and overview expense") — same direct users-table query
-// pattern already used by fetchLeaderboard.
-export async function fetchSalesmen(supabase: SupabaseClient): Promise<{ id: string; name: string }[]> {
-  const { data, error } = await supabase
-    .from("users")
-    .select("id, full_name")
-    .eq("role", "salesman")
-    .eq("is_active", true)
-    .order("full_name");
-  if (error) throw error;
-  return (data ?? []).map((u) => ({ id: u.id, name: u.full_name }));
+// both salesman and overview expense") and for the Manager's order-detail
+// salesman picker. One list, shared with the Sales page — see fetchSellers.
+export async function fetchSalesmen(supabase: SupabaseClient): Promise<Seller[]> {
+  return fetchSellers(supabase);
 }
 
 // Routed through /api/expenses (service-role, Manager-gated) rather than a

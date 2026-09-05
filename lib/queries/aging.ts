@@ -32,6 +32,11 @@ export async function extendOrderDueDate(
   if (error) throw error;
 }
 
+// The one number the whole app ages against when nothing more specific is
+// set. A customer may still carry their own threshold; this is the default
+// behind app_settings.overdue_threshold_days.
+export const DEFAULT_OVERDUE_DAYS = 90;
+
 export type Condition = "excellent" | "moderate" | "bad";
 
 export function conditionForDays(days: number): Condition {
@@ -63,7 +68,7 @@ export async function getOverdueThresholdDays(supabase: SupabaseClient): Promise
 
   thresholdInFlight = (async () => {
     const { data } = await supabase.from("app_settings").select("overdue_threshold_days").limit(1).maybeSingle();
-    const days = data?.overdue_threshold_days ?? 90;
+    const days = data?.overdue_threshold_days ?? DEFAULT_OVERDUE_DAYS;
     thresholdCache = { days, at: Date.now() };
     return days;
   })().finally(() => {
@@ -76,7 +81,10 @@ export async function getOverdueThresholdDays(supabase: SupabaseClient): Promise
 export async function fetchOutstandingInvoices(
   supabase: SupabaseClient,
   customerId?: string,
-  includeSettled = false
+  includeSettled = false,
+  // Whose orders to age. The Payments page's own figures are scoped this way
+  // for a salesman, the same as the phone's Aging.swift does it.
+  salesmanId?: string
 ): Promise<InvoiceAging[]> {
   // extended_due_date may not exist yet — it's a new column the Manager
   // needs to add themselves (no SQL access from here). Falls back to the
@@ -87,6 +95,7 @@ export async function fetchOutstandingInvoices(
     .select("id, customer_id, invoice_number, total, updated_at, extended_due_date")
     .in("status", await fetchCountedStatuses(supabase));
   if (customerId) query = query.eq("customer_id", customerId);
+  if (salesmanId) query = query.eq("salesman_id", salesmanId);
   let { data: orders, error } = await query;
   if (error) {
     let fallback = supabase
@@ -94,6 +103,7 @@ export async function fetchOutstandingInvoices(
       .select("id, customer_id, invoice_number, total, updated_at")
       .in("status", await fetchCountedStatuses(supabase));
     if (customerId) fallback = fallback.eq("customer_id", customerId);
+    if (salesmanId) fallback = fallback.eq("salesman_id", salesmanId);
     const retry = await fallback;
     if (retry.error) throw retry.error;
     orders = (retry.data ?? []).map((o) => ({ ...o, extended_due_date: null }));

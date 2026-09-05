@@ -15,8 +15,11 @@ import Sheet from "@/components/ui/Sheet";
 import { Label, TextInput } from "@/components/ui/Field";
 import BarcodeScanButton from "@/components/ui/BarcodeScanButton";
 import ImportCsvButton from "@/components/ui/ImportCsvButton";
+import ScanArticlesButton from "./ScanArticlesButton";
 import { PRODUCT_ALIASES } from "@/lib/importAliases";
 import { usePreferences } from "@/lib/hooks/usePreferences";
+import type { AppUser } from "@/lib/types/db";
+import NewOrderSheet from "@/components/orders/NewOrderSheet";
 import PinnableOptionsButton from "@/components/ui/PinnableOptions";
 import { usePagination, Pagination } from "@/components/ui/Pagination";
 import SegmentedControl from "@/components/ui/SegmentedControl";
@@ -271,8 +274,13 @@ function AdjustViewPopover({
   );
 }
 
-export default function ProductsView({ isManager }: { isManager: boolean }) {
+export default function ProductsView({ isManager, user }: { isManager: boolean; user: AppUser }) {
   const [view, setView] = useState<ViewMode>("list");
+  // Products for an order are picked here, where the photos, prices and stock
+  // are, rather than through a search box inside the order sheet.
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [orderFrom, setOrderFrom] = useState<Product[] | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -375,6 +383,10 @@ export default function ProductsView({ isManager }: { isManager: boolean }) {
     setInsights(new Map());
   }
 
+  function toggleSelected(id: string) {
+    setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }
+
   async function toggleExpand(p: Product) {
     if (expandedId === p.id) {
       setExpandedId(null);
@@ -440,6 +452,9 @@ export default function ProductsView({ isManager }: { isManager: boolean }) {
             />
           )}
         {isManager && <ExportLink type="products" />}
+          {/* A supplier invoice read straight into the catalogue, so a
+              delivery of new lines doesn't have to be typed twice. */}
+          {isManager && <ScanArticlesButton onAdded={load} />}
           {isManager && (
             <Button tier="primary" onClick={() => setEditing("new")} className="flex items-center gap-1.5">
               <Plus size={16} /> Add product
@@ -459,6 +474,18 @@ export default function ProductsView({ isManager }: { isManager: boolean }) {
           />
         </div>
         <BarcodeScanButton onScan={(value) => setSearch(value)} />
+        <button
+          onClick={() => {
+            setSelecting((v) => !v);
+            setSelected([]);
+          }}
+          aria-pressed={selecting}
+          className={`px-3 py-2 rounded-card border text-caption font-semibold whitespace-nowrap transition-colors ${
+            selecting ? "bg-accent text-white border-accent" : "border-hairline text-secondary hover:text-primary"
+          }`}
+        >
+          {selecting ? "Cancel" : "Select"}
+        </button>
         {isManager && (
           <PinnableOptionsButton
             options={SORT_OPTIONS}
@@ -599,9 +626,33 @@ export default function ProductsView({ isManager }: { isManager: boolean }) {
           <table className="w-full text-subhead">
             <thead>
               <tr className="text-caption text-secondary uppercase text-left border-b border-hairline">
+                {selecting && (
+                  <th className="pl-4 py-3 font-medium">
+                    <input
+                      type="checkbox"
+                      aria-label="Select all on this page"
+                      checked={pagedProducts.length > 0 && pagedProducts.every((p) => selected.includes(p.id))}
+                      onChange={(e) =>
+                        setSelected(
+                          e.target.checked
+                            ? // Add this page to whatever is already picked, so
+                              // paging through does not lose earlier choices.
+                              [...new Set([...selected, ...pagedProducts.map((p) => p.id)])]
+                            : selected.filter((id) => !pagedProducts.some((p) => p.id === id))
+                        )
+                      }
+                    />
+                  </th>
+                )}
                 <th className="px-4 py-3 font-medium">SKU</th>
                 <th className="px-4 py-3 font-medium">Name</th>
                 <th className="px-4 py-3 font-medium text-right tabular-nums whitespace-nowrap">Price</th>
+                {/* Managers reach stock through their configurable columns;
+                    everyone else gets it here, because knowing whether there
+                    is any is not a manager-only concern. */}
+                {!isManager && (
+                  <th className="px-4 py-3 font-medium text-right tabular-nums whitespace-nowrap">Stock</th>
+                )}
                 {isManager &&
                   activeColumns.map((col) => (
                     <th key={col} className="px-4 py-3 font-medium text-right tabular-nums whitespace-nowrap">
@@ -620,11 +671,27 @@ export default function ProductsView({ isManager }: { isManager: boolean }) {
                   <Fragment key={p.id}>
                     <tr
                       className="border-b border-hairline last:border-0 hover:bg-black/[0.02] dark:hover:bg-white/[0.03] cursor-pointer"
-                      onClick={() => toggleExpand(p)}
+                      onClick={() => (selecting ? toggleSelected(p.id) : toggleExpand(p))}
                     >
+                      {selecting && (
+                        <td className="pl-4 py-3">
+                          <input
+                            type="checkbox"
+                            checked={selected.includes(p.id)}
+                            onChange={() => toggleSelected(p.id)}
+                            onClick={(e) => e.stopPropagation()}
+                            aria-label={`Select ${p.sku}`}
+                          />
+                        </td>
+                      )}
                       <td className="px-4 py-3 font-medium whitespace-nowrap">{p.sku}</td>
                       <td className="px-4 py-3">{p.name}</td>
                       <td className="px-4 py-3 text-right tabular-nums whitespace-nowrap">{formatAed(p.price)}</td>
+                      {!isManager && (
+                        <td className="px-4 py-3 text-right tabular-nums whitespace-nowrap">
+                          {p.stock_on_hand ?? "—"}
+                        </td>
+                      )}
                       {isManager &&
                         activeColumns.map((col) => (
                           <td key={col} className="px-4 py-3 text-right tabular-nums whitespace-nowrap">
@@ -648,7 +715,16 @@ export default function ProductsView({ isManager }: { isManager: boolean }) {
                     </tr>
                     {isExpanded && (
                       <tr className="bg-canvas border-b border-hairline last:border-0">
-                        <td colSpan={isManager ? 4 + activeColumns.length : 3} className="px-4 py-3">
+                        <td
+                          // SKU, name, price, then either the manager's
+                          // configurable columns plus the edit cell, or the
+                          // stock column everyone else gets. The tick column
+                          // counts too while selecting.
+                          colSpan={
+                            (isManager ? 4 + activeColumns.length : 4) + (selecting ? 1 : 0)
+                          }
+                          className="px-4 py-3"
+                        >
                           {p.category && (
                             <div className="text-caption text-secondary mb-2">Category: {p.category}</div>
                           )}
@@ -688,6 +764,49 @@ export default function ProductsView({ isManager }: { isManager: boolean }) {
           onSaved={() => {
             setEditing(null);
             load();
+          }}
+        />
+      )}
+
+      {/* Sits above the list while picking, so the count and the way out are
+          always in reach rather than at the bottom of 1,300 rows. */}
+      {selecting && selected.length > 0 && (
+        <div className="fixed inset-x-0 bottom-0 z-40 p-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pointer-events-none">
+          <div className="max-w-[1600px] mx-auto flex justify-center">
+            <div className="pointer-events-auto flex items-center gap-4 px-4 py-3 rounded-full shadow-overlay bg-surface border border-hairline">
+              <span className="text-subhead font-semibold tabular-nums">
+                {selected.length} selected
+              </span>
+              <button
+                onClick={() => setSelected([])}
+                className="text-caption text-secondary hover:text-primary"
+              >
+                Clear
+              </button>
+              <button
+                onClick={() => {
+                  const picked = products.filter((p) => selected.includes(p.id));
+                  if (picked.length === 0) return;
+                  setOrderFrom(picked);
+                }}
+                className="px-4 py-2 rounded-full bg-accent text-white text-caption font-semibold"
+              >
+                Start order
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {orderFrom && (
+        <NewOrderSheet
+          user={user}
+          initialProducts={orderFrom}
+          onClose={() => setOrderFrom(null)}
+          onCreated={() => {
+            setOrderFrom(null);
+            setSelecting(false);
+            setSelected([]);
           }}
         />
       )}
@@ -979,7 +1098,7 @@ function ProductEditor({
           </div>
           <div>
             <Label>Stock on hand</Label>
-            <TextInput type="number" value={form.stock_on_hand} onChange={(e) => setForm({ ...form, stock_on_hand: Number(e.target.value) })} />
+            <TextInput type="number" min={0} value={form.stock_on_hand} onChange={(e) => setForm({ ...form, stock_on_hand: Math.max(0, Number(e.target.value) || 0) })} />
           </div>
           <div>
             <Label>Rack</Label>
@@ -1207,9 +1326,10 @@ function ProductDetailSheet({
           )}
           <div className="grid grid-cols-2 gap-3">
             <ReadOnlyField label="Default quantity" value={String(product.default_qty ?? "—")} />
-            {isManager && (
-              <ReadOnlyField label="Stock on hand" value={product.stock_on_hand != null ? String(product.stock_on_hand) : "—"} />
-            )}
+            <ReadOnlyField
+              label="Stock on hand"
+              value={product.stock_on_hand != null ? String(product.stock_on_hand) : "—"}
+            />
             <ReadOnlyField label="Rack" value={product.rack_location ?? "—"} />
             <ReadOnlyField label="Barcode" value={product.barcode ?? "—"} />
           </div>

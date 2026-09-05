@@ -139,7 +139,10 @@ export default function Topbar({ user }: { user: AppUser }) {
             <Settings size={18} className="text-secondary" />
           </Link>
         )}
-        <NotificationsBell userId={user.id} />
+        <NotificationsBell
+          userId={user.id}
+          isManager={user.role === "manager" || user.role === "admin"}
+        />
       </div>
     </header>
   );

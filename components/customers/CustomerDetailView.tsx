@@ -3,7 +3,7 @@
 import { toast } from "@/lib/toast";
 import { friendlyError } from "@/lib/errors";
 import { useEffect, useState, useCallback, useMemo } from "react";
-import { ChevronDown, ChevronRight, ArrowUpDown, CalendarClock, FileDown } from "lucide-react";
+import { ChevronDown, ChevronRight, CalendarClock, FileDown } from "lucide-react";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { fetchOrders, type OrderRow } from "@/lib/queries/orders";
 import { fetchOutstandingInvoices, extendOrderDueDate, type InvoiceAging } from "@/lib/queries/aging";
@@ -16,8 +16,9 @@ import { TextInput } from "@/components/ui/Field";
 import LogPaymentSheet from "@/components/payments/LogPaymentSheet";
 
 // Customer Detail (Problems and Updates — Customers §): name/code header,
-// Orders (Manager: date/GP%/amount, sortable) + Statement (date/inv/amount/
-// days, oldest→newest) side by side, a collapsible Paid Orders drawer,
+// The Statement (date/inv/amount/days, oldest→newest) — one list of what
+// this customer still owes. It used to sit beside an Orders list saying the
+// same thing in different words; collecting starts from the statement now,
 // Edit/Delete (Manager) or Request Edit (Salesman) bottom-left, a
 // selection mode + Save bottom-right. Selecting statement rows and
 // continuing hands off straight into the payment-collection flow with
@@ -38,16 +39,16 @@ export default function CustomerDetailView({
   const isManager = (user.role === "manager" || user.role === "admin");
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [invoices, setInvoices] = useState<InvoiceAging[]>([]);
-  const [gpByOrder, setGpByOrder] = useState<Map<string, number>>(new Map());
   const [loading, setLoading] = useState(true);
-  const [orderSort, setOrderSort] = useState<"latest" | "oldest">("latest");
   const [paidOpen, setPaidOpen] = useState(false);
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [collecting, setCollecting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [requestedEdit, setRequestedEdit] = useState(false);
+  // "Request edit" used to set a flag, relabel itself "Edit requested", and do
+  // nothing else — no request was raised and no manager was told. It now opens
+  // the same editor a manager gets, and what is typed goes for approval.
   // Per-order due-date extension (§Next Updates: "extend the payment
   // threshold for a specific order too, not only the customer threshold").
   const [extendingOrderId, setExtendingOrderId] = useState<string | null>(null);
@@ -58,7 +59,10 @@ export default function CustomerDetailView({
     setLoading(true);
     const supabase = supabaseBrowser();
     const [orderRows, invoiceRows] = await Promise.all([
-      isManager ? fetchOrders(supabase, { customerId: customer.id, limit: 200 }) : Promise.resolve([]),
+      // One order, purely to name the salesman in the header — the list
+      // this used to fill has gone, and pulling 200 orders plus every line
+      // of every one of them to compute a column nobody sees is not free.
+      isManager ? fetchOrders(supabase, { customerId: customer.id, limit: 1 }) : Promise.resolve([]),
       fetchOutstandingInvoices(supabase, customer.id, true),
     ]);
     setOrders(orderRows);
@@ -66,25 +70,6 @@ export default function CustomerDetailView({
     invoiceRows.sort((a, b) => new Date(a.invoiceDate).getTime() - new Date(b.invoiceDate).getTime());
     setInvoices(invoiceRows);
 
-    if (isManager && orderRows.length > 0) {
-      const { data: items } = await supabase
-        .from("order_items_safe")
-        .select("order_id, unit_price, unit_cost, ordered_qty, picked_qty")
-        .in("order_id", orderRows.map((o) => o.id));
-      const totals = new Map<string, { rev: number; cost: number }>();
-      for (const it of items ?? []) {
-        const qty = it.picked_qty ?? it.ordered_qty ?? 0;
-        const entry = totals.get(it.order_id) ?? { rev: 0, cost: 0 };
-        entry.rev += (it.unit_price ?? 0) * qty;
-        entry.cost += (it.unit_cost ?? 0) * qty;
-        totals.set(it.order_id, entry);
-      }
-      const pctByOrder = new Map<string, number>();
-      for (const [orderId, v] of totals) {
-        pctByOrder.set(orderId, v.rev > 0 ? ((v.rev - v.cost) / v.rev) * 100 : 0);
-      }
-      setGpByOrder(pctByOrder);
-    }
     setLoading(false);
   }, [customer.id, isManager]);
 
@@ -92,14 +77,7 @@ export default function CustomerDetailView({
     load();
   }, [load]);
 
-  const sortedOrders = useMemo(() => {
-    const copy = [...orders];
-    copy.sort((a, b) => {
-      const diff = new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-      return orderSort === "oldest" ? diff : -diff;
-    });
-    return copy;
-  }, [orders, orderSort]);
+
 
   // The salesman named in the header. A Salesman session doesn't load the
   // Orders list at all, so fall back to the signed-in user when the account
@@ -214,12 +192,8 @@ export default function CustomerDetailView({
                 </>
               )
             ) : (
-              <Button
-                tier="tinted"
-                disabled={requestedEdit}
-                onClick={() => setRequestedEdit(true)}
-              >
-                {requestedEdit ? "Edit requested" : "Request edit"}
+              <Button tier="tinted" onClick={onEdit}>
+                Suggest a change
               </Button>
             )}
           </div>
@@ -283,60 +257,7 @@ export default function CustomerDetailView({
       {loading ? (
         <div className="text-center py-10 text-secondary text-subhead">Loading…</div>
       ) : (
-        <div className={isManager ? "grid sm:grid-cols-2 gap-4" : ""}>
-          {isManager && (
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <div className="text-caption font-semibold text-secondary uppercase">Orders</div>
-                <button
-                  onClick={() => setOrderSort((s) => (s === "latest" ? "oldest" : "latest"))}
-                  className="flex items-center gap-1 text-caption text-secondary hover:text-accent"
-                >
-                  <ArrowUpDown size={12} /> {orderSort === "latest" ? "Latest first" : "Oldest first"}
-                </button>
-              </div>
-              {/* DATE | GP% | Amount, with the invoice number tucked under
-                  the date exactly as the mockup draws it. */}
-              <div className="grid grid-cols-[1fr_auto_auto] gap-3 px-3 pb-1.5 text-[10px] uppercase text-secondary font-semibold">
-                <span>Date</span>
-                <span className="text-right w-12">GP%</span>
-                <span className="text-right w-24">Amount</span>
-              </div>
-              <div className="border border-hairline rounded-card divide-y divide-hairline max-h-72 overflow-y-auto">
-                {sortedOrders.length === 0 ? (
-                  <div className="p-3 text-caption text-secondary">No orders yet.</div>
-                ) : (
-                  sortedOrders.map((o) => (
-                    <div
-                      key={o.id}
-                      className="grid grid-cols-[1fr_auto_auto] gap-3 items-center px-3 py-2 text-subhead"
-                    >
-                      <span className="min-w-0">
-                        <span className="block text-subhead font-semibold uppercase leading-tight">
-                          {new Date(o.created_at).toLocaleDateString("en-GB", {
-                            day: "2-digit",
-                            month: "short",
-                            year: "numeric",
-                          })}
-                        </span>
-                        {o.invoice_number && (
-                          <span className="block text-[10px] text-secondary tabular-nums">
-                            {o.invoice_number}
-                          </span>
-                        )}
-                      </span>
-                      <span className="text-right w-12 text-caption tabular-nums text-secondary">
-                        {Math.round(gpByOrder.get(o.id) ?? 0)}%
-                      </span>
-                      <span className="text-right w-24 tabular-nums font-bold">
-                        {formatAed(o.total ?? 0)}
-                      </span>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          )}
+        <div>
 
           <div>
             <div className="flex items-center justify-between mb-2">

@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { MoreHorizontal, X } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { springEnter, springExit, springLayout, durations, EASE_OUT, usePrefersReducedMotion, respectMotion } from "@/lib/motion";
-import type { NavItem } from "@/lib/nav";
+import { MAX_PRIMARY_NAV, type NavItem } from "@/lib/nav";
+import { usePreferences } from "@/lib/hooks/usePreferences";
 import { NAV_ICONS } from "./icons";
 
 function NavLink({ item, active, reduced }: { item: NavItem; active: boolean; reduced: boolean }) {
@@ -32,18 +33,42 @@ function NavLink({ item, active, reduced }: { item: NavItem; active: boolean; re
   );
 }
 
-export default function MobileNav({ primary, secondary }: { primary: NavItem[]; secondary: NavItem[] }) {
+export default function MobileNav({
+  primary,
+  secondary,
+}: {
+  primary: NavItem[];
+  secondary: NavItem[];
+}) {
   const pathname = usePathname();
   const [moreOpen, setMoreOpen] = useState(false);
   const reduced = usePrefersReducedMotion();
+  // The layout renders on the server and cannot read a per-user preference, so
+  // the split it hands down is the default for the role. If this person has
+  // chosen their own bar in Settings, re-split here from the same items —
+  // never from anything wider, so a preference can't surface a destination the
+  // role isn't allowed.
+  const { preferences } = usePreferences();
+  const chosen = preferences.primaryNav;
+  const [barItems, moreItems] = useMemo(() => {
+    const all = [...primary, ...secondary];
+    if (!chosen || chosen.length === 0) return [primary, secondary];
+    const picked = chosen
+      .map((href) => all.find((i) => i.href === href))
+      .filter((i): i is NavItem => Boolean(i))
+      .slice(0, MAX_PRIMARY_NAV);
+    if (picked.length === 0) return [primary, secondary];
+    const pickedHrefs = new Set(picked.map((i) => i.href));
+    return [picked, all.filter((i) => !pickedHrefs.has(i.href))];
+  }, [primary, secondary, chosen]);
 
   const isActive = (item: NavItem) => pathname === item.href || pathname.startsWith(item.href + "/");
-  const moreActive = secondary.some(isActive);
+  const moreActive = moreItems.some(isActive);
 
   return (
     <>
       <nav className="md:hidden fixed bottom-0 inset-x-0 z-30 bg-surface/95 backdrop-blur border-t border-hairline flex pb-[env(safe-area-inset-bottom)]">
-        {primary.map((item) => (
+        {barItems.map((item) => (
           <NavLink key={item.href} item={item} active={isActive(item)} reduced={reduced} />
         ))}
         {secondary.length > 0 && (
@@ -85,7 +110,7 @@ export default function MobileNav({ primary, secondary }: { primary: NavItem[]; 
               </button>
             </div>
             <div className="py-2">
-              {secondary.map((item) => {
+              {moreItems.map((item) => {
                 const Icon = NAV_ICONS[item.icon];
                 const active = isActive(item);
                 return (

@@ -84,5 +84,34 @@ export async function POST(req: NextRequest) {
     });
   }
 
+  // An order sent for review lands in every manager's bell. A draft doesn't —
+  // nobody else needs to know about a note-to-self.
+  if (status === "pending") {
+    const { data: managers } = await admin
+      .from("users")
+      .select("id")
+      .in("role", ["manager", "admin"])
+      .eq("is_active", true);
+    const recipients = (managers ?? []).filter((m) => m.id !== caller.id);
+    if (recipients.length) {
+      let customerName: string | null = new_customer_note ?? null;
+      if (customer_id) {
+        const { data: c } = await admin.from("customers").select("name").eq("id", customer_id).maybeSingle();
+        customerName = c?.name ?? customerName;
+      }
+      await admin.from("notifications").insert(
+        recipients.map((m) => ({
+          user_id: m.id,
+          type: "order_pending",
+          title: `New order from ${caller.full_name}`,
+          body: [customerName, `${lines.length} item${lines.length === 1 ? "" : "s"}`]
+            .filter(Boolean)
+            .join(" — "),
+          is_read: false,
+        }))
+      );
+    }
+  }
+
   return NextResponse.json({ orderId: order.id as string });
 }

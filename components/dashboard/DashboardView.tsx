@@ -31,6 +31,7 @@ import {
   type CategorySale,
 } from "@/lib/queries/dashboard";
 import { fetchLeaderboard, type LeaderboardEntry } from "@/lib/queries/sales";
+import { fetchResumePoint, type ResumePoint } from "@/lib/queries/orders";
 import { fetchMonthlyTargets, teamTarget, FALLBACK_MONTHLY_TARGET, type MonthlyTargets } from "@/lib/queries/targets";
 import { SalesmanDrilldown, ExpandedStatRow } from "@/components/sales/SalesmanDrilldown";
 import { useRealtimeTable } from "@/lib/realtime/useRealtimeTable";
@@ -620,7 +621,10 @@ const MANAGER_WIDGET_FULL: Record<(typeof MANAGER_WIDGETS)[number], boolean> = {
   categorySales: true,
 };
 
-const SALESMAN_WIDGETS = ["stats", "newOrder", "pipeline", "payments3", "target", "trend", "monthly", "leaderboard"] as const;
+// No leaderboard here. It ranks every salesman against every other, so it
+// showed one salesman their colleagues' figures and their own standing among
+// them. A salesman's dashboard shows their own work only.
+const SALESMAN_WIDGETS = ["stats", "newOrder", "pipeline", "payments3", "target", "trend", "monthly"] as const;
 const SALESMAN_WIDGET_LABELS: Record<(typeof SALESMAN_WIDGETS)[number], string> = {
   stats: "Sales summary",
   newOrder: "New order button",
@@ -629,7 +633,6 @@ const SALESMAN_WIDGET_LABELS: Record<(typeof SALESMAN_WIDGETS)[number], string> 
   target: "Target progress",
   trend: "Sale trend chart",
   monthly: "Payments & year-comparison charts",
-  leaderboard: "Salesman leaderboard",
 };
 const SALESMAN_WIDGET_FULL: Record<(typeof SALESMAN_WIDGETS)[number], boolean> = {
   stats: true,
@@ -639,7 +642,6 @@ const SALESMAN_WIDGET_FULL: Record<(typeof SALESMAN_WIDGETS)[number], boolean> =
   target: false,
   trend: false,
   monthly: true,
-  leaderboard: true,
 };
 
 
@@ -647,6 +649,7 @@ export default function DashboardView({ user }: { user: AppUser }) {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [showNew, setShowNew] = useState(false);
+  const [resume, setResume] = useState<ResumePoint | null>(null);
   // Clicking a salesman row inside the enlarged leaderboard/goal table
   // drills into their own trend + orders (§Next Updates: individual
   // "Salesman Name" expanded view).
@@ -790,7 +793,7 @@ export default function DashboardView({ user }: { user: AppUser }) {
       const prevMonth = sm.length >= 2 ? sm[sm.length - 2].value : 0;
       setPrevSales(prevMonth);
     } else if (isSalesman) {
-      const [s, d, w, ap, rj, tr, ptr, pm, sm, ps, lb, oc] = await Promise.all([
+      const [s, d, w, ap, rj, tr, ptr, pm, sm, ps, oc] = await Promise.all([
         monthToDateSales(supabase, salesmanId),
         countByStatus(supabase, ["draft"], salesmanId),
         countByStatus(supabase, ["pending"], salesmanId),
@@ -801,7 +804,6 @@ export default function DashboardView({ user }: { user: AppUser }) {
         fetchPaymentsByMonthSegmented(supabase, { collectedBy: user.id }),
         fetchSalesByMonth(supabase, { salesmanId }),
         fetchPaymentsSummary(supabase, { salesmanId, collectedBy: user.id }),
-        fetchLeaderboard(supabase),
         countOrdersThisMonth(supabase, salesmanId),
       ]);
       setSales(s);
@@ -814,18 +816,19 @@ export default function DashboardView({ user }: { user: AppUser }) {
       setPaymentsByMonth(pm);
       setSalesByMonth(sm);
       setPaySummary(ps);
-      setLeaderboard(lb);
       setOrdersThisMonth(oc);
       fetchMonthlyTargets(supabase).then(setTargets).catch(() => {});
       const prevMonth = sm.length >= 2 ? sm[sm.length - 2].value : 0;
       setPrevSales(prevMonth);
     } else if (isWarehouse) {
-      const [tp, pa] = await Promise.all([
+      const [tp, pa, rp] = await Promise.all([
         countByStatus(supabase, ["waiting", "picking"]),
         countByStatus(supabase, ["packed"]),
+        fetchResumePoint(supabase, user.id),
       ]);
       setToPick(tp);
       setPackedAwaiting(pa);
+      setResume(rp);
     }
     setLoading(false);
   }, [isManager, isSalesman, isWarehouse, user.id, saleRange]);
@@ -1141,14 +1144,6 @@ export default function DashboardView({ user }: { user: AppUser }) {
         </div>
       </ExpandableWidget>
     ),
-    leaderboard: (
-      <ExpandableWidget
-        title="Salesman leaderboard"
-        expanded={<GoalTableExpanded entries={leaderboard} targets={targets} onOpenSalesman={setDrilldownSalesman} />}
-      >
-        <LeaderboardStrip entries={leaderboard} youId={user.id} />
-      </ExpandableWidget>
-    ),
   };
 
   return (
@@ -1233,6 +1228,39 @@ export default function DashboardView({ user }: { user: AppUser }) {
               {salesmanWidgets[key]}
             </motion.div>
           ))}
+        </div>
+      )}
+
+      {/* Picking a big order gets interrupted — a delivery arrives, a shift
+          ends — and finding your place again meant remembering the customer
+          and hunting the list. */}
+      {isWarehouse && resume && (
+        <Card className="p-4 mb-4">
+          <div className="text-caption text-secondary mb-1">Where you left off</div>
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <div className="text-title font-bold">
+                {resume.customerName ?? "Order"}
+                {resume.invoiceNumber ? ` · #${resume.invoiceNumber}` : ""}
+              </div>
+              <div className="text-caption text-secondary capitalize">{resume.status}</div>
+            </div>
+            <Button tier="primary" onClick={() => router.push(`/orders?open=${resume.orderId}`)}>
+              Carry on picking
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      {isWarehouse && (
+        <div className="mb-4">
+          <Button
+            tier="primary"
+            onClick={() => setShowNew(true)}
+            className="flex items-center justify-center gap-1.5"
+          >
+            <Plus size={18} /> New order
+          </Button>
         </div>
       )}
 

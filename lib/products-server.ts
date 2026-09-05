@@ -35,8 +35,11 @@ const BASE_MANAGER_COLS =
 // The override columns are cost figures, so they join the Manager list only —
 // a Salesman session must never receive them, same rule as cost/stock_on_hand.
 const MANAGER_COLS = `${BASE_MANAGER_COLS}, vac_override, vac_china_override, stock_arrival_date, stock_holding_days_override`;
+// Stock is included: a salesman needs to know whether there is any before
+// promising it, and the warehouse works from it. Cost and the override figures
+// are the manager-only ones, and they stay out.
 const RESTRICTED_COLS =
-  'id, sku, description, price, default_qty, barcode, rack_location, is_active, "Product_category"';
+  'id, sku, description, price, default_qty, barcode, rack_location, is_active, stock_on_hand, "Product_category"';
 
 export async function fetchProductsServer(
   admin: SupabaseClient,

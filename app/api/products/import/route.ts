@@ -114,7 +114,9 @@ export async function POST(req: NextRequest) {
     } else {
       stock = known; // "keep"
     }
-    return { ...r, stock_on_hand: stock };
+    // Never negative — an "add" of a negative cell, or a replace with one,
+    // settles at zero.
+    return { ...r, stock_on_hand: Math.max(0, stock) };
   });
 
   const { error } = await admin.from("products").upsert(payload, { onConflict: "sku" });

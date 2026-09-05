@@ -26,10 +26,32 @@ export async function POST(req: NextRequest) {
   const patch: Record<string, unknown> = {};
   if (invoice_number !== undefined) patch.invoice_number = invoice_number || null;
   if (customer_id !== undefined) patch.customer_id = customer_id || null;
-  if (salesman_id !== undefined) patch.salesman_id = salesman_id || null;
   if (po_number !== undefined) patch.po_number = po_number || null;
 
   const supabase = supabaseServer();
+
+  // An order always names the person who billed it. Clearing that is how a
+  // sale ends up counted for nobody on the Sales page, so it is refused
+  // here rather than only discouraged in the form; and the id has to be a
+  // real staff member, not a stale one pasted in.
+  if (salesman_id !== undefined) {
+    if (!salesman_id) {
+      return NextResponse.json(
+        { error: "An order has to stay linked to the person billing it." },
+        { status: 400 }
+      );
+    }
+    const { data: seller, error: sellerErr } = await supabase
+      .from("users")
+      .select("id, is_active")
+      .eq("id", salesman_id)
+      .maybeSingle();
+    if (sellerErr) return NextResponse.json({ error: sellerErr.message }, { status: 400 });
+    if (!seller) {
+      return NextResponse.json({ error: "That salesman is not a staff member." }, { status: 400 });
+    }
+    patch.salesman_id = salesman_id;
+  }
   const { error } = await supabase.from("orders").update(patch).eq("id", orderId);
   if (error && po_number !== undefined) {
     // po_number column may not exist yet — retry without it.

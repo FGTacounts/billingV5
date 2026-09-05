@@ -44,9 +44,11 @@ export async function fetchGrvItems(
   const rows = data ?? [];
   if (rows.length === 0) return [];
   const productIds = [...new Set(rows.map((r) => r.product_id))];
-  const { data: products } = await supabase.from("products_safe").select("id, sku, name").in("id", productIds);
+  // products_safe does not exist in this database, and the name is held in
+  // `description`.
+  const { data: products } = await supabase.from("products").select("id, sku, description").in("id", productIds);
   const byId = new Map((products ?? []).map((p) => [p.id, p]));
-  return rows.map((r) => ({ ...r, sku: byId.get(r.product_id)?.sku, name: byId.get(r.product_id)?.name }));
+  return rows.map((r) => ({ ...r, sku: byId.get(r.product_id)?.sku, name: byId.get(r.product_id)?.description }));
 }
 
 export async function createGrv(

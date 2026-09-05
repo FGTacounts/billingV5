@@ -17,6 +17,8 @@ import {
   type DailyPoint,
 } from "@/lib/queries/dashboard";
 import { fetchMonthlyTargets, teamTarget, FALLBACK_MONTHLY_TARGET, type MonthlyTargets } from "@/lib/queries/targets";
+import { toast } from "@/lib/toast";
+import { friendlyError } from "@/lib/errors";
 import type { AppUser } from "@/lib/types/db";
 import { formatAed, formatCompact } from "@/lib/money";
 import { SkeletonList, EmptyState } from "@/components/ui/Empty";
@@ -106,6 +108,9 @@ export default function SalesView({ user }: { user: AppUser }) {
   // Goals come from the database now — per salesman, falling back to the
   // company-wide figure for anyone without one of their own.
   const [targets, setTargets] = useState<MonthlyTargets | null>(null);
+  // Goals are only editable where the column exists (it arrives with the
+  // sales-targets migration); without it the field would refuse every save.
+  const [targetsEditable, setTargetsEditable] = useState(false);
 
   const isManager = (user.role === "manager" || user.role === "admin");
   // A Manager always sees whole-team numbers on this page now; a Salesman
@@ -139,6 +144,10 @@ export default function SalesView({ user }: { user: AppUser }) {
     ]);
     setTargets(tgts);
     setEntries(lb);
+    if (isManager) {
+      const probe = await supabase.from("users").select("monthly_target").limit(1);
+      setTargetsEditable(!probe.error);
+    }
     setTotalSale(sale);
     setTotalGp(gp);
     setTrend(tr);
@@ -172,9 +181,16 @@ export default function SalesView({ user }: { user: AppUser }) {
   // A Manager sees progress against the whole team's combined goal; a
   // Salesman against their own.
   const myTarget = targets ? targets.forUser(user.id) : FALLBACK_MONTHLY_TARGET;
+  // The team's goal is the salesmen's goals added up. The leaderboard now
+  // also carries anyone else who billed (a manager covering a route, say),
+  // and giving them a goal of their own would inflate the team's.
+  const rosteredIds = useMemo(
+    () => entries.filter((e) => e.role === undefined || e.role === "salesman").map((e) => e.salesmanId),
+    [entries]
+  );
   const combinedTarget = targets
     ? isManager
-      ? teamTarget(targets, entries.map((e) => e.salesmanId))
+      ? teamTarget(targets, rosteredIds)
       : myTarget
     : FALLBACK_MONTHLY_TARGET;
   const targetPct = combinedTarget > 0 ? totalSale / combinedTarget : 0;
@@ -183,7 +199,7 @@ export default function SalesView({ user }: { user: AppUser }) {
   const monthlyTarget = !targets
     ? FALLBACK_MONTHLY_TARGET
     : monthlyFilter === "team" && isManager
-      ? teamTarget(targets, entries.map((e) => e.salesmanId))
+      ? teamTarget(targets, rosteredIds)
       : targets.forUser(isManager ? monthlyFilter : user.id);
 
   // Sale trend header comparisons (§Sales: "show total sale, with
@@ -196,6 +212,35 @@ export default function SalesView({ user }: { user: AppUser }) {
   const yoyPct = curMonth && curMonth.pastYear > 0 ? (curMonth.sale - curMonth.pastYear) / curMonth.pastYear : null;
   const dayMomPct = sameDayLastMonth > 0 ? (todaySale - sameDayLastMonth) / sameDayLastMonth : null;
   const dayYoyPct = sameDayLastYear > 0 ? (todaySale - sameDayLastYear) / sameDayLastYear : null;
+
+  // §Sales: the manager sets a salesman's monthly goal from here, next to
+  // the figure it is measured against, rather than only from Settings.
+  async function saveGoal(salesmanId: string, raw: string) {
+    const trimmed = raw.trim();
+    const target = trimmed === "" ? null : Number(trimmed);
+    if (target !== null && (!Number.isFinite(target) || target < 0)) {
+      toast.error("Enter a goal of zero or more, or leave it blank to use the company default.");
+      return;
+    }
+    // Ask for the changed row back. A write the database declines to apply
+    // reports success and changes nothing, so an empty result is the only
+    // way to tell "saved" from "quietly refused".
+    const { data: saved, error } = await supabaseBrowser()
+      .from("users")
+      .update({ monthly_target: target })
+      .eq("id", salesmanId)
+      .select("id");
+    if (error) {
+      toast.error(friendlyError(error, "Couldn't save the goal."));
+      return;
+    }
+    if (!saved || saved.length === 0) {
+      toast.error("You don't have permission to change goals. Ask your administrator.");
+      return;
+    }
+    toast.success(target === null ? "Goal cleared — using the company default." : "Goal saved.");
+    load();
+  }
 
   const goalEntries = useMemo(() => {
     const withPct = visible.map((e, i) => ({
@@ -290,10 +335,10 @@ export default function SalesView({ user }: { user: AppUser }) {
               const pctLeft = Math.max(0, 1 - e.pct);
               const amountLeft = Math.max(0, e.target - e.total);
               return (
+                <div key={e.salesmanId} className={isYou ? "bg-accent/5" : ""}>
                 <button
-                  key={e.salesmanId}
                   onClick={() => setDrilldownSalesman(e)}
-                  className={`w-full text-left px-4 py-3.5 hover:bg-black/[0.02] dark:hover:bg-white/[0.03] transition ${isYou ? "bg-accent/5" : ""}`}
+                  className="w-full text-left px-4 py-3.5 hover:bg-black/[0.02] dark:hover:bg-white/[0.03] transition"
                 >
                   <div className="flex items-center gap-4">
                     <div
@@ -305,6 +350,12 @@ export default function SalesView({ user }: { user: AppUser }) {
                     <div className="flex-1 min-w-0">
                       <div className={`truncate ${isTop ? "text-headline font-bold" : "text-subhead font-medium"}`}>
                         {e.name} {isYou && <span className="text-caption text-accent">(you)</span>}
+                        {/* Someone who billed without being on the salesman
+                            roster — shown rather than dropped, but named for
+                            what they are. */}
+                        {e.role && e.role !== "salesman" && (
+                          <span className="text-caption text-secondary"> ({e.role})</span>
+                        )}
                       </div>
                       <div className="h-1.5 rounded-full bg-canvas overflow-hidden mt-1.5 max-w-[140px]">
                         <div
@@ -328,6 +379,25 @@ export default function SalesView({ user }: { user: AppUser }) {
                     <span className="tabular-nums">{formatAed(amountLeft)} left</span>
                   </div>
                 </button>
+                {/* Sits outside the button on purpose — a text field inside
+                    one cannot be typed into. */}
+                {isManager && targetsEditable && (
+                  <label className="flex items-center justify-end gap-2 px-4 pb-3 -mt-1">
+                    <span className="text-caption text-secondary">Monthly goal</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="100"
+                      defaultValue={targets?.byUser.get(e.salesmanId) ?? ""}
+                      placeholder={String(targets?.fallback ?? FALLBACK_MONTHLY_TARGET)}
+                      onBlur={(ev) => saveGoal(e.salesmanId, ev.target.value)}
+                      onKeyDown={(ev) => { if (ev.key === "Enter") (ev.target as HTMLInputElement).blur(); }}
+                      className="w-28 px-3 py-1 rounded-chip border border-hairline bg-canvas text-caption tabular-nums text-right"
+                      title="Leave blank to use the company default"
+                    />
+                  </label>
+                )}
+                </div>
               );
             })}
           </div>

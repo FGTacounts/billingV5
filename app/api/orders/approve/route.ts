@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
 
   const { data: order, error: orderErr } = await supabase
     .from("orders")
-    .select("id, status, invoice_number, customer_id")
+    .select("id, status, invoice_number, customer_id, salesman_id")
     .eq("id", orderId)
     .maybeSingle();
   if (orderErr || !order) {
@@ -65,7 +65,11 @@ export async function POST(req: NextRequest) {
       .eq("id", productId)
       .maybeSingle();
     if (pErr || !product) continue;
-    const newStock = (product.stock_on_hand ?? 0) - qty;
+    // Stock never goes below zero (§Products: a shelf cannot hold minus
+    // nine). Approving more than the system thinks is on the shelf means
+    // the count was already wrong; it settles at zero rather than carrying
+    // a negative that then hides the next delivery.
+    const newStock = Math.max(0, (product.stock_on_hand ?? 0) - qty);
     await supabase.from("products").update({ stock_on_hand: newStock }).eq("id", productId);
   }
 
@@ -172,6 +176,22 @@ export async function POST(req: NextRequest) {
         { status: 500 }
       );
     }
+  }
+
+  // Approval is the moment the order becomes an invoice, so it is the one
+  // the salesman most needs to hear about. Best-effort: a failed bell must
+  // not undo an approval that has already deducted stock.
+  if (order.salesman_id && order.salesman_id !== user.id) {
+    await supabase
+      .from("notifications")
+      .insert({
+        user_id: order.salesman_id,
+        type: "order_approved",
+        title: invoiceNumber ? `Order approved — invoice #${invoiceNumber}` : "Order approved",
+        body: `Approved by ${user.full_name}.`,
+        is_read: false,
+      })
+      .then(undefined, () => {});
   }
 
   return NextResponse.json({ ok: true, invoiceNumber });

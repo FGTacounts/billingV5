@@ -148,6 +148,9 @@ export default function LogPaymentSheet({
       if (chequePhoto) {
         const form = new FormData();
         form.set("photo", chequePhoto, "cheque.jpg");
+        // Lets the server name the file after the customer — CUSTOMERNAME1,
+        // CUSTOMERNAME2 — rather than after the moment it was uploaded.
+        form.set("customerId", customer.id);
         const res = await fetch("/api/payments/upload-cheque-photo", { method: "POST", body: form });
         const data = await res.json();
         if (res.ok) chequePhotoRef = data.ref;

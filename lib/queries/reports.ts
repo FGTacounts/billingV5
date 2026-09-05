@@ -76,12 +76,14 @@ export interface StockSnapshotRow {
 // movement/aging over time; it's current SOH valued at current price.
 export async function fetchStockSnapshot(supabase: SupabaseClient): Promise<StockSnapshotRow[]> {
   const { data } = await supabase
-    .from("products_safe")
-    .select("sku, name, stock_on_hand, price")
+    // products_safe does not exist in this database, and the product name
+    // is held in `description`.
+    .from("products")
+    .select("sku, description, stock_on_hand, price")
     .order("sku");
   return (data ?? []).map((p) => ({
     sku: p.sku,
-    name: p.name,
+    name: p.description,
     stockOnHand: p.stock_on_hand ?? 0,
     price: p.price,
     value: (p.stock_on_hand ?? 0) * p.price,

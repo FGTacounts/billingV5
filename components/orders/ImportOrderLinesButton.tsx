@@ -29,6 +29,13 @@ function pick(row: Record<string, string>, keys: string[]): string {
 export interface ImportedLine {
   product: Product;
   qty: number;
+  /**
+   * A price the source document actually stated. When set it overrides the
+   * customer's remembered price — a figure written on the paper is what was
+   * agreed with them. A spreadsheet import leaves it unset, so those lines
+   * price exactly as a hand-added one does.
+   */
+  price?: number;
 }
 
 export default function ImportOrderLinesButton({

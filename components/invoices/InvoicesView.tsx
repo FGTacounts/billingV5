@@ -150,7 +150,7 @@ export default function InvoicesView({ isManager }: { isManager: boolean }) {
           onClose={() => setViewing(null)}
           title={viewing.invoice_number ? `Invoice #${viewing.invoice_number}` : "Invoice"}
         >
-          <div className="text-center py-12">
+          <div className="py-8 flex flex-col items-center gap-6">
             <a
               href={`/api/invoice-pdf?orderId=${viewing.id}`}
               target="_blank"
@@ -159,9 +159,89 @@ export default function InvoicesView({ isManager }: { isManager: boolean }) {
             >
               View Tax Invoice PDF
             </a>
+
+            <DeliveryProof invoiceNumber={viewing.invoice_number ?? null} />
           </div>
         </Sheet>
       )}
+    </div>
+  );
+}
+
+
+/**
+ * Photos taken when the order was handed over.
+ *
+ * Fetched only when asked for rather than on opening the invoice: it is a
+ * round trip to Drive, and most of the time somebody opening an invoice wants
+ * the PDF.
+ */
+function DeliveryProof({ invoiceNumber }: { invoiceNumber: string | null }) {
+  const [state, setState] = useState<"idle" | "loading" | "done">("idle");
+  const [files, setFiles] = useState<
+    { id: string; name: string; webViewLink: string; thumbnailLink: string | null }[]
+  >([]);
+
+  if (!invoiceNumber) return null;
+
+  async function look() {
+    setState("loading");
+    try {
+      const res = await fetch(`/api/orders/delivery-proof?invoiceNumber=${encodeURIComponent(invoiceNumber!)}`);
+      const data = await res.json();
+      setFiles(data.files ?? []);
+    } catch {
+      setFiles([]);
+    }
+    setState("done");
+  }
+
+  if (state === "idle") {
+    return (
+      <button onClick={look} className="text-subhead font-semibold text-secondary hover:text-accent">
+        Check delivery proof
+      </button>
+    );
+  }
+
+  if (state === "loading") {
+    return <span className="text-subhead text-secondary">Looking&hellip;</span>;
+  }
+
+  if (files.length === 0) {
+    return (
+      <span className="text-caption text-secondary text-center max-w-[36ch]">
+        No proof photos were taken for this delivery.
+      </span>
+    );
+  }
+
+  return (
+    <div className="w-full">
+      <div className="text-caption text-secondary mb-2 text-center">
+        {files.length === 1 ? "1 photo" : `${files.length} photos`} from this delivery
+      </div>
+      <div className="flex flex-wrap gap-3 justify-center">
+        {files.map((f) => (
+          <a
+            key={f.id}
+            href={f.webViewLink}
+            target="_blank"
+            rel="noreferrer"
+            className="block rounded-card overflow-hidden border border-hairline hover:border-accent/50 transition-colors"
+            title={f.name}
+          >
+            {f.thumbnailLink ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={f.thumbnailLink} alt={f.name} className="w-28 h-28 object-cover" />
+            ) : (
+              <span className="w-28 h-28 grid place-items-center text-caption text-secondary px-2 text-center">
+                {f.name}
+              </span>
+            )}
+          </a>
+        ))}
+      </div>
     </div>
   );
 }

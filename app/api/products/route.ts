@@ -45,7 +45,11 @@ function toDbPayload(input: Partial<Product> & { name?: string }) {
   if (input.barcode !== undefined) payload.barcode = input.barcode;
   if (input.rack_location !== undefined) payload.rack_location = input.rack_location;
   if (input.is_active !== undefined) payload.is_active = input.is_active;
-  if (input.stock_on_hand !== undefined) payload.stock_on_hand = input.stock_on_hand;
+  // Stock on hand is never negative — a shelf holds nothing or something.
+  if (input.stock_on_hand !== undefined) {
+    payload.stock_on_hand =
+      input.stock_on_hand == null ? null : Math.max(0, Math.round(Number(input.stock_on_hand) || 0));
+  }
   if (input.category !== undefined) payload.Product_category = input.category;
   // Manager-entered overrides. Writing null is meaningful here — it's how you
   // clear an override and hand the figure back to the derived value — so

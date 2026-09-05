@@ -1,6 +1,7 @@
 "use client";
 
 import { toast } from "@/lib/toast";
+import { DELIVERY_STEP_DEFAULT, setDeliveryEnabled } from "@/lib/deliveryStep";
 import { friendlyError } from "@/lib/errors";
 import { formatAed } from "@/lib/money";
 import { fetchMonthlyTargets, type MonthlyTargets } from "@/lib/queries/targets";
@@ -32,6 +33,7 @@ import {
   type ZoneCountry,
 } from "@/lib/queries/zones";
 import type { AppUser } from "@/lib/types/db";
+import { navFor, primaryNavFor, MAX_PRIMARY_NAV } from "@/lib/nav";
 import Button from "@/components/ui/Button";
 import { Label, TextInput } from "@/components/ui/Field";
 import { Pill } from "@/components/ui/Badge";
@@ -78,7 +80,7 @@ export default function SettingsView({ user }: { user: AppUser }) {
 
         <div className="flex-1 min-w-0 w-full">
 
-      {tab === "General" && <GeneralTab isManager={(user.role === "manager" || user.role === "admin")} />}
+      {tab === "General" && <GeneralTab isManager={(user.role === "manager" || user.role === "admin")} role={user.role} />}
       {tab === "Sheet View" && <SheetViewTab />}
       {tab === "Zones" && isAdmin && <ZonesTab />}
       {tab === "Data" && <DataTab isManager={(user.role === "manager" || user.role === "admin")} />}
@@ -90,7 +92,7 @@ export default function SettingsView({ user }: { user: AppUser }) {
   );
 }
 
-function GeneralTab({ isManager }: { isManager: boolean }) {
+function GeneralTab({ isManager, role }: { isManager: boolean; role: AppUser["role"] }) {
   const { preferences, update, loaded } = usePreferences();
   const [theme, setTheme] = useState<"system" | "light" | "dark">("system");
 
@@ -208,6 +210,8 @@ function GeneralTab({ isManager }: { isManager: boolean }) {
       </div>
 
       {isManager && <ReportStageSection />}
+      {isManager && <DeliveryStepSection />}
+      <BottomBarSection role={role} />
       {isManager && <OverdueThresholdSection />}
       {isManager && <MapsKeySection />}
     </div>
@@ -956,6 +960,134 @@ function DataTab({ isManager }: { isManager: boolean }) {
           </span>
         </a>
       ))}
+      {isManager && <DuplicateOrdersSection />}
+    </div>
+  );
+}
+
+// Orders that were sent twice. See app/api/orders/duplicates for the rule.
+function DuplicateOrdersSection() {
+  interface Dup {
+    id: string;
+    invoiceNumber: string | null;
+    createdAt: string;
+    customerName: string;
+    salesman: string;
+    itemCount: number;
+    total: number;
+  }
+  const [groups, setGroups] = useState<Dup[][] | null>(null);
+  const [keep, setKeep] = useState<Record<number, string>>({});
+  const [busy, setBusy] = useState(false);
+  const [scanned, setScanned] = useState(false);
+
+  async function scan() {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/orders/duplicates");
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Couldn't check for duplicates");
+      const found: Dup[][] = data.groups ?? [];
+      setGroups(found);
+      // The oldest copy in each group is the one to keep by default.
+      setKeep(Object.fromEntries(found.map((g, i) => [i, g[0].id])));
+      setScanned(true);
+    } catch (e) {
+      toast.error(friendlyError(e, "Couldn't check for duplicates"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const toRemove = (groups ?? []).flatMap((g, i) => g.filter((o) => o.id !== keep[i]).map((o) => o.id));
+
+  async function remove() {
+    if (toRemove.length === 0) return;
+    if (
+      !confirm(
+        `Permanently remove ${toRemove.length} duplicate order${toRemove.length === 1 ? "" : "s"}? This cannot be undone.`
+      )
+    )
+      return;
+    setBusy(true);
+    try {
+      const res = await fetch("/api/orders/duplicates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderIds: toRemove }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Couldn't remove them");
+      toast.success(`Removed ${data.deleted} duplicate order${data.deleted === 1 ? "" : "s"}.`);
+      await scan();
+    } catch (e) {
+      toast.error(friendlyError(e, "Couldn't remove them"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-6 pt-5 border-t border-hairline">
+      <h3 className="text-subhead font-semibold mb-1">Orders sent twice</h3>
+      <p className="text-caption text-secondary mb-3 max-w-[60ch]">
+        Finds orders still waiting for review that have the same customer and the same
+        items. Approving both would bill the customer twice and take the stock out twice.
+        Only orders nobody has started picking are ever listed.
+      </p>
+      <div className="flex items-center gap-2 flex-wrap">
+        <Button tier="tinted" disabled={busy} onClick={scan}>
+          {busy && !scanned ? "Checking…" : "Check for duplicates"}
+        </Button>
+        {toRemove.length > 0 && (
+          <Button tier="danger" disabled={busy} onClick={remove}>
+            Remove {toRemove.length} duplicate{toRemove.length === 1 ? "" : "s"}
+          </Button>
+        )}
+      </div>
+
+      {scanned && groups?.length === 0 && (
+        <p className="text-subhead text-secondary mt-3">No duplicates. Nothing to clean up.</p>
+      )}
+
+      {groups?.map((group, gi) => (
+        <div key={gi} className="mt-3 border border-hairline rounded-card overflow-hidden">
+          <div className="px-3.5 py-2 bg-canvas text-caption text-secondary">
+            {group[0].customerName} · {group[0].itemCount} line
+            {group[0].itemCount === 1 ? "" : "s"} · {group.length} copies — choose the one to keep
+          </div>
+          {group.map((o) => (
+            <label
+              key={o.id}
+              className="flex items-center gap-3 px-3.5 py-2.5 border-t border-hairline cursor-pointer text-subhead"
+            >
+              <input
+                type="radio"
+                name={`dup-${gi}`}
+                checked={keep[gi] === o.id}
+                onChange={() => setKeep((prev) => ({ ...prev, [gi]: o.id }))}
+              />
+              <span className="flex-1 min-w-0">
+                <span className="font-medium">
+                  {o.invoiceNumber ? `#${o.invoiceNumber}` : "No invoice number yet"}
+                </span>
+                <span className="text-caption text-secondary">
+                  {" "}
+                  · {new Date(o.createdAt).toLocaleString()} · {o.salesman}
+                </span>
+              </span>
+              <span className="tabular-nums text-secondary shrink-0">{formatAed(o.total)}</span>
+              <span
+                className={`text-caption font-semibold shrink-0 ${
+                  keep[gi] === o.id ? "text-accent" : "text-[--status-danger]"
+                }`}
+              >
+                {keep[gi] === o.id ? "Keep" : "Remove"}
+              </span>
+            </label>
+          ))}
+        </div>
+      ))}
     </div>
   );
 }
@@ -1368,6 +1500,147 @@ function AccountTab() {
         <Label>Session</Label>
         <Button tier="danger" onClick={logout}>Log out</Button>
       </div>
+    </div>
+  );
+}
+
+// Whether the business uses a delivery step at all.
+//
+// Some operations hand goods over when the invoice is raised and never track a
+// separate delivery; for them the warehouse's Delivery tab is dead weight and
+// its proof photos are ceremony. One answer, set by the manager, followed
+// everywhere.
+function DeliveryStepSection() {
+  const [enabled, setEnabled] = useState(DELIVERY_STEP_DEFAULT);
+  const [unsupported, setUnsupported] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const supabase = supabaseBrowser();
+    supabase
+      .from("app_settings")
+      .select("delivery_enabled")
+      .limit(1)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (error) { setUnsupported(true); return; }
+        setEnabled((data?.delivery_enabled as boolean | null) ?? DELIVERY_STEP_DEFAULT);
+      });
+  }, []);
+
+  async function save(next: boolean) {
+    setSaving(true);
+    const prev = enabled;
+    setEnabled(next); // Optimistic, rolled back below if it does not take.
+    const result = await setDeliveryEnabled(supabaseBrowser(), next);
+    if (!result.ok) {
+      setEnabled(prev);
+      toast.error(result.error ?? "Couldn't save that.");
+    } else {
+      toast.success(next ? "Delivery step on." : "Delivery step off.");
+    }
+    setSaving(false);
+  }
+
+  if (unsupported) {
+    return (
+      <div>
+        <Label>Delivery</Label>
+        <p className="text-caption text-secondary">
+          Not available on your account yet. Approved orders currently go
+          straight to delivered. Ask your administrator to turn this on.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <Label>Delivery</Label>
+      <label className="flex items-start gap-3 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={enabled}
+          disabled={saving}
+          onChange={(e) => save(e.target.checked)}
+          className="mt-0.5"
+        />
+        <span>
+          <span className="block text-subhead font-semibold">Track deliveries</span>
+          <span className="block text-caption text-secondary mt-1">
+            Approved orders wait in the warehouse&rsquo;s Delivery tab until
+            someone confirms they arrived, with photos if they take any. Turn
+            this off if you hand goods over when the invoice is raised — the
+            Delivery tab then disappears for everyone.
+          </span>
+        </span>
+      </label>
+    </div>
+  );
+}
+
+// Which destinations sit in the bottom bar on a phone, and which go behind
+// More. Everyone works differently — a salesman lives in Orders and Customers,
+// the warehouse in Picking — so the four that matter should be each person's
+// own choice rather than a fixed guess.
+//
+// Only affects the phone bar. The desktop sidebar has room for everything and
+// shows the lot.
+function BottomBarSection({ role }: { role: AppUser["role"] }) {
+  const { preferences, update } = usePreferences();
+  const available = navFor(role);
+  const current = primaryNavFor(role, preferences.primaryNav);
+  const currentHrefs = current.map((i) => i.href);
+
+  function toggle(href: string) {
+    const isOn = currentHrefs.includes(href);
+    if (isOn) {
+      // Never leave the bar empty; one destination has to remain.
+      if (currentHrefs.length <= 1) {
+        toast.error("Keep at least one tab in the bar.");
+        return;
+      }
+      update({ primaryNav: currentHrefs.filter((h) => h !== href) });
+      return;
+    }
+    if (currentHrefs.length >= MAX_PRIMARY_NAV) {
+      toast.error(`The bar holds ${MAX_PRIMARY_NAV} tabs. Take one out first.`);
+      return;
+    }
+    update({ primaryNav: [...currentHrefs, href] });
+  }
+
+  return (
+    <div>
+      <Label>Tabs on your phone</Label>
+      <p className="text-caption text-secondary mb-3">
+        Choose up to {MAX_PRIMARY_NAV}. The rest stay one tap away under More.
+        This is yours alone and doesn&rsquo;t change anyone else&rsquo;s.
+      </p>
+      <div className="grid grid-cols-2 gap-2">
+        {available.map((item) => {
+          const on = currentHrefs.includes(item.href);
+          return (
+            <label
+              key={item.href}
+              className={`flex items-center gap-2.5 px-3 py-2.5 rounded-card border cursor-pointer transition-colors ${
+                on ? "border-accent/40 bg-accent/[0.04]" : "border-hairline"
+              }`}
+            >
+              <input type="checkbox" checked={on} onChange={() => toggle(item.href)} />
+              <span className="text-subhead truncate">{item.label}</span>
+            </label>
+          );
+        })}
+      </div>
+      {preferences.primaryNav && preferences.primaryNav.length > 0 && (
+        <button
+          onClick={() => update({ primaryNav: [] })}
+          className="mt-3 text-caption text-secondary hover:text-accent"
+        >
+          Reset to the default for your role
+        </button>
+      )}
     </div>
   );
 }

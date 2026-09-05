@@ -16,9 +16,14 @@ export default function ImportCsvButton({
   sample,
   aliases,
   askStockMode = false,
+  unit = "row",
 }: {
   endpoint: string;
   onImported: () => void;
+  // What one imported thing is called, for the message afterwards. Products
+  // and customers arrive a row at a time; an order import turns many rows
+  // into a few orders, and saying "3 rows" there would be wrong.
+  unit?: string;
   // Products carry stock, so an import of SKUs you already hold has to ask
   // whether the file's quantities replace what is on the shelf or add to it.
   // Getting that wrong silently changes inventory, so we ask rather than
@@ -61,7 +66,12 @@ export default function ImportCsvButton({
         data.updated != null && data.created != null
           ? ` (${data.created} new, ${data.updated} updated)`
           : "";
-      toast.success(`Imported ${data.count} row${data.count === 1 ? "" : "s"}${detail}.`);
+      // A route can add a sentence of its own — what it skipped and why —
+      // which is worth more than the count on its own.
+      const note = typeof data.note === "string" && data.note ? ` ${data.note}` : "";
+      toast.success(
+        `Imported ${data.count} ${unit}${data.count === 1 ? "" : "s"}${detail}.${note}`
+      );
     } catch (e) {
       toast.error(friendlyError(e, "Import failed"));
     } finally {

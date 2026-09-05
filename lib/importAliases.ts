@@ -61,6 +61,18 @@ export const CUSTOMER_ALIASES: Record<string, string[]> = {
   overdue_threshold_days: [],
 };
 
+// Orders <- a day's orders in one sheet, one row per line item. Rows sharing
+// an invoice value become one order; without that column the whole file is
+// read as a single order.
+export const ORDER_ALIASES: Record<string, string[]> = {
+  invoice: ["invoice_no", "invoice_number", "inv", "invoice_#", "order_no", "order_number"],
+  customer: ["customer_code", "code", "customer_name", "cust_code", "shop"],
+  sku: ["article", "article_no", "item", "item_no", "item_code", "product", "product_code"],
+  qty: ["quantity", "qnty", "pcs", "units", "count"],
+  price: ["rate", "unit_price", "unit_rate"],
+  salesman: ["sales_exec", "sales", "rep", "salesperson"],
+};
+
 // Expenses <- V5.0 Reports.xlsx, FIXED/VARIABLE EXPENSE + PURCHASE sheets.
 export const EXPENSE_ALIASES: Record<string, string[]> = {
   type: [],
@@ -69,6 +81,8 @@ export const EXPENSE_ALIASES: Record<string, string[]> = {
   amount: [],
   date: ["expense_date"],
   notes: [],
+  // Whose expense it is — matched by name against the staff list.
+  salesman: ["salesman_name", "sales_man", "staff", "employee"],
 };
 
 // A lone "-" is this workbook's placeholder for "no value" (§products:

@@ -1,19 +1,34 @@
-# Dependencies — reinstalled with `npm install`, never committed.
-# One file in here is 109MB, which is over GitHub's 100MB limit.
+# Dependencies — reinstalled with `npm install`
 /node_modules
 
 # Build output
 /.next
 /out
 /build
+next-env.d.ts
 
-# Secrets — never commit these
+# Secrets — never commit these.
+# .env.local holds the Supabase service-role key and the Google and Apple
+# signing keys. Any one of them is enough to impersonate the app.
 .env
 .env.*
 !.env.example
 *.p8
 *.pem
 *.key
+*credentials*.json
+# Claude Code's local settings record commands that were allowed to run, and
+# some of those carried the service-role key on their command line. The
+# GitHub repository is public. (2026-09-19)
+/.claude/settings.local.json
+/.claude/worktrees/
+
+# Local scratch
+/scratchpad/*.html
+/scratchpad/*.enc
 
 # OS noise
 .DS_Store
+
+# TypeScript incremental build cache — regenerated on every build
+*.tsbuildinfo

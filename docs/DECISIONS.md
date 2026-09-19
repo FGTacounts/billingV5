@@ -480,3 +480,1472 @@ refused. My own RUN-ME-7 created products_safe without it.
 2026-09-04 — `purchases` becomes manager-only — It carries china_cost,
 landing_cost and total_cost. Every other cost figure in the app is
 manager-only; this one was readable by anyone at all.
+
+2026-09-05 — Order counts are drawn from the same rows as order money —
+"Orders this month" counted every order by `created_at`, while "Sales this
+month" beside it summed counted-status orders by `updated_at`, the billing
+date. In September the tile read 0 orders next to AED 7,799.07 of sales,
+because six orders were billed that month and none were first drafted in it.
+`countOrdersThisMonth` and `countOrdersInRange` now return the length of the
+same `revenueIn` set the money comes from, so a count and its total can never
+disagree again — and, being served from the cached copy, they cost nothing —
+Rejected: switching only the date column, which would have left the status
+filter still differing.
+
+2026-09-05 — An order can only be created as a draft or as pending, enforced
+at run time — `/api/orders/create` runs as service_role and typed `status` as
+`"draft" | "pending"`, but TypeScript checks nothing at run time. A caller
+posting `status: "delivered"` got an order that had skipped picking, packing
+and delivery, held no invoice number, and had moved no stock — a sale
+present in every total and absent from the pipeline.
+
+2026-09-05 — Removed the Warehouse "Picking" tab from web and iOS — It was a
+strictly worse duplicate of Orders. `/picking` rendered `OrdersView` with
+`scope="picking"`, which showed one flat list of `waiting` + `picking` orders;
+`/orders` shows the same queue split into Waiting/Picking/Packed/Delivering
+stages (`showsWarehouseStages`) and includes `delivering`. The stage switcher
+was built specifically to replace the flat list — see the comment at
+OrdersView.tsx:295. iOS had the same pair: a Picking tab beside an Orders tab
+whose sub-tabs are already Waiting/Picking/Packed/All. The `picking` order
+STATUS is untouched — only the navigation entry is gone. Alternatives
+rejected: keeping both (two doors to one list); deleting the route outright
+(kept as a redirect to /orders so saved bottom-bar preferences and bookmarks
+don't 404).
+
+2026-09-05 — Added RLS policies giving `admin` full access to orders and
+payments (RUN-ME-17) — Measured with a real session per role: admin saw 0
+orders and 0 payments while manager saw 535 and 22. The original policies on
+those two tables enumerate manager/salesman/warehouse and never mention
+admin, so an Admin login matched no policy and read an empty table. Every
+other table was already correct. Added as separate permissive policies
+(which OR together) rather than editing the existing ones, so no other
+role's visibility changes. Alternatives rejected: rewriting the existing
+policies to include admin (larger blast radius, and the originals are not in
+version control); making admin a Postgres superuser-ish bypass (defeats RLS).
+
+2026-09-05 — iOS: report figures now date orders by `revenueDate`, not the raw
+`order.date` — 8 sites across ManagerDashboardView, SalesmanDashboardView and
+SalesView filtered/grouped on `order.date` while the other 23 report sites and
+`Analytics.ordersThisMonth` use `order.revenueDate` (`updatedAt ?? date`, the
+app-wide billing date, matching the web). Symptom: on the manager dashboard the
+top "Sale" chart rendered flat/empty while the Sale widget directly below it —
+same period, same orders — showed real data. Also affected the Sales page
+leaderboard and its year-to-date figures. Alternatives rejected: changing
+`revenueDate` itself (23 correct callers).
+
+2026-09-05 — iOS: the dashboard "Orders" tile counts month-to-date orders, not
+all orders — It read `sheetsManager.orders.count` (535, all time) while the
+"Sale" tile beside it read `dashTeamMtd` (AED 8K, September). Two ranges in one
+card. Now both derive from `Analytics.ordersThisMonth`, since `mtdSales` is
+literally that set reduced over `saleValue`. Mirrors web commit 6efb7a6.
+
+2026-09-05 — NOT changed, needs a business decision: the avg-sale chart sums
+`order.total` (VAT-inclusive) while every headline figure uses `saleValue`
+(ex-VAT subtotal). Left as-is because VAT-inclusive may be intended for an
+average-order-value metric; flagged rather than silently changed.
+
+2026-09-05 — Removed the GoogleSignIn and GoogleAPIClientForREST/Sheets pods
+from the iOS app — Neither was referenced by a single line of app source.
+Sign-in is Supabase Auth (LoginView.swift); Drive access is plain HTTPS in
+DriveClient.swift with a service-account token minted in AppDataManager, and
+imports only Foundation/Combine/UIKit. Sheets was a leftover from before the
+Supabase migration. `pod install` removed AppAuth, GTMAppAuth,
+GTMSessionFetcher, GoogleAPIClientForREST and GoogleSignIn. Also removed the
+dead config they needed: GIDClientID, GIDServerClientID and GOOGLE_CLIENT_ID
+from Info.plist (0 code references each), the com.googleusercontent.apps.*
+CFBundleURLScheme (the app could no longer service that OAuth callback), and
+GOOGLE_CLIENT_ID from Config.xcconfig. Workspace builds clean.
+NOTE: this does NOT remove the bundled service-account key
+(familist-497101-12cb1f36bc3a.json) — DriveClient still needs it, and it
+remains a shipping blocker. Backups of Podfile/Info.plist/project.pbxproj are
+in the session scratchpad under ios-backup/.
+
+2026-09-05 — iOS reporting reads stored money, not line-item money — The
+`Order.total` computed property is `subtotal + vat` where `subtotal` sums
+`items`. 532 of 535 orders have no line items, so `total` returns 0 for
+almost the whole book. Found by instrumenting the dashboard chart: the day
+bucket was correct (day 4) but its value was 0. The model already had the
+right accessors — `saleValue` (storedSubtotal ?? fulfilledSubtotal, ex-VAT)
+and `receivableTotal` (storedTotal ?? fulfilledTotal, VAT-inclusive), both of
+which fall back to live line items for an unsaved draft. Moved 8 reporting
+call sites onto them: AppNavigation order rows (2), ManagerCustomersView
+order row, FinancialReportsView salesman totals, OrderExcelExporter (4 — the
+invoice grand total and amount-in-words were printing 0.00), plus the
+dashboard avg-sale chart and its average line. NOT changed: three
+FinancialReportsView sites operating on `OrderAgingDB`, whose `total` is the
+database column read directly and was always correct; and `Order.total`
+itself, because the New Order sheet needs it to track live line items while
+editing. This also answers the earlier open question about VAT-inclusive vs
+ex-VAT on the avg-sale chart: `total` was not a VAT choice, it was simply
+zero. The chart now uses `saleValue`, matching mtdSales and the leaderboard.
+
+2026-09-05 — iOS no longer ships any secret — Two credentials were in the
+bundle. (1) The Drive service-account key: DriveClient signed a Google JWT on
+the phone, so familist-497101-*.json shipped inside the .ipa. Added
+/api/drive/{list,search,file,upload} to the web app (getAppUser already
+accepts Bearer tokens, and lib/google-drive.ts already had every primitive)
+and rewrote DriveClient's six network methods to call them with the user's
+own Supabase token. Removed 120 lines of JWT/RS256/token-exchange code from
+AppDataManager and took the .json out of the target. (2) The Gemini key was a
+literal in GeminiAIClient.swift — "key is baked into the binary", per its own
+comment. Now read from UserDefaults and entered in Settings -> AI scanning.
+Verified against the built .app: no JSON credential, no private-key marker,
+no key in the binary or Info.plist. Alternatives rejected: having the server
+hand the phone a Drive access token (still a full-Drive credential on the
+client, just shorter-lived).
+
+2026-09-05 — CocoaPods removed entirely — Deleting the two unused Google pods
+left zero dependencies, and the leftover CocoaPods integration then fought
+the base-configuration change below ("sandbox is not in sync with the
+Podfile.lock"). `pod deintegrate` plus removing Podfile/Podfile.lock/Pods.
+The project now builds from Billing.xcodeproj directly.
+
+2026-09-05 — Config.xcconfig is now actually applied — It was in the project
+as a file but was never a baseConfigurationReference, so every $(...)
+substitution in Info.plist resolved to empty. WEB_APP_URL has therefore never
+worked, which is why iOS user-management said "set WEB_APP_URL" no matter
+what was in the file. Both Debug and Release now use it. Because that makes
+the file's values reach the shipped Info.plist, GEMINI_API_KEY was removed
+from it first.
+
+2026-09-05 — Extension versions aligned with the app — 28 target
+configurations were at CURRENT_PROJECT_VERSION 3 / MARKETING_VERSION 3.1
+while the app was at 5. "The CFBundleVersion of an app extension ('3') must
+match that of its containing parent app ('5')" is an App Store upload
+rejection, not a warning. All six extensions now report 5.
+
+2026-09-05 — Web: Tailwind classes converted to logical properties — 66 sites
+across 21 files (pl-/pr-/ml-/mr-/left-/right- to ps-/pe-/ms-/me-/start-/end-),
+satisfying CLAUDE.md rule 7. In a left-to-right page these compile to
+identical CSS, so nothing moved.
+
+2026-09-05 — iOS accepts an email at the login, like the web — The field said
+"USERNAME" and appended @fgtbilling.internal to whatever was typed, so a real
+address became name@gmail.com@fgtbilling.internal and failed with a generic
+"invalid credentials". Bilal's admin account is registered under a real email,
+so the phone could not sign it in at all. LoginView now calls the web app's
+existing /api/auth/resolve-login (the same route LoginForm uses) to turn an
+email into its username first. Nil result — server address unset, or address
+unknown — falls through to the normal sign-in so the failure message is
+unchanged. Requires WEB_APP_URL.
+
+2026-09-05 — Drive was never broken; the phone had nowhere to call — Verified
+the service account directly: token exchange OK, it sees the PICTURES folder
+(1X890e-...) and lists 13 subfolders. The four new /api/drive routes were then
+tested against a real manager session: 401 with no token and with a bad token,
+search returns BTT270.jpg, /api/drive/file returns a valid 46 KB JPEG, and a
+salesman POSTing to /api/drive/upload gets 403. Finally confirmed on the phone
+with WEB_APP_URL pointed at the dev server — the product photo renders in the
+detail sheet, fetched through the proxy with the user's own Supabase token.
+Most SKUs (BG112, BG113, GHB424-110) simply have no photo in Drive; BTT270 and
+BTT275 do. So "photos missing" is usually "no photo for that SKU", and was
+otherwise WEB_APP_URL being empty.
+Added NSAllowsLocalNetworking so WEB_APP_URL can point at a local `npm run dev`
+over http while testing; every non-local host still requires https.
+Also fixed the xcconfig URL escape: "//" starts a comment, so the empty
+interpolation has to sit BETWEEN the slashes (http:/$()/host), not before
+them (http:$()//host) — the old form silently truncated the value to "http:".
+PhotoBrowserView now says "Photos need the server address" instead of showing
+an empty grid, which is the exact confusion this round started with.
+
+2026-09-05 — iOS uses the web's skeleton loading, not spinners — New
+SkeletonView.swift ports the web's `.skeleton` (app/globals.css): a sheen
+sweeping across a rounded block, 7%→14%→7% of the secondary colour, 1.4s
+ease-in-out, rows staggered 90ms so the highlight travels down a list, and a
+flat tint under Reduce Motion. Provides Skeleton / SkeletonList / SkeletonCard
+/ SkeletonGrid. Replaced the loading spinners in ManagerDashboardView,
+WarehouseDashboardView, SalesmanOrdersTab, PaymentsView (outstanding
+invoices), ManagerCustomersView (balances), PhotoBrowserView (grid + per-tile)
+and DriveProofSheet. Left as spinners, deliberately: isSaving, isSearching,
+cheque-scan progress, report export progress, and applying a customer edit —
+those are actions in flight, not content loading, which is the distinction
+rule 9 draws.
+
+2026-09-05 — /api/product-photo never worked for the phone (or any Bearer
+caller) — It answered 502 "app_settings.product_photos_drive_folder_id is not
+set" while the row was plainly readable. `getSetting()` used
+`supabaseServer()`, which reads the session from COOKIES only; a Bearer-token
+caller therefore queried as `anon`, and RUN-ME-13 correctly revoked anon's
+read on app_settings, so the folder id came back null. Added
+`supabaseCaller()` (lib/supabase/server.ts): forwards the caller's own
+Authorization header when present, falls back to cookies. Still never
+service-role — RLS runs as that user, exactly as for the browser. This also
+repairs the cheque, delivery-proof and product-photo upload routes for iOS,
+which all read folder ids the same way. The browser path was unaffected
+because it has a cookie.
+
+2026-09-05 — iOS product grid shows Drive photos instead of initials — The
+tiles rendered `String(desc.prefix(2))` ("TU", "GL") and never asked Drive;
+only the detail sheet did. Tiles now use SKUPhotoView, with the initials kept
+as the fallback when Drive has no photo for that SKU (most of the catalogue).
+Added `DriveClient.photo(forSKU:)`: ONE request to /api/product-photo, which
+the server answers from a warm SKU→file map, rather than the old two-trip
+search-then-fetch — a grid of hundreds of tiles cannot afford per-tile Drive
+searches. It carries a negative cache of SKUs with no photo so a scroll does
+not re-ask for them, on top of the existing memory and disk caches.
+NOT a bug, recorded so it is not chased again: the SKU text visible in a tile
+("BTT-270") is printed into the source photo itself — the files are 1000x1000
+squares with the code in the corner. The tile is not clipping it wrongly.
+
+2026-09-07 — Statement of account for a whole shop group (Manager/Admin) —
+145 of 356 customers carry a `group_name`, across 58 groups; "Day To Day" is
+23 shops. A chain trades under several branch codes but settles ONE account,
+and there was no way to statement that account: a manager pulled a statement
+per branch and added them up. `buildStatement` now takes one id or several;
+GET /api/customers/statement accepts `?group=<name>` alongside `?customerId=`.
+Verified against the database: the group statement for "Day To Day" produces
+7 rows totalling AED 5,521.43, exactly the sum of the 23 shops' delivered
+invoices — and note the group's FIRST branch has zero invoices, so any
+"statement the first member" shortcut would have returned an empty document.
+Manager/Admin only, enforced server-side (403 for a salesman): a group
+statement discloses every branch's trading to whoever holds the file. The
+header says "COMBINED ACCOUNT — N SHOPS" so it cannot be mistaken for one
+branch's. iOS matches, via CustomerStatementExporter.rows(codes:) and a
+"Group PDF/Excel — N shops" pair in the export menu.
+Deliberately NOT done: reviving the combined-shops row in the customer list.
+That view was removed on purpose (§Next Updates "remove the combine shops
+button"); the group statement lives in the customer sheet instead.
+
+2026-09-07 — 17 API routes queried as `anon` for any Bearer caller — They
+authenticated correctly with getAppUser() (which handles Bearer) and then did
+the actual work through supabaseServer(), which reads the session from
+COOKIES ONLY. From the phone every one of them saw nothing: statements,
+Excel/PDF exports, invoice PDFs, order approve/delete/restore/purge/edit,
+delivery finalisation, cheque upload. Found because the group statement
+returned "No shops in that group" for an admin while the same query as
+service-role returned 23. All 17 now use supabaseCaller(). /api/logout keeps
+supabaseServer() — clearing the cookie session is its whole job.
+
+2026-09-08 — Famlist Assistant button beside the account avatar (web + iOS) —
+Added at explicit request; it is NOT in the spec, so noting it here against
+rule 2 rather than pretending otherwise. Links to
+https://famlist-assistant.vercel.app/ and opens in a new tab (web) or the
+system browser (iOS). Deliberately not embedded: the assistant authenticates
+with "Continue with Vercel", and an OAuth flow inside an iframe or WKWebView
+is fragile and is the pattern Apple asks apps not to use for third-party
+sign-in. Safari also keeps the session between visits, so staff sign in once.
+iOS uses one shared `AssistantButton` in all three role toolbars (manager,
+salesman, warehouse) so it cannot drift between them.
+KNOWN LIMITATION: the assistant is behind a Vercel login. Staff without a
+Vercel account reach a sign-in wall, not the assistant.
+
+## 2026-09-12 — Shared stock between products
+
+2026-09-12 — Two or more products can share one stock figure — Added at
+explicit request ("linking product stocks: an option to add another product
+under the same shared stock"); it is NOT in the spec, so noting it here
+against rule 2 rather than pretending otherwise. A product gets a nullable
+`stock_group_id`; every product with the same id is one physical shelf sold
+under several SKUs. Migration is `scratchpad/RUN-ME-18-shared-stock.sql`.
+
+2026-09-12 — The shared figure is mirrored by a database trigger, not
+resolved in code — Stock is read-then-written in ten places (approve, grant
+edit, restore, delete, purchases, goods returns, the stock route, import,
+scan, the phone). Each reads its own product's `stock_on_hand` and writes it
+back; an AFTER trigger copies the new figure to the rest of the group. Not
+one of those writers changed, and the phone, which reads `products_safe`,
+sees the right number without knowing groups exist — Rejected: a pointer
+column ("my stock is product X's"), which would have meant a join in every
+reader and a resolution step in every writer, on both apps.
+
+2026-09-12 — Joining takes the existing figure; the newcomer's own count is
+discarded — "Add another product under the same shared stock": the stock
+that is already there is the truth, the product being added is a second
+name for it. A BEFORE trigger adopts the group's figure on join so the very
+first read agrees. Leaving keeps whatever the figure was at that moment —
+Rejected: adding the two counts together, which would double stock that was
+already counted once on the shelf.
+
+2026-09-12 — Consequence accepted: the Reports stock snapshot values each
+linked SKU at the full shared figure — `fetchStockSnapshot` sums
+stock × price per product, so a shelf shared by two SKUs appears twice. Which
+price a shared shelf should be valued at is a product question nobody has
+answered, and the report is a specified feature (rule 1), so it is left as
+it is and noted here.
+
+2026-09-12 — Consequence accepted: two orders for two linked SKUs approved
+at the same moment can lose one deduction — Each approval reads the figure,
+subtracts, and writes; the last write wins and is mirrored. This is the race
+that already exists today for two simultaneous orders of the same SKU, so
+sharing makes nothing worse than it was.
+
+2026-09-12 — Linking writes immediately, not on Save — It touches two rows
+and the database adopts the figure at that moment; folding it into the form
+would have meant Save sending a partner id and the route guessing which of
+the two figures to keep. The list behind the sheet reloads on every link
+change so Cancel cannot leave it stale. Salesman and warehouse sessions
+receive `stock_group_id`: it is not a cost figure, and whoever may see the
+stock may see whose else it is.
+
+## 2026-09-12 — Nothing is sold from an empty shelf
+
+2026-09-12 — At approval every line is cut to what the shelf holds, the cut
+is saved as the line's picked quantity, and the approver is told — Chosen by
+the owner over refusing the approval and over also blocking the item at
+order time. The 4 September floor stays: stock still never goes below zero
+and an approval is still never blocked. What changes is that the excess is
+no longer delivered and invoiced as if it existed — the invoice says what
+came off the shelf, because the cut is written to the line before the order
+is approved. Linked products (RUN-ME-18) draw from one pool during the same
+approval, so two SKUs on one shelf cannot together take more than the one
+figure — Rejected: refusing, which the owner did not want; capping only in
+the stock figure and leaving the invoice full, which is what happened before
+and is what this replaces.
+
+2026-09-12 — A product with no count kept is neither cut nor written —
+`stock_on_hand` null means nobody has counted that shelf. Cutting against
+it would mean treating "unknown" as "none" and zeroing every such line;
+writing it would turn "unknown" into "zero" after the first sale, which is
+what the old code did. Neither is a fact anyone entered, so the figure is
+left alone until someone counts. The 4 September clamp trigger is
+unaffected: it only touches figures below zero.
+
+## 2026-09-12 — The phone gets the same stock rules as the web
+
+2026-09-12 — The iOS app lives at "Downloads/Applications/Billing App/Famlist
+Billing_V5/Billing" (V5, the only version with 2026 work in it; V1–V4 are
+older copies and were left alone) — Identified from the workspace the owner
+supplied: its Package.resolved originHash matches V5's exactly.
+
+2026-09-12 — Approval on the phone now caps each line to the shelf, the same
+rule as the web — `AppDataManager.finalizeOrder` used to call `deductStock`,
+which clamped the figure at zero and billed the full quantity anyway. It now
+calls `capAndDeductStock`, which cuts the line, writes the cut to
+`picked_qty`, bills from the cut quantity and reports what it cut. Without
+this the two apps would disagree about the same order, which is worse than
+either rule on its own.
+
+2026-09-12 — The phone caps against the database, not its local `articles`
+array — The array goes stale the moment another device sells from the same
+shelf, and a shared shelf is mirrored onto its siblings by a trigger the
+phone never hears about. `capAndDeductStock` reads `stock_on_hand` fresh for
+the SKUs on the order, then corrects the local list afterwards — Rejected:
+capping against the cached figure, which would cut lines against a number
+that may be hours old.
+
+2026-09-12 — If the shelf cannot be read at all, the phone falls back to the
+old deduction rather than approving an order that moves no stock — A network
+failure between reading and writing should not silently make an approval
+stock-neutral. Nothing is capped in that case, and the failure is logged.
+
+2026-09-12 — Linking is written straight to `products.stock_group_id` from
+the phone, not through the web's /api/products/link-stock route — The phone
+already writes `products` directly (stock, rack, article edits), and the two
+database triggers do the real work: joining adopts the group's figure and any
+later change is mirrored. Putting the route in the middle would have added a
+second authorisation path for no behaviour the triggers do not already
+enforce — Rejected: a WebAPIClient call, which would have made the phone
+depend on the web app being deployed to link two products.
+
+2026-09-12 — Consequence accepted: the phone shows "Stock shared with …"
+only where it already shows the stock figure — On the web every role sees
+both; on iOS `ArticleDetailSheet` hides the Stock card behind `showsCost`,
+which is manager-only. Widening that is a change to who sees what, which
+rule 1 says to ask about first. Flagged to the owner rather than changed.
+
+2026-09-12 — Shared stock reached the phone as well: link and unlink in the
+product editor, "Stock shared with …" in the detail sheet, and pooling at
+approval — Both apps now read and write the same `stock_group_id`, so a shelf
+linked on one is linked on the other.
+
+2026-09-12 — Restoring stock on the phone also reads the database now, not
+the cached list — `adjustStock` computed `local figure + quantity` and wrote
+it. That read-then-write from a possibly stale cache was survivable while
+each SKU stood alone; with shared shelves the database copies whatever is
+written onto every other SKU in the group, so one stale entry would have set
+the whole shelf wrong. Both stock paths now go through one `stockPools`
+helper that reads the figures fresh and pools linked SKUs — Rejected: leaving
+the restore path alone, which would have made shared stock a way to spread a
+wrong number.
+
+2026-09-12 — Only a failed database read falls back to the local list, and it
+says so in the log — `deductFromLocalList` is the pre-2026-09-12 behaviour
+kept for that one case: it is a guess built on a cache, so it is named for
+what it is rather than sitting on the normal path.
+
+## 2026-09-12 — Closing the gap between the web app and the phone
+
+2026-09-12 — The two apps already agreed on which invoice document to issue;
+what was wrong was two call sites that never asked — The rule is "a manager
+may print a tax invoice at any stage, everyone else only once the order is
+delivered". The web has it in /api/invoice-pdf and the phone had it spelled
+out in AppNavigation, but the warehouse and salesman exports passed no
+document kind at all and took the `.performa` default. A salesman sharing a
+delivered order's invoice from the phone therefore sent a performa where the
+web sent a tax invoice. There is now one `OrderInvoiceDocumentKind.forExport`
+that every call site uses. `.performa` stays the default for a caller that
+does not ask, because issuing a performa when a tax invoice was due is an
+inconvenience, while issuing a tax invoice that was not due is a claim about
+a sale that has not happened — Rejected: changing the default to `.tax`,
+which would make every future forgotten call site the dangerous way round.
+
+2026-09-12 — The database is now the truth for goals, bonuses and incentive
+notes, on both apps — `GoalsStore` treated UserDefaults as the source: a
+target typed before the staff list had synced was kept locally and never
+written, with nothing said, and the bonus and the offer note were never
+written to the database at all. Both apps now read and write
+`users.monthly_target`, `users.monthly_bonus` and `users.incentive_note`, a
+sync overwrites the local copy, and a change that cannot be written says so
+instead of looking saved — Rejected: keeping the local copy authoritative
+with a longer sync, which is what let two devices disagree indefinitely.
+
+2026-09-12 — `users.monthly_bonus` and `users.incentive_note` are guarded
+against self-award — RUN-ME-20 extends `guard_user_privileged_columns()` from
+RUN-ME-3 to cover the two new columns. Without it the existing "a user may
+edit their own row" permission would have let a salesman set their own bonus.
+ORDERING HAZARD: run RUN-ME-20 after RUN-ME-3, and re-running RUN-ME-3 later
+drops the two new names from the guard — the file says so at the top.
+
+2026-09-12 — The phone holds picking work that cannot reach the server
+instead of losing it — `updateOrder` wrote to the local cache and then to the
+database; a failure was reported to nobody and the order looked picked on
+that handset and untouched everywhere else. `OfflineOrderQueue` keeps the
+write, replays it when the connection returns, and the picking screen says
+how many are waiting. Only a failure that reads as a lost connection is
+queued: a rejection by the database is reported, because retrying it would
+not help — Rejected: the web's per-line queue shape, which does not fit an
+app that writes whole orders.
+
+2026-09-12 — The phone's AI scanning now goes through the web app first and
+falls back to a key on the handset — The per-device Google AI key is the same
+class of problem as the Drive key that was moved to the server on 2026-09-08:
+a secret handed to every phone. Scans now post to /api/scan-order and
+/api/scan-articles with the user's own Supabase token, so the key can live
+only on the server. The on-device key still works and nothing anybody set up
+stopped working (rule 1), so it is the fallback for a phone with no
+WEB_APP_URL or a server with no key.
+
+2026-09-12 — Consequence accepted: the phone's scan-order results now come
+back matched against the catalogue — The web route matches each scanned line
+to a product before replying, which the phone's own scan does not do. That is
+a better answer, not a worse one, but it means the same photo can produce
+slightly different line text depending on which path served it.
+
+2026-09-12 — Delivery proof accepts more than one photo on the phone —
+It wrote `INV<number>_<date>.jpg` every time, so a second photo of the same
+delivery overwrote the first. Numbering now matches the web's
+`deliveryProofName` exactly: the first keeps the plain name, later ones get
+`_2`, `_3`, so the Invoices screen's prefix search still finds all of them.
+
+2026-09-12 — `ArticleDetailSheet.swift` is dead code and was left in place —
+It has no callers; the live product sheet is `ProductDetailSheet` in
+ManagerProductsView. This matters because a parity audit read it as the real
+one and concluded the phone hid stock from salesmen, which it does not.
+Removing it is a deletion nobody asked for (rule 1), so it stays, noted.
+
+2026-09-12 — `route_visits` carries no `org_id`, against rule 3 — Nothing in
+this database has one: there is no `org_id` column, no `orgs` table and no
+tenant helper in any migration. A column referencing nothing would imply an
+isolation that is not enforced anywhere. The table follows this database's
+actual pattern instead — RLS enabled and FORCEd, scoped with
+`current_app_user_id()` and `current_role_is('manager')`. Flagged rather than
+invented.
+
+2026-09-12 — Adding an article the order already has adds to that line on
+both apps — The phone merged; the new web route opened a second line. Two
+lines for one article are not wrong, but they read as a mistake on an invoice
+and the same action should not produce differently shaped orders. The price
+already on the line is kept: it may have been negotiated, and another box is
+not a reason to reprice what was agreed.
+
+2026-09-12 — Reopening a packed order stamps it as edited on both apps —
+The phone's `reopenForRepack` stamped it and the new web route did not.
+Pulling a packed order back apart is exactly what the next person to look at
+it should see.
+
+2026-09-12 — The web's data grid leaves Orders and Users read-only — The
+phone's grid edits only Customers and Articles too. Editing orders from a
+spreadsheet would need a generic "update any table" route, which is a
+security hole, and users belong to the Users tab which already has its own
+rules.
+
+2026-09-12 — The backup download reads through the caller's own session, not
+the service key — So the file contains what that person is allowed to see and
+nothing more. `scripts/backup.mjs`, the nightly service-role backup to Drive,
+is a different thing and was not touched.
+
+2026-09-12 — SUPERSEDED the same day by "The remaining four differences are
+now aligned", below. Left in place because it records what was true for part
+of the day and why, which is the point of this log.
+2026-09-12 — Not aligned, deliberately: where things live on screen — The
+phone keeps a separate arrangeable reports board, one merged notifications
+screen and a Delivery section of its own; the web folds those into its
+dashboard, splits notifications into a bell and an inbox, and treats delivery
+as a stage of Orders. Each is a working screen people already use, and
+changing it is a change to an existing specified feature (rule 1). The
+underlying data and rules now match; the layouts do not, and that is the
+remaining difference.
+
+## 2026-09-12 — The tenancy check, and what rule 3 actually means here
+
+2026-09-12 — `npm run test:tenancy` now exists, and it tests the half of rule 3
+that is real — The script every task was supposed to be verified against had
+never been written, so three rounds of work were reported as "could not run
+it". It now exists as scripts/test-tenancy.mjs. What it proves is the thing
+that actually went wrong once: on 4 September the public key alone returned
+real rows from eight tables and could insert into `zones`. The check discovers
+every table and proves each refuses an anonymous read and an anonymous write —
+Rejected: introspecting pg_class for relrowsecurity, which needs a helper
+function and tests the mechanism rather than the outcome. What matters is
+whether data comes out, not which switch is set.
+
+2026-09-12 — The write probe sends a wrongly-typed value, so nothing can ever
+be written by the check itself — Postgres tests the privilege before it judges
+the value, so "permission denied" means the door is shut and a complaint about
+the value means it was not. An empty-object probe would have created real rows
+in any table that wrongly allowed it, which is how you turn a security test
+into a data incident.
+
+2026-09-12 — A probe that cannot reach the permission check reports "not
+probed", never "pass" — The first version sent `{"id": ...}` and counted four
+tables as failures because they have no `id` column, so PostgREST refused the
+request before Postgres ever saw it. A security check that cries wolf is worse
+than none. It now picks a column from the schema whose type cannot hold the
+probe value, and says so plainly when no such column exists.
+
+2026-09-12 — Rule 3's `org_id` half is reported, not enforced, until this
+database has a tenant key — No table has `org_id`; there is no orgs table and
+no tenant helper anywhere. A check that failed on all 25 tables every run would
+be switched off within a week. Instead the script names the tenancy model it
+finds, and the moment `org_id` appears on any table the rule becomes live
+automatically: from then on a table without it is a failure.
+
+2026-09-12 — Found by the new check: `order_items_safe` granted INSERT to
+anon, `products_safe` did not — Nothing can be written through it today (it is
+a view with no INSTEAD OF trigger), which is why it has been harmless. It goes
+anyway: both views deliberately run as their owner rather than as the reader
+(RUN-ME-15), so a write through one would carry the owner's rights. Fixed by
+scratchpad/RUN-ME-22-safe-views-are-read-only.sql. Neither app writes through
+either view — every reference on both sides is a SELECT.
+
+2026-09-12 — The remaining four differences are now aligned — Reports: the web
+gains the phone's arrangeable board above its financial tables, which are
+untouched. Notifications: the web's Inbox becomes the one page showing both
+what needs attention and the feed, and the bell stays as the quick glance;
+the phone gains the delete-a-news-post the web already had. Delivery: the
+phone now builds and files the tax invoice at delivery, as the web's
+finalize-delivery route does, and the web gains a Delivery destination for the
+warehouse. Photos: the web gains a Drive folder browser beside its catalogue
+gallery. In every case the existing screen was added to, never replaced.
+
+2026-09-12 — Drive search is now scoped to the photo library, and was not
+before — `searchDrive` queried everything the service account could see. Both
+callers are photo browsers, but the account also holds the private uploads
+folder: cheque photos, delivery proof, invoice PDFs. A salesman typing a
+customer's name into the product photo search would have been handed pictures
+of that customer's cheques. Nobody had to do anything wrong for that; it was
+one unscoped query. Drive cannot search a subtree, so the scope is named
+explicitly — the library root plus the category folders inside it — and cached
+for a minute because a search box asks on every keystroke. Found while adding
+the web's Drive browser; it has been reachable from the phone all along.
+
+2026-09-12 — The Delivery nav entry is hidden when delivery is switched off —
+`app_settings.delivery_enabled` already decides whether the warehouse has a
+delivery stage at all. Without the check, a business that hands goods over at
+approval would get a navigation item that lands on an empty stage. Mirrors how
+the Planning item is spliced in.
+
+2026-09-12 — Reading team news in the Inbox does not clear the bell's news
+badge — The bell keeps its own "last seen" marker in the browser and does not
+re-read it while mounted, so writing it from the Inbox would not update the
+badge anyway. Left as it is rather than half-wired; the badge clears when the
+bell is opened, as it always has.
+
+2026-09-12 — The orders page now reads a `?stage=` parameter, but does not
+write one — It is what the Delivery nav entry lands on. Making every stage pill
+push a URL is a change to how that screen has always worked and nobody asked
+for it.
+
+## 2026-09-12 — This is one business, and the rules now say so
+
+2026-09-12 — The owner settled it: this application is not being sold to
+anyone else — Asked directly whether multi-tenancy was a real plan, the answer
+was no. That closes a question the working rules had left open since they were
+written, and it is a decision about the business, not about the code, so it
+does not expire the next time somebody reads rule 3 and wonders.
+
+2026-09-12 — CLAUDE.md rule 3 now describes what is actually enforced —
+It asked for `NOT NULL org_id` on every business table. No table has ever had
+one, so for the life of this project the rule has been half-followed and
+half-ignored, and every session that read it either invented a column nothing
+else used or quietly skipped the rule — and, having skipped it once, skipped
+the RLS half with it. It now reads: RLS enabled and FORCEd on every table, and
+nothing reachable without signing in, proved by `npm run test:tenancy`. The
+org_id sentence is replaced by an instruction not to add one — Rejected:
+leaving the rule as an aspiration, which is how it came to be ignored.
+
+2026-09-12 — The check now treats an `org_id` appearing as a failure, not as
+a mode switch — Its earlier behaviour was to start enforcing the column the
+moment one appeared anywhere. With the decision settled the other way, a
+column turning up means either the decision changed or something was added by
+mistake. Both are worth stopping for, so it says so instead of silently
+changing what it enforces.
+
+2026-09-12 — The opening line of CLAUDE.md called this a multi-tenant SaaS
+application, and the document list named four specifications that were never
+written — Both were read first by every session and both were false. The
+framing now says what this is: one business, two clients, one database. The
+list now names the four documents that exist and says plainly that the other
+four do not, so nobody stops work over a spec section they cannot cite.
+
+2026-09-12 — Rules that are still contradicted by the codebase, left alone
+and flagged rather than quietly rewritten — Rule 6 says money is integer minor
+units; every price, target and total in both apps is a decimal. Rule 7 says
+user-facing strings live in an i18n catalog; there is no catalog and every
+string is inline. Rule 8 says long-running work goes on a queue; the bulk
+invoice export and the AI scans run in request handlers. The architecture
+section says images go to Cloudflare R2; they go to Google Drive. Each is a
+real engineering decision with consequences, and unlike tenancy none has been
+put to the owner — so they stay as written until it is.
+
+## 2026-09-12 — Fixing the four rules the code contradicted
+
+2026-09-12 — RUN-ME-22 was wrong and RUN-ME-24 replaces it — It revoked the
+write privileges on the two safe views from `anon` and `authenticated`. It ran
+cleanly and did exactly what it said, and the privilege was still there: it is
+held by PUBLIC, the pseudo-role every role inherits from, so revoking from a
+role that is only inheriting it takes nothing away. RUN-ME-24 revokes from
+PUBLIC, grants SELECT back to `authenticated` alone, and narrows the schema's
+default privileges so the next view is not born writable. My mistake, not a
+mistake in how it was run — and the reason the tenancy check kept failing
+after it had been applied.
+
+2026-09-12 — Rule 6 was already true of the database and false of the app —
+Every money column is Postgres `numeric`, which is exact decimal: there has
+never been a float in the schema. But every figure the apps COMPUTE is a
+float, and they were written to those exact columns unrounded, so an order
+could be billed and VAT-returned as 1234.5600000000002. Both apps now count in
+fils and round once: `lib/money.ts` and `Money.swift` do the same arithmetic in
+the same order, because they bill the same orders. `npm run test:money` proves
+no figure with more than two decimals can reach the database and that the
+lines plus the VAT equal the total — Rejected: converting the money columns to
+integer minor units, which is what the rule literally asks for. It would
+rewrite every historical invoice and VAT record on a live system to buy
+exactness the `numeric` columns already have. The rule exists to keep float
+error out of money; that is now achieved. Raised with the owner rather than
+done silently.
+
+2026-09-12 — VAT is rounded once and the total is the sum of rounded figures —
+Not subtotal × 1.05, which can disagree with subtotal + VAT by a fil. A
+customer adding the invoice up by hand gets the number printed on it.
+
+2026-09-12 — The product photo endpoint was handing every grid tile the
+full-resolution file — `/api/product-photo` fetched the original bytes from
+Drive for every caller, including the 144px tiles in the product list and the
+order sheet. It now takes a `w=` and serves Drive's own rendered thumbnail at
+that width, falling back to the original only when Drive has not made one yet.
+Only the zoomed detail sheet asks for the original. The phone already did this
+correctly, so this was a web-only fault.
+
+2026-09-12 — The architecture line named Cloudflare R2, which has never been
+used — Storage is Google Drive and has been throughout. Moving would need a
+new account, which the cost-discipline rule says to ask about first, and would
+mean relocating every existing photo, cheque, delivery proof and invoice PDF.
+The line now describes Drive and says to ask before proposing R2. The
+substantive half of that rule — never serve a full-resolution image to a grid
+— is now real and enforced in code. Serving WebP/AVIF is still not done: it
+needs an image library, which is a dependency, which the same rule says to ask
+about.
+
+2026-09-12 — The iPhone app's test suite has never been runnable, and still
+is not — `xcodebuild test` on the Billing scheme fails before it compiles a
+single test: the "Famlist Billing Watch AppTests" target's TEST_HOST points at
+`Billing.app`, the iOS app, copied from the iOS test target when the Watch
+target was added from an Xcode template. Pointing it at the Watch app instead
+produces a dependency cycle, because the iOS app embeds the Watch app; marking
+it skipped in the scheme does not help, because the scheme still builds it.
+The target contains nothing but the two empty template methods.
+   The proper fix is to take that target out of the Billing scheme's test
+action in Xcode, or delete it — both are project-structure changes on a target
+somebody deliberately created, so they are the owner's call (rule 1). The
+project file and the scheme were restored exactly as found.
+   Consequence worth knowing: there are eight test files in BillingTests that
+have never run. One of them, StatementExportTests, had been calling a
+`CustomerStatementExporter.rows` signature that stopped existing some time ago
+— it now calls the real one, which is how that rot was found.
+
+2026-09-12 — `Money.swift` is verified against the web app's figures rather
+than through the broken test target — `BillingTests/MoneyTests.swift` was
+written and stays for when the suite runs, but it cannot run today. The
+arithmetic was instead checked by compiling the real Money.swift on its own
+and running the same cases as `npm run test:money`: every figure matches the
+web's to the fil, including the 37-line and 120-line orders. The two apps bill
+the same orders and now reach the same numbers.
+
+2026-09-12 — Every user-facing string on the web is now in a catalogue —
+`lib/i18n/en.ts` holds 1,551 keys and `t()` is called in 2,147 places across
+118 files. There is one language, so there is no provider, no locale
+switching and no async loading: `t()` is a plain typed lookup usable from a
+server or a client component, and a key that is not in the catalogue is a
+TypeScript error rather than an empty string. Building the machinery for
+languages nobody has asked for would be adding a feature (rule 2); making the
+strings addressable is what rule 7 actually asks for.
+
+2026-09-12 — RESOLVED the same day, see "The twenty duplicate sentences are
+gone" below.
+2026-09-12 — Known debt: 20 sentences have two keys each — Each area was
+migrated separately and told not to add to `common.*`, so the goal/bonus
+editor, which exists twice in the source, produced pairs like
+`sales.goalInvalid` and `settings.goalOutOfRange` with identical English.
+They render identically; the cost is that changing one and forgetting the
+other is possible. Collapsing them means re-touching twelve already-verified
+files for no user-visible gain, so it is recorded here rather than done at
+the end of a long session. (A further 113 duplicates are single words used as
+column headings in different screens — those are fine as they are, because
+the same English word is not always the same label.)
+
+2026-09-12 — Postgres is the queue, and the worker is a request — Rule 8 says
+long-running work goes on a queue, and the app had four things running inside
+request handlers: the bulk invoice export (up to 200 PDFs), the spreadsheet
+import, and the two AI scans. There is no worker host and cost discipline
+rules out renting one, so `jobs` is a table and `/api/jobs/run` is the worker.
+Claiming is a conditional `update ... where status = 'queued' returning`, so
+two tabs racing both send the same statement and exactly one gets the row.
+
+2026-09-12 — The bulk export is sliced and zipped in the browser, not polled —
+Its result is a file, not a row, and there is nowhere to park 200 PDFs for a
+poller to collect later (images go to Drive; there is no object store). The
+worker builds twenty invoices per call and returns them; the browser
+accumulates and zips. That removes the timeout and makes the progress bar
+honest — it counts invoices actually built, rather than guessing.
+
+2026-09-12 — All four jobs keep their original inline route as a fallback —
+Until RUN-ME-23 is run there is no `jobs` table, so enqueueing answers "not
+queued" and the caller falls through to the old endpoint. Both paths call the
+same functions in `lib/job-runners.ts`, so they cannot drift.
+
+## 2026-09-12 — The phone's test suite runs, and what it found
+
+2026-09-12 — The Watch test target was removed from the Billing scheme's test
+action, and nothing was deleted — It is Xcode template scaffolding containing
+two empty methods, and it was listed as a testable of the iPhone app's scheme.
+That is what stopped the suite building: its host app is the watch app, and
+wiring it up produces a dependency cycle because the phone app embeds the
+watch app. Taking it off the phone app's scheme is the smallest change that
+works. The target still exists and can be run from the watch app's own scheme
+if anyone ever writes a watch test — Rejected: deleting the target, which
+removes something somebody created; rejected marking it skipped, which does
+not stop it being built.
+
+2026-09-12 — 37 tests now run and pass. Seven were failing the moment the
+suite could build, every one of them because the test was stale rather than
+the code being wrong:
+   * Three AnalyticsTests expected sales figures to include VAT. Both apps
+     report sales EXCLUDING it on purpose — `monthTotal` says "pre-VAT" and the
+     web's `saleValue` reads `subtotal`. VAT is collected for the government
+     and is not revenue. The expectations dated from before that decision.
+   * Two ExcelExportTests expected "AED" and "EA" in the spreadsheet. It
+     writes bare numbers so a spreadsheet can sum them, and spells the unit
+     "Each". The PDF is where the currency appears.
+   * StatementExportTests still built its fixture with status "Completed",
+     which stopped being the delivered status, and still expected to be handed
+     a payments figure that now comes from the database. Rewritten to assert
+     what is true with no database behind it.
+   * DraftStoreTests passed alone and failed in the full run: the suites run
+     in parallel and share UserDefaults, so a fixed half-second wait for a
+     background flush was a coin toss. It now waits for the value instead of
+     guessing how long it takes.
+
+2026-09-12 — Found by the newly-running suite: the Excel export hard-wired 5%
+VAT — Same fault as the PDF exporter earlier today. A customer in a zone with
+a different rate got a spreadsheet that disagreed with the invoice they were
+billed. It now uses the order's rate and counts in fils like everything else.
+
+2026-09-12 — The twenty duplicate sentences are gone; the hundred and
+thirteen duplicate words stay — Eighteen of the twenty were the goal, bonus
+and incentive editor, which exists as a 1:1 copy on the Sales page and in
+Settings. The `sales.*` keys were kept and the `settings.*` twins deleted:
+the subject is sales goals, and four of the Settings names actively lied
+(`settings.monthlyGoalTitle` held hint text, not a title). They did NOT move
+to `common.*` — they are one feature's strings on two screens, not app-wide
+vocabulary. The other two were an import message that belongs to the shared
+import button, and a scanning error that belongs to neither area and did go
+to `common.*`.
+   The 113 single words — "Customer", "Date", "Amount", "SKU" — stay as they
+are. The same English word is not always the same label, and merging them
+removes the ability to reword one screen without rewording another.
+   Left knowingly inconsistent: "The scan failed" still has two keys while
+its sibling "Couldn't reach the server while scanning." was collapsed, in the
+same two components. It is a three-word fragment rather than a sentence, so
+it falls on the "leave it" side of the rule — noted because the result looks
+odd side by side.
+
+2026-09-12 — Eight catalogue keys are referenced by nothing, and were left —
+Seven are `common.*` (`retry`, `next`, `yes`, `no`, `add`, `export`,
+`refresh`) and read as a deliberately seeded shared vocabulary; one,
+`products.noProductRowsFound`, is genuine dead weight left behind when that
+string moved into the job runner. Deleting untouched keys is not part of a
+de-duplication job (rule 2), so they stay until somebody decides.
+
+2026-09-12 — The iPhone app's strings are in a catalogue too, in the shape
+Swift wants — `Billing/Strings.swift` defines `enum S` with a `common` area,
+and each screen area adds its own `extension S` in its own file
+(`Strings+Orders.swift` and so on) so several areas can be migrated without
+fighting over one file. Nested enums of `static let` rather than a dictionary
+lookup: a name that does not exist is a build error, and there is no runtime
+lookup to return an empty label to somebody. Strings that vary are `static
+func`, so a call site cannot forget an argument. Area names match the web's
+key prefixes, so a string that exists in both apps is findable in both.
+
+2026-09-12 — Three kinds of Swift string were deliberately left inline, and
+getting this wrong would have been silent — SF Symbol names, `UserDefaults`
+and `@AppStorage` keys, and any enum `rawValue` that is persisted or compared.
+Several product and report enums use their display label AS their `rawValue`
+and write it to storage: those kept the `rawValue` byte for byte and gained a
+separate `label` property, so a person's saved column layout survives. Status
+values, Supabase column names, CSV headers, Drive file-name patterns and date
+formats stayed put for the same reason: they are read by a machine, not a
+person.
+
+2026-09-12 — Some visible text is stored data first, and was deliberately
+left inline — Three of these turned up, and each would have broken something
+quietly if it had been moved behind a symbol somebody could later reword:
+   * `"Packed by <username>"` is written into `orders.manager_note` and then
+     matched with `localizedCaseInsensitiveContains` against notes already in
+     the database, so that re-packing does not stack the tag twice. Reword it
+     and it stops matching every row written before the change.
+   * The tab-bar section titles are joined and saved under
+     `tabs.order.<role>`, and read back by comparing the saved title against
+     the enum's. Change one and a person's arranged tab bar silently empties.
+     A comment now records what a future change would have to migrate.
+   * Payment notes ("GRV credit applied: …", "Discount applied by …") and the
+     body of the manager's change-request notification are written to the
+     database and are deliberately word-for-word the same as the web app's.
+   Moving any of them is a decision about existing rows, not a refactor.
+
+2026-09-12 — Enums whose display label is also their stored value keep the
+value and gain a label — Products columns and sort keys, report tabs, expense
+categories, payment and cheque statuses, the login role, and the sales widget
+identities all did this. In every case the `rawValue` is byte-for-byte what it
+was, because it is what sits in `UserDefaults` or in a database column, and a
+separate `label` property is what the screen now reads. Nobody's saved column
+layout, sort order or tab arrangement moves.
+
+2026-09-12 — Known debt: a second pass should pull shared words into
+`S.common` — Each area was migrated in isolation and told not to edit the
+shared file, so a handful of words exist twice: "AED", "Grid"/"List",
+"Manage Team", "Change Password", "Customers"/"Payments"/"Invoices"/"Orders",
+"Ready", "Info", "Saved", "Error", and a few formatting helpers such as
+"\(n)d" and "Page x of y". They render identically today. Collapsing them is
+the same contained follow-up the web catalogue had, and is best done in one
+pass now that every area has landed.
+
+2026-09-12 — Three different characters mean "no value" and that was left
+alone — `S.common.notSet` is an em dash, the Sales page has always drawn a
+plain hyphen, and the aging table an en dash. They are genuinely different
+glyphs in the original, so they stayed different rather than being quietly
+normalised into one. Worth reconciling deliberately if anybody cares.
+
+## 2026-09-13 — Shared stock: many SKUs on one shelf, and moving one is asked about
+
+2026-09-13 — Confirmed and documented: a shelf carries any number of SKUs,
+not two — The owner's reason is online selling, where one physical stock is
+listed under several model, size or colour SKUs and the specific SKU has to
+appear on the invoice. The design already supported it: the link is a shared
+group id rather than a pair, the picker excludes the product itself and
+everyone already on the shelf so adding can be repeated, and approval pools
+by group so three linked SKUs on one order cannot between them take more
+than the one figure. `scratchpad/CHECK-shared-stock-with-many-skus.sql`
+proves it against the live database inside a transaction that rolls back, so
+it can be run without touching real stock.
+
+2026-09-13 — Adding a product that already shares another shelf now names
+what it is leaving and asks — A SKU belongs to one shelf, so adding it to a
+second takes it off the first, and whoever it was sharing with is left
+holding the figure they had at that moment. Nobody would guess that from a
+button called "add". Both apps now stop, name the SKUs being left behind,
+and do nothing until the person says to move it — Rejected: refusing the
+move outright, which removes something that was possible before (rule 1);
+rejected merging the two shelves, which would link products nobody asked to
+link.
+
+2026-09-13 — The rule lives in the web route AND in AppDataManager, on
+purpose — The phone writes to `products` directly rather than through the web
+app, so a guard in the route alone would not cover it. Both implementations
+ask the same question and skip it in the same case: a group of one is not a
+shelf anybody shares, so leaving it costs nothing and is not worth a dialog.
+
+2026-09-13 — Not built, worth knowing: the product LIST does not show which
+rows share a shelf — Only the detail sheet and the editor do. With an online
+catalogue where many SKUs are variants of a few physical products, a marker
+in the list might matter. Nobody asked for it, so it is recorded rather than
+added (rule 2).
+
+## 2026-09-15 — The Watch app became a real companion, not just a notification viewer
+
+2026-09-15 — Scope, agreed with the owner before building: warehouse users
+can tick order lines picked directly on the watch; manager and salesman
+users get their phone's primary tabs as swipeable pages instead of a tab
+bar. This was not in a spec — there was none for the watch beyond the
+existing notification viewer — so it was confirmed with the owner
+(Watch picking scope / Tab paging scope / Sequencing) before any code was
+written, per rule 2.
+
+2026-09-15 — The watch has no Supabase session of its own and still
+doesn't — `WKRunsIndependentlyOfCompanionApp` was already `NO` and stays
+that way. `AppDataManager` (phone) pushes a role-scoped snapshot of
+orders/customers/articles to the watch over `WCSession.updateApplicationContext`
+(`WatchOrderSync.swift`), and the watch sends pick toggles back over
+`sendMessage`/`transferUserInfo` (`WatchAppData.swift`), applied by
+`AppDataManager.togglePickFromWatch` — the same rule
+`WarehouseOrderPickView.togglePick` uses in-app, with the picker of record
+being whoever is signed in on the paired phone. Rejected: giving the watch
+target its own Supabase client/entitlements and querying directly — nothing
+technically blocks it, but it would mean a second place holding
+auth/session state for one login, and the cost-discipline rule says ask
+before adding new account/API-key surface. Not asked, not built.
+
+2026-09-15 — The existing Watch notification viewer (`ContentView.swift`,
+`WatchNotificationsStore`) was left untouched and kept as the last page —
+rule 1 says never remove a shipped feature without asking, and it wasn't
+asked. `Famlist_BillingApp.swift` now opens on the new `RootPagedView`
+instead of `ContentView` directly, but `ContentView` itself is unmodified
+and still reachable by swiping to the last page.
+
+2026-09-15 — Watch pages mirror each role's phone `phonePrimary` order
+exactly (`AppNavigation.swift`): Manager = Dashboard/Orders/Customers/
+Products, Salesman = Dashboard/Orders/Sales/Products, Warehouse =
+Dashboard/Orders/Products/Customers — so nobody has to relearn an order
+that already exists on the phone.
+
+2026-09-15 — The watch payload never carries `cost`, `lineCost` or
+`grossProfit` — the DTOs (`WatchArticlePayload`, `WatchOrderItemPayload`)
+simply don't have the fields, so there is no per-role gate to get wrong or
+forget (docs/why-cost-prices-are-hidden.md).
+
+2026-09-15 — The application-context push is capped at 25 orders / 50
+customers / 50 articles (`WatchOrderSync.swift`), newest/alphabetical
+first — the watch is for glancing at active work, not the full history,
+and a large `updateApplicationContext` dictionary is slow to deliver over
+Bluetooth. Silent truncation is noted here because nothing in the UI says
+"and N more" — Rejected: paging the sync itself, which is not worth the
+complexity for a first cut of a feature nobody had asked for before today.
+
+2026-09-15 — A pick made on the watch is optimistic locally
+(`WatchAppDataStore.localPickOverrides`) until the next snapshot from the
+phone confirms it, mirroring how the phone's own picking screen updates the
+UI before the network write lands — Rejected: waiting for a reply before
+showing the tick, which would make the watch feel slower than the phone for
+the exact same action.
+
+2026-09-15 — Signing out on the phone now also clears the watch's copy
+(`AppDataManager.onSignedOut` calls `WatchOrderSync.shared.clear()`) — a
+shared warehouse handset already lets the next person choose a different
+role (2026-09-04, "the device remembers the role last chosen"), and a
+former user's orders/customers must not linger on the watch after that
+switch.
+
+## 2026-09-18 — Discounts and returns at collection become real, and six owner requests
+
+Everything in this section was asked for by the owner in one message; that
+message is the specification (there is no other). Both apps were changed.
+
+### Collecting a payment
+
+2026-09-18 — A discount given while collecting now comes off the selected
+invoices together with the cash, oldest first — Both apps wrote "Discount
+applied by …" into `payments.notes` and nothing else. Only the per-invoice
+slices in `payment_orders` decide what an invoice owes, so the discount
+settled nothing and the customer went on owing it. The phone was worse: it
+wrote the NET amount as the payment and allocated only that, so a 10%
+discount on 1,000 left the customer owing 100 more than before they paid.
+`payments.discount_amount` (RUN-ME-25) now holds the figure, and the slices
+carry cash + discount — Rejected: a separate `discount_amount` on each
+`payment_orders` row. It would be the more exact ledger, but every reader of
+a balance on both apps (aging, statements, the Orders "received" column,
+planning) would have had to learn a second column at once, and an un-updated
+phone would have gone on ignoring discounts. One figure per slice means every
+existing reader is right without changing.
+
+2026-09-18 — Consequence accepted: "Received" on a statement and on the
+Orders list now includes discounts — It is what settled the invoice, which is
+what that column has always meant. `payments.amount` is still cash only, so
+"Collected" on the Payments page and in reports is still money in hand.
+
+2026-09-18 — The allocation rule lives in one tested function per app —
+`allocateFifo` / `settledNow` in lib/money.ts, `Payments.allocate` /
+`settledNow` in Payments.swift, counted in fils, with the same cases in
+`npm run test:money` and BillingTests/PaymentAllocationTests. Ticked invoices
+oldest first, then the customer's other invoices oldest first, never more
+than an invoice owes, anything left over stays unallocated.
+
+2026-09-18 — A goods return typed while collecting is raised as a pending GRV
+request for that amount, under that customer — It was a sentence in the
+payment's notes. It created no `grv_returns` row, so no manager ever saw it,
+while the collection screen showed the balance as settled. It is now a
+request (`grv_returns.amount`, `payment_id`, `notes`; no lines yet) that
+appears in Payments → Returns (GRV) and in the manager's Inbox, already
+carrying the customer. The manager opens it, enters the products that came
+back, and approves; only then does it come off the balance — Rejected:
+crediting it immediately, which is what the old screen pretended to do.
+
+2026-09-18 — What an approved return credits: its `amount` when it has one,
+otherwise the value of its lines — The amount is what the collector and the
+customer agreed at the door, VAT included, because it was set against invoice
+totals. The lines are there so the GRV product report is right, and the
+manager can change the amount while entering them. Returns logged before
+today have no amount and are valued from their lines exactly as before. On a
+statement an amount is split into ex-VAT and VAT rather than grossed up, so
+the statement comes down by exactly what aging took off.
+
+2026-09-18 — NOT changed, worth knowing: a return with no amount is credited
+ex-VAT by aging and VAT-inclusive by the statement — `fetchApprovedGrvCredit`
+sums qty × unit_value; the statement adds VAT on top of the same figure. They
+have always disagreed by the VAT on old-style returns. Returns raised with an
+amount do not have the problem. Which of the two is right is a question about
+how credit notes are issued, so it is recorded rather than decided here.
+
+2026-09-18 — A return cannot be approved until at least one product is on it
+— The owner's reason for the manager's step is "so that we can get the GRV
+product report correct". A request approved with no products would credit
+money against goods nobody can name.
+
+2026-09-18 — The return still credits the customer's OLDEST outstanding
+invoices, not specifically the ones ticked while collecting — That is how an
+approved return has always been applied (aging, both apps), and the owner
+asked for it to "cancel from the total". Tying a return to particular
+invoices would need a `grv_orders` table and a second allocation rule on both
+apps.
+
+2026-09-18 — The GRV field on the phone's collection sheet is now shown to
+every role — It was manager-only there and open to everyone on the web. It
+is now a request that needs a manager's approval either way, so there is
+nothing for a salesman to abuse by typing one.
+
+2026-09-18 — A collection that is nothing but a return writes no payment —
+Cash 0, discount 0, GRV 250 creates the request and nothing else. A zero
+payment row would be noise in every list.
+
+2026-09-18 — The note text changed from "GRV credit applied: X." to "GRV
+request raised: X." on both apps — The old wording claimed something that
+was not true then and is not true now. Rows already written keep the old
+text; nothing matches on it.
+
+### Editing afterwards
+
+2026-09-18 — Saving an edited payment re-cuts its slices — Editing the amount
+changed `payments.amount` and left `payment_orders` alone, so the edit
+changed nothing anybody ages against. `reallocatePayment` /
+`Payments.reallocate` re-apply cash + discount to the invoices the payment
+was already on, oldest first, then the customer's others. Each invoice's room
+is what it owes WITHOUT this payment, so a confirmed payment's old slices do
+not crowd out its new ones — Rejected: a screen for re-picking invoices by
+hand, which is a bigger feature than "make it editable".
+
+2026-09-18 — Managers and admins can edit a payment's discount and status;
+a collector editing their own payment cannot — The collector's existing right
+to correct their own entry (and the manager being told) is unchanged. On the
+phone admins were locked out of payment editing altogether
+(`isManager` without `isAdmin`); fixed.
+
+2026-09-18 — Managers and admins can edit a return after entry — amount,
+note and products, pending or approved — and remove a pending one — There was
+no update or delete policy on `grv_items` at all, so a typing mistake was
+permanent. Correcting the lines of an APPROVED return moves stock by the
+difference (three cartons corrected to two takes one back off). An approved
+return cannot be removed: it has moved stock and credited a customer, and the
+way to undo that is to correct it.
+
+2026-09-18 — NOT built: changing which customer a payment belongs to — "Make
+sure everything is editable" was read as every figure and field on the
+record. Moving a payment between customers re-cuts slices across two ledgers;
+the safe way to fix that mistake today is to set the payment to 0 / pending
+and log it again under the right customer. Say if it is wanted.
+
+2026-09-18 — Approving a return twice no longer restores stock twice —
+`approveGrv` / `Grv.approve` read the status first.
+
+2026-09-18 — The GRV report gained "Returned products" (both apps) — approved
+returns only, grouped by product, with a CSV. The owner named "the GRV product
+report"; the existing tab listed returns by customer and had no product in it
+anywhere, so there was nothing for the products a manager enters to feed.
+
+### Route planning
+
+2026-09-18 — The phone already had a route planner; it opened empty — More →
+Planning, for managers and salesmen. It built nothing until a city was typed,
+so nobody ever saw a route, which is what "the page is not there" was. It now
+opens on a recommended route, and the city is an optional filter.
+
+2026-09-18 — Collecting money ranks first on both apps, from real balances —
+Tiers: overdue, then "payment to collect" (owes anything, not yet overdue),
+then the idle tiers. The web ranked by the face value of old invoices and the
+phone by a sum of order totals; both ignored payments, so they sent people to
+collect from customers who had paid. Both now read the shared aging (after
+confirmed payments, discounts and approved returns), judged per invoice
+against the customer's own overdue threshold.
+
+2026-09-18 — Today's hand-arranged route is remembered on the device, not in
+the database — localStorage on the web, UserDefaults on the phone, keyed by
+day and by whose route it is, with "Back to recommended". It is one person's
+working order for one day. A table would be a new thing to secure and sync
+for something nobody else reads — Rejected: a `routes` table.
+
+2026-09-18 — On the phone, collection stops always come before the rest, and
+nearest-neighbour ordering runs separately inside each group — Ordering purely
+by distance could put the biggest overdue account last. Only the first 12
+stops are geocoded (Apple rate-limits it) and the list is capped at 25, with a
+line saying so. Once a route is edited by hand, the person's order wins until
+they go back to recommended.
+
+2026-09-18 — Phone planner details decided by the engineer, recorded for the
+owner: an "All salesmen" row in the manager's picker (as the web has);
+removed stops are remembered for the day; the idle tiers were fixed to match
+the web (60+ days was unreachable because 30+ was tested first); every leg of
+the route is now drawn, not only the first. KNOWN GAP: the phone's customer
+list does not carry `is_active`, so an inactive customer can appear on a
+phone route; the web filters them out.
+
+### Imports
+
+2026-09-18 — One definition of each sample sheet per app (lib/importSamples.ts)
+— The same four samples existed twice on the web (the screen and Settings →
+Data) and had already drifted. Each lists every column its importer reads,
+marks only the truly required ones, and fills every cell with an example.
+
+2026-09-18 — Customers' District, Address and VAT No are no longer starred as
+required — The importer has only ever required Code and Name; the sample said
+otherwise.
+
+2026-09-18 — For a customer or product that already exists, a column left out
+or a cell left blank KEEPS what is stored — The upsert wrote defaults for
+anything missing, so importing a sheet of SKUs and stock counts reset every
+price to zero, and a sheet of codes and phone numbers wiped every address.
+Defaults now apply only to new rows. Stock already worked this way.
+
+2026-09-18 — A starred header uploads — The sample writes `Code*`; the parser
+kept the star, matched nothing, and refused the one file that should always
+import.
+
+2026-09-18 — New optional columns: customers take Country, Salesman (by name
+or username; an unknown name is reported back) and Active; products take
+Active; orders take PO Number and Note (the note is appended to the
+"Imported (…)" manager note).
+
+### Statement PDF
+
+2026-09-18 — The statement is drawn from the invoice's own letterhead and
+palette, not a copy of them — lib/pdf/statement.ts imports the page, colours
+and letterhead from lib/pdf/invoice.ts. It also paginates: the old one
+stopped drawing at the foot of page one and printed the closing balance of
+rows it had silently left out.
+
+### Per-product discount
+
+2026-09-18 — The manager's per-product discount is stored as the price it
+produces; there is still no discount column on order_items — The 2026-09-04
+decision stands: a line charges its unit_price, and the invoice's Discount
+column is the gap between list price and that. "Disc %" in the order's line
+table (manager/admin only) sets unit_price = list × (1 − N%), and reads back
+as the gap. The server works it out from the list price it reads itself and
+refuses anyone who is not a manager — Rejected: a `discount_percent` column,
+which would give an order two answers to "what does this line charge".
+
+2026-09-18 — Consequence accepted: a discount is measured against TODAY'S
+list price — If the list price changes after the order is written, the
+percentage shown changes with it. The invoice's Discount column has always
+worked this way.
+
+### The customer's old price
+
+2026-09-18 — One rule, `resolveLinePrice`: a price written on the document >
+the price this customer was last billed > list less the customer's standing
+discount > list — It was written out three times and one copy had drifted:
+adding an article to an order already written ignored the customer's standing
+discount, so the same article cost one price on a new order and another when
+added afterwards.
+
+2026-09-18 — A remembered price of zero is not a price — It is what a free
+sample or a mis-keyed line leaves behind, and honouring it would bill that
+customer's next order at nothing. It falls through to the discount or the
+list price.
+
+2026-09-18 — FOUND by the new live check: no customer has an old price yet —
+`npm run test:prices` reads the live book (read-only): 530 billed orders, 0
+billed lines, 0 remembered prices. The order history was loaded without its
+line items, so there is nothing to remember a price from. Old prices start
+from the first order approved in the app. To have them for past invoices the
+historical invoice LINES need importing — that is a data job for the owner to
+decide, not something done here.
+
+### What the iPhone engineers decided on 2026-09-18 (logged here; the iOS project has no log of its own)
+
+2026-09-18 — The phone retries a payment insert only when the DATABASE refused
+it, never on a network error — A timeout may mean the row was written; retrying
+could log the same collection twice. The web retries on any error and should
+probably follow.
+
+2026-09-18 — `Grv.delete` checks the return is pending BEFORE removing lines —
+The web removes lines first, which would strip an approved return's lines
+before the header delete is refused. Worth mirroring on the web.
+
+2026-09-18 — The phone's statement is drawn from the PHONE's invoice, which is
+not the web's — The phone's invoice has no logo, no brand-blue company name,
+no shaded title bar and no brand strip, and none of those assets is in the iOS
+bundle. "Similar to the invoices" was therefore honoured per app. Giving the
+phone the web's letterhead means changing the phone's invoice and adding
+assets, which is the owner's call.
+
+2026-09-18 — FOUND and fixed on the phone: AMOUNT DUE on the statement was the
+SUM of the running-balance column — Three unpaid invoices of 100 printed
+AMOUNT DUE 600. It is the closing balance now, on the PDF and the Excel.
+
+2026-09-18 — On the phone the order-wide discount slider still applies on top
+of a customer's old price; on the web a standing discount applies only when
+there is no old price — Kept as found and commented, because changing it
+reprices orders. The zero-price guard and fil rounding were added on both.
+
+2026-09-18 — Disc % on the phone is a column on iPad and a field under the
+price on iPhone, and exists in the two places a line price is editable
+(NewOrderView, ManagerOrderEditorView) — In NewOrderView price editing is
+manager-only, so an admin sees Disc % read-only there; widening that is a
+who-may-edit change (rule 1).
+
+2026-09-18 — Phone imports: PO Number and Note are in the orders sample but not
+yet carried — The phone's order import fills ONE new order in NewOrderView from
+Article/Quantity/Price; carrying invoice grouping, customer, salesman, PO and
+note needs a real bulk importer. The sample matches the web's so one sheet
+serves both.
+
+2026-09-18 — Phone imports write per-row updates plus a bulk insert, not an
+upsert — A full-row upsert would have to read `cost`, which staff sessions are
+not granted. Same outcome, no cost read. A stated cell that is not a number is
+treated as "not stated" (the web writes 0) so a typo cannot zero a price.
+
+## 2026-09-18 (second round) — statements by what is owed, FAB, and slow photos
+
+2026-09-18 — The statement people are sent lists only what is still owed; a
+separate "Paid statement" lists what has been settled — Owner's request. The
+default scope of every statement download (PDF, Excel, shop, group) is now
+`outstanding`; `scope=paid` is the button beside the Paid row; `scope=all` is
+the old full ledger, still answered, no longer offered. Nothing was removed:
+outstanding + paid is every invoice.
+
+2026-09-18 — "Settled" on a statement is decided by the shared aging, and the
+goods-return rows are left out of a scoped statement — The customer sheet
+already splits invoices into owed and Paid using aging (after payments,
+discounts and approved returns applied oldest-first). Using the same split
+means the statement and the screen never disagree about which invoice is paid.
+Aging has already folded each approved return into "received", so listing the
+return rows too would take the credit off twice.
+
+2026-09-18 — Statement files and Excel tabs are named after the customer —
+"Statement M&SAVE SUPERMARKET LLC (20417) 18.09.2026", as the owner's own
+sheets are ("M&SAVE_31.08.2026"). They were "Statement-20001-2026-09-18". The
+name is also the largest text in the Bill To box and is repeated on
+continuation pages.
+
+2026-09-18 — Bank details are First Abu Dhabi Bank, printed exactly as the
+owner's sheet prints them — The IBAN (AE09 0351 0013 2711 9433 001) passes its
+checksum. FLAGGED TO THE OWNER: the sheet's "ACCOUNT NO" line ends …000 while
+the account number inside the IBAN ends …001. Printed as provided; one of the
+two is probably a typo on the sheet, and it is on every statement.
+
+2026-09-18 — Product photos: the server now remembers what it has fetched —
+Each grid tile cost five network trips in a row: verify the token, read the
+staff row, read the photos-folder setting, ask Drive for the thumbnail's link,
+fetch the thumbnail. The 12 September thumbnail change is what made it slower
+than before: fewer bytes, but two calls to Google per tile instead of one.
+Now: thumbnail bytes are held in memory by file and width (48 MB ceiling,
+least-recently-used first out, 12 h), thumbnail links for 45 minutes, the
+folder id for 5 minutes, identical concurrent requests share one fetch, and
+uploading a photo clears it all. A repeat tile costs no call to Google for
+anybody — Rejected: a CDN or image service (a new account, cost discipline);
+rejected storing thumbnails in the database.
+
+2026-09-18 — A login that was just verified is remembered for one minute, in
+the photo route ONLY — By a SHA-256 of the credential presented, never the
+credential; only a successful check writes to it, so a forged token never gets
+in (verified: 401 twice running). Consequence accepted: a member of staff who
+is deactivated can load product PHOTOS for up to a minute longer. Nothing that
+reads or writes business data uses this shortcut.
+
+2026-09-18 — NOT measured: the photo speed-up could not be timed from the
+development machine, because the Drive credential would not authorise outside
+the running app and the app sits behind a login. The change was verified by
+build, by reasoning about the call count, and by confirming the route still
+refuses strangers. The owner's own eyes are the measurement.
+
+### The phone's half of the second round (2026-09-18)
+
+2026-09-18 — FOUND: the phone never sent a width for a grid photo — Every tile
+downloaded the full-resolution original and shrank it on the handset. The
+12 September note that "the phone already did this correctly" was wrong. Tiles
+now ask for 256 or 400 px (tile size × screen scale) and the article sheet for
+1024. This, more than anything on the server, is why photos were slow on the
+phone.
+
+2026-09-18 — One photo pipeline for the whole phone app — Seven screens each
+made their own DriveClient with its own memory cache, in-flight table and "no
+photo" list, so opening an article re-asked for a picture the grid had just
+shown. Now shared: at most 6 requests at a time, newest first (what is on
+screen beats what scrolled past), off-screen tiles cancel, decoding happens
+off the main thread, thumbnails are saved as received instead of re-encoded,
+the session token is reused for up to 5 minutes, and only a real 404 marks a
+SKU as having no photo (an offline moment used to blank it for the life of the
+screen).
+
+2026-09-18 — Consequence accepted: iPad tiles wider than ~400 px get a 400 px
+image where they used to get 512 — marginally softer, a quarter of the bytes.
+
+2026-09-18 — The phone's customer sheet GAINED a "Paid orders" row — The owner
+asked for the paid-statement button "near the paid collapsed row". The web has
+that row; the phone only had an unused flag for one. It was built as the web
+has it (collapsed, count and total) with the button on its trailing edge.
+Salesmen see it too, since they use the same sheet read-only. It is a new
+section on that screen, added because the request names it.
+
+2026-09-18 — On the phone the customer's name repeats on EVERY continuation
+page, including one holding only the totals; the web repeats it only where the
+table continues — harmless, noted so the two are not "fixed" back and forth.
+
+## 2026-09-18 (third round) — Salesman-wise statement
+
+2026-09-18 — A salesman's statement is aged from the WHOLE book and filtered
+afterwards — It lists every invoice, from orders that salesman took, that
+still has a balance. Aging puts a customer's approved goods return against
+that customer's OLDEST invoices; ageing one salesman's orders on their own
+would put the credit on that salesman's invoices even when the customer's
+oldest were sold by somebody else, and this report would stop agreeing with
+the customer's own statement. (`fetchOutstandingInvoices` has a `salesmanId`
+filter with exactly that flaw; the Payments page's salesman-scoped tiles use
+it. Left alone — it is a different screen nobody asked about — but noted.)
+
+2026-09-18 — A manager or admin opens anyone's; a salesman only their own; the
+warehouse not at all — Enforced in the route, not only in the screen. The
+picker lists managers and admins too, labelled, because their orders are owed
+on as well (2026-09-04).
+
+2026-09-18 — Overdue is marked with the word, not a colour, on the PDF — It is
+printed in black and white and handed across a desk. Overdue is judged against
+each customer's own threshold, as everywhere else.
+
+2026-09-18 — On the web the report lives in Reports, which only managers and
+admins can open — The route answers a salesman asking for their own, which is
+what the phone uses; the web has no salesman-facing screen for it yet. Say if
+one is wanted.
+
+2026-09-18 — The phone's salesman statement: where it lives and how it differs
+— A new "Salesman Statement" tab in the financial reports (manager/admin), and
+for a salesman "My outstanding statement" in a menu on the Sales screen, since
+only the manager's dashboard opens the reports. Differences from the web, all
+following the phone's existing statement: "MMM d, yyyy" dates, no brand strip
+(the phone has none), Excel as the HTML .xls the customer statement already
+produces. The picker includes INACTIVE users — an ex-salesman's invoices are
+still owed. Customer thresholds are read straight from the database with nil
+meaning 90; the phone's Customer model maps nil to 30, which would have
+disagreed with the web.
+
+2026-09-18 — RISK, not fixed, affects every balance on both apps: aging reads
+`orders` in one unpaged request — PostgREST caps a response at 1,000 rows by
+default. The book has 530 billed orders today. Past 1,000 counted orders the
+oldest or newest would silently fall off every aging figure, statement,
+planning rank and this report. `fetchOutstandingInvoices` (web) and
+`Aging.fetchOutstandingInvoices` (phone) both need paging before then. Found
+while building the salesman statement; flagged to the owner rather than
+changed at the end of a long day, because it touches the most-read function
+in both apps and deserves its own tested change.
+
+2026-09-18 — Both apps are committed; neither could be pushed — The web's
+remote, github.com/FGTacounts/famlist-billing-web, answers "repository not
+found" to both GitHub accounts signed in on this Mac (PROJECT-FALCON,
+bilal-ajnaz), and no `origin/main` has ever been fetched here. The iPhone
+project has no remote at all. No repository was created and no remote was
+changed: where the code lives is the owner's decision.
+
+## 2026-09-19 — Reads that grow are paged, on both apps
+
+Closes the 2026-09-18 "RISK, not fixed" entry above.
+
+2026-09-19 — The ceiling is real and it is 1,000 — Checked read-only against
+the live project (isdeheipdfmwzmmnnidr): `products` holds 1,604 rows and one
+request for 5,000 of them came back with exactly 1,000, no error and no flag.
+The book has 531 orders, 17 allocations and 16 payments today, so no balance
+has been wrong yet.
+
+2026-09-19 — One helper per app, and it knows nothing about Supabase —
+`lib/paging.ts` (`fetchAllPages`, `fetchAllForIds`) and the phone's
+`Paging.swift` (`Paging.fetchAll`). Each takes a closure that fetches rows
+`from…to` and loops 0–999, 1,000–1,999 … until a page comes back short. Kept
+free of any database import so it can be tested against a stand-in that caps
+every answer at 1,000, the way the real one does: `npm run test:paging` and
+`BillingTests/PagingTests` both prove 2,500 rows come back complete, in order,
+in three requests, and that an error on a later page throws rather than
+passing half a ledger off as a whole one.
+
+2026-09-19 — Every paged query is ordered by something unique — `id`, or for
+`payment_orders`, which has no id column (checked: 42703), by `payment_id`
+then `order_id`. Without an ordering the database may return the same row on
+two pages and leave another out. `buildSalesmanStatement` already paged its
+order ids but without an ordering; it now has one.
+
+2026-09-19 — Rows are de-duplicated by key as well — Paging is by position, so
+an order or allocation inserted between two requests pushes the last row of one
+page onto the start of the next. Seen twice, an allocation would be counted
+twice and a customer shown as having paid more than they did. The helper drops
+the second sighting when given a key. The opposite case — a row deleted between
+requests, so one is skipped — is not covered; it needs a delete in the second
+or so a read takes, this app reverses rather than deletes, and the aging cache
+holds a result for ten seconds at most. Keyset paging (`id > last`) would cover
+both and was not used because the owner asked for `.range()`, and because
+`payment_orders` has no single column to key on. Say if it is wanted.
+
+2026-09-19 — Id lists are chunked at 200 as well as paged — The ids travel in
+the URL. The phone already chunked; the web did not everywhere. Found while
+comparing old and new code against the live book: the web's `fetchPaidByOrder`
+given all 530 order ids in one URL came back with NOTHING (the request fails
+and that function has always swallowed the failure), where the chunked one
+finds the 17 paid orders. The Orders list calls it with the rows on screen, so
+whether anyone saw an empty "Received" column depends on how many were showing.
+
+2026-09-19 — What was paged. Web: `buildOutstandingInvoices` and
+`fetchPaidByOrder` (aging.ts); `buildStatement` and `buildSalesmanStatement`
+(statement.ts); `fetchGrvs`, `fetchApprovedGrvCreditByCustomer`,
+`fetchGrvProductReport` (grv.ts); the last-order read in `fetchRoutePriorities`
+(planning.ts) — unpaged and newest-first, it would have kept the newest 1,000
+orders of the whole book and ranked every customer whose last order was older
+as "never ordered"; and in dashboard.ts the 25-month revenue read, both
+gross-profit reads, `orderItemCounts`, the payments chart, top customers, the
+two confirmed-payment totals and sales by category. Phone: all of Aging.swift;
+the two aging reports, the P&L and the GRV report in FinancialReportsView;
+the returns on a customer statement; `Grv.productReport`; and
+`AppDataManager.fetchOrdersAsync` — the phone's one load of every order and
+EVERY order line, which its statements, planning and dashboards are built
+from, and whose lines would have passed 1,000 long before the orders did.
+
+2026-09-19 — Nothing about money changed — Same statuses counted, same
+confirmed-only rule, same allocation slices, same oldest-first returns, same
+ten-second aging cache and the same keys into it. Where a read used to swallow
+a failure (the Orders list's received column, the statement's received column,
+the GRV list's line values, sales by category) it still does; where it threw,
+it still throws. Proven rather than asserted: old and new `aging.ts` were run
+side by side, read-only, against the live book — whole book outstanding (529
+invoices, AED 1,225,788.87), including settled (530), one customer, one
+salesman (155) — and every invoice's total, paid and balance matched.
+
+2026-09-19 — The phone's two aging reports now take "paid per order" from
+`Aging.fetchPaidByOrder` instead of each making the same sum themselves from a
+single page of allocations and a URL carrying every order id. Same sum, one
+place. They still do NOT apply approved goods returns, unlike every other
+aging figure in both apps — that is a money rule, it was not asked about, and
+it was left alone. Flagged.
+
+2026-09-19 — If Supabase's "Max rows" is ever LOWERED below 1,000, every page
+would look short and reads would stop early again. The page size in
+`lib/paging.ts` and `Paging.swift` has to come down with it. Raising it is
+harmless.
+
+2026-09-19 — NOT fixed, and live today: the product list — `fetchProductsServer`
+(lib/products-server.ts) reads `products` in one request ordered by SKU. There
+are 1,416 ACTIVE products, so the last 416 by SKU are missing from any full
+listing right now (search still finds them, because it filters on the server).
+The phone's product load was not checked. Outside what was asked, touches a
+different screen on both apps, and wants its own tested change — flagged to the
+owner rather than slipped in. Same for the other unpaged reads this change did
+not reach: lib/queries/reports.ts, payments.ts and orders.ts on the web; and on
+the phone Payments.swift, PaymentsView.swift, SalesView.swift,
+ManagerDashboardView.swift and SettingsView.swift.
+
+2026-09-19 — `npm run test:tenancy` still fails on `order_items_safe` and on
+nothing else — the same known failure as before (its RUN-ME has not been run).
+This change adds no table, view or policy.

@@ -6,7 +6,11 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test:tenancy": "node scripts/test-tenancy.mjs",
+    "test:money": "node --experimental-strip-types scripts/test-money.mjs",
+    "test:prices": "node scripts/test-customer-prices.mjs",
+    "test:paging": "node --experimental-strip-types scripts/test-paging.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",

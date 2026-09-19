@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { fetchApprovedGrvCreditByCustomer } from "@/lib/queries/grv";
 import { fetchCountedStatuses } from "@/lib/reportStage";
+import { fetchAllForIds, fetchAllPages } from "@/lib/paging";
 
 // Reconstructs each customer's outstanding balance and aging. `orders`
 // stores `total` directly, so this doesn't need to sum order_items itself.
@@ -127,25 +128,35 @@ async function buildOutstandingInvoices(
   // needs to add themselves (no SQL access from here). Falls back to the
   // column set that's always been there so aging/statements keep working
   // in the meantime; extensions just don't apply until it's added.
-  let query = supabase
-    .from("orders")
-    .select("id, customer_id, invoice_number, total, updated_at, extended_due_date")
-    .in("status", await fetchCountedStatuses(supabase));
-  if (customerId) query = query.eq("customer_id", customerId);
-  if (salesmanId) query = query.eq("salesman_id", salesmanId);
-  let { data: orders, error } = await query;
-  if (error) {
-    let fallback = supabase
-      .from("orders")
-      .select("id, customer_id, invoice_number, total, updated_at")
-      .in("status", await fetchCountedStatuses(supabase));
-    if (customerId) fallback = fallback.eq("customer_id", customerId);
-    if (salesmanId) fallback = fallback.eq("salesman_id", salesmanId);
-    const retry = await fallback;
-    if (retry.error) throw retry.error;
-    orders = (retry.data ?? []).map((o) => ({ ...o, extended_due_date: null }));
+  //
+  // Every read below is paged (lib/paging.ts). One request stops at 1,000
+  // rows without saying so, and an invoice that falls off the end of this one
+  // falls out of every balance in the app.
+  const statuses = await fetchCountedStatuses(supabase);
+  type OrderRow = {
+    id: string;
+    customer_id: string | null;
+    invoice_number: number | null;
+    total: number | null;
+    updated_at: string;
+    extended_due_date: string | null;
+  };
+  const readOrders = (columns: string) =>
+    fetchAllPages<OrderRow>((from, to) => {
+      let query = supabase.from("orders").select(columns).in("status", statuses);
+      if (customerId) query = query.eq("customer_id", customerId);
+      if (salesmanId) query = query.eq("salesman_id", salesmanId);
+      return query.order("id").range(from, to) as never;
+    });
+  let orderRows: OrderRow[];
+  try {
+    orderRows = await readOrders("id, customer_id, invoice_number, total, updated_at, extended_due_date");
+  } catch {
+    orderRows = (await readOrders("id, customer_id, invoice_number, total, updated_at")).map((o) => ({
+      ...o,
+      extended_due_date: null,
+    }));
   }
-  const orderRows = orders ?? [];
   if (orderRows.length === 0) return [];
   const orderIds = orderRows.map((o) => o.id);
 
@@ -153,24 +164,39 @@ async function buildOutstandingInvoices(
   // allocation table, which is tiny — so past a certain point, ask for all of
   // it and match up here. Below that (one customer's statement) the filter is
   // still the cheaper side.
+  //
+  // payment_orders has no id of its own: a row IS its (payment, order) pair,
+  // so that pair is both the ordering and what makes a row the same row.
   const BULK = 100;
-  const linkQuery = supabase.from("payment_orders").select("payment_id, order_id, allocated_amount");
-  const { data: linkRows, error: linksErr } =
-    orderIds.length > BULK ? await linkQuery : await linkQuery.in("order_id", orderIds);
-  if (linksErr) throw linksErr;
+  type LinkRow = { payment_id: string; order_id: string; allocated_amount: number | null };
+  const linkKey = (l: LinkRow) => `${l.payment_id}|${l.order_id}`;
+  const readLinks = (ids: string[] | null) => (from: number, to: number) => {
+    let query = supabase.from("payment_orders").select("payment_id, order_id, allocated_amount");
+    if (ids) query = query.in("order_id", ids);
+    return query.order("payment_id").order("order_id").range(from, to) as never;
+  };
+  const linkRows =
+    orderIds.length > BULK
+      ? await fetchAllPages<LinkRow>(readLinks(null), { keyOf: linkKey })
+      : await fetchAllForIds<LinkRow>(orderIds, (chunk, from, to) => readLinks(chunk)(from, to), { keyOf: linkKey });
   const wanted = new Set(orderIds);
-  const links = (linkRows ?? []).filter((l) => wanted.has(l.order_id as string));
+  const links = linkRows.filter((l) => wanted.has(l.order_id));
 
   // A payment can span multiple orders (§6) — payment_orders.allocated_amount
   // is the per-order slice, not payments.amount (the whole collection).
   const paymentIds = [...new Set(links.map((l) => l.payment_id))];
   const confirmedPaymentIds = new Set<string>();
   if (paymentIds.length) {
-    const payQuery = supabase.from("payments").select("id, status").eq("status", "confirmed");
-    const { data: payments, error: payErr } =
-      paymentIds.length > BULK ? await payQuery : await payQuery.in("id", paymentIds);
-    if (payErr) throw payErr;
-    for (const p of payments ?? []) confirmedPaymentIds.add(p.id);
+    const readPayments = (ids: string[] | null) => (from: number, to: number) => {
+      let query = supabase.from("payments").select("id, status").eq("status", "confirmed");
+      if (ids) query = query.in("id", ids);
+      return query.order("id").range(from, to) as never;
+    };
+    const payments =
+      paymentIds.length > BULK
+        ? await fetchAllPages<{ id: string }>(readPayments(null), { keyOf: (p) => p.id })
+        : await fetchAllForIds<{ id: string }>(paymentIds, (chunk, from, to) => readPayments(chunk)(from, to));
+    for (const p of payments) confirmedPaymentIds.add(p.id);
   }
 
   const paidByOrder = new Map<string, number>();
@@ -290,23 +316,43 @@ export async function fetchPaidByOrder(
   const paid = new Map<string, number>();
   if (orderIds.length === 0) return paid;
 
-  const { data: links, error } = await supabase
-    .from("payment_orders")
-    .select("payment_id, order_id, allocated_amount")
-    .in("order_id", orderIds);
-  if (error) return paid;
+  // Paged, and the ids chunked: the Orders list hands this every order on
+  // screen, and neither the URL nor the 1,000-row ceiling has room for that.
+  // A failed read still means "nothing received" rather than a broken list,
+  // as it always has here.
+  type LinkRow = { payment_id: string; order_id: string; allocated_amount: number | null };
+  let links: LinkRow[];
+  try {
+    links = await fetchAllForIds<LinkRow>(
+      orderIds,
+      (chunk, from, to) =>
+        supabase
+          .from("payment_orders")
+          .select("payment_id, order_id, allocated_amount")
+          .in("order_id", chunk)
+          .order("payment_id")
+          .order("order_id")
+          .range(from, to) as never,
+      { keyOf: (l) => `${l.payment_id}|${l.order_id}` }
+    );
+  } catch {
+    return paid;
+  }
 
-  const paymentIds = [...new Set((links ?? []).map((l) => l.payment_id))];
+  const paymentIds = [...new Set(links.map((l) => l.payment_id))];
   if (paymentIds.length === 0) return paid;
 
-  const { data: payments } = await supabase
-    .from("payments")
-    .select("id")
-    .in("id", paymentIds)
-    .eq("status", "confirmed");
-  const confirmed = new Set((payments ?? []).map((p) => p.id));
+  let confirmed = new Set<string>();
+  try {
+    const payments = await fetchAllForIds<{ id: string }>(paymentIds, (chunk, from, to) =>
+      supabase.from("payments").select("id").in("id", chunk).eq("status", "confirmed").order("id").range(from, to) as never
+    );
+    confirmed = new Set(payments.map((p) => p.id));
+  } catch {
+    /* as before: no confirmed payments readable, nothing counts as received */
+  }
 
-  for (const link of links ?? []) {
+  for (const link of links) {
     if (!confirmed.has(link.payment_id)) continue;
     paid.set(link.order_id, (paid.get(link.order_id) ?? 0) + (link.allocated_amount ?? 0));
   }

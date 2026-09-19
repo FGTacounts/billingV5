@@ -2,6 +2,13 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { OrderStatus } from "@/lib/types/db";
 import { fetchOutstandingInvoices, getOverdueThresholdDays } from "@/lib/queries/aging";
 import { fetchCountedStatuses } from "@/lib/reportStage";
+import { t } from "@/lib/i18n";
+import { fetchAllForIds, fetchAllPages } from "@/lib/paging";
+
+// Every read of orders, order lines and payments in this file is paged
+// (lib/paging.ts). One request stops at 1,000 rows without saying so, and a
+// sales figure made from the first thousand orders looks exactly like a
+// sales figure.
 
 // Sales goals used to be a hardcoded 100,000 here, because the schema had
 // nowhere to store them. They now live in the database — per salesman, with
@@ -58,13 +65,19 @@ async function revenueOrders(supabase: SupabaseClient): Promise<RevenueOrder[]> 
   if (revenueInFlight) return revenueInFlight;
 
   revenueInFlight = (async () => {
-    const { data, error } = await supabase
-      .from("orders")
-      .select("id, salesman_id, subtotal, total, updated_at")
-      .in("status", await fetchCountedStatuses(supabase))
-      .gte("updated_at", revenueWindowIso());
-    if (error) throw error;
-    const rows = (data as RevenueOrder[]) ?? [];
+    const statuses = await fetchCountedStatuses(supabase);
+    const since = revenueWindowIso();
+    const rows = await fetchAllPages<RevenueOrder>(
+      (from, to) =>
+        supabase
+          .from("orders")
+          .select("id, salesman_id, subtotal, total, updated_at")
+          .in("status", statuses)
+          .gte("updated_at", since)
+          .order("id")
+          .range(from, to) as never,
+      { keyOf: (o) => o.id }
+    );
     revenueCache = { at: Date.now(), rows };
     return rows;
   })().finally(() => {
@@ -113,18 +126,23 @@ export async function monthToDateSales(
   return rows.reduce((sum, o) => sum + saleValue(o), 0);
 }
 
+// "Orders this month" sits directly beside "Sales this month" on the
+// Dashboard, and beside the revenue figure for the same window on Sales.
+// It used to count by `created_at` and across every status, while the money
+// beside it summed counted-status orders by `updated_at` (the billing date).
+// The two disagreed by construction: in a month where six orders were billed
+// but none were first drafted, the tile read "0 orders — AED 7,799". Both
+// numbers now come out of the same set of rows, so a count and its money can
+// never tell different stories again.
 export async function countOrdersThisMonth(
   supabase: SupabaseClient,
   salesmanId?: string
 ): Promise<number> {
-  let q = supabase
-    .from("orders")
-    .select("id", { count: "exact", head: true })
-    .gte("created_at", startOfMonthIso());
-  if (salesmanId) q = q.eq("salesman_id", salesmanId);
-  const { count, error } = await q;
-  if (error) throw error;
-  return count ?? 0;
+  const rows = await revenueIn(supabase, {
+    from: new Date(startOfMonthIso()),
+    salesmanId,
+  });
+  return rows.length;
 }
 
 export async function countByStatus(
@@ -142,6 +160,33 @@ export async function countByStatus(
   return count ?? 0;
 }
 
+interface SafeItemRow {
+  id: string;
+  product_id: string;
+  sku: string | null;
+  description: string | null;
+  unit_price: number;
+  unit_cost: number | null;
+  ordered_qty: number;
+  picked_qty: number | null;
+}
+
+// Every line of the given orders, through the view that hides cost from
+// whoever may not see it.
+function fetchSafeItems(supabase: SupabaseClient, orderIds: string[]): Promise<SafeItemRow[]> {
+  return fetchAllForIds<SafeItemRow>(
+    orderIds,
+    (chunk, from, to) =>
+      supabase
+        .from("order_items_safe")
+        .select("id, product_id, sku, description, unit_price, unit_cost, ordered_qty, picked_qty")
+        .in("order_id", chunk)
+        .order("id")
+        .range(from, to) as never,
+    { keyOf: (it) => it.id }
+  );
+}
+
 // Manager-only figure (needs unit_cost). Sums grossProfit across delivered
 // orders' items this month, same convention as fetchBalanceSheet in
 // reports.ts (order_items_safe exposes real cost to a Manager session).
@@ -153,13 +198,9 @@ export async function monthToDateGrossProfit(
   const orderIds = orders.map((o) => o.id);
   if (orderIds.length === 0) return 0;
 
-  const { data: items, error: itemsErr } = await supabase
-    .from("order_items_safe")
-    .select("unit_price, unit_cost, ordered_qty, picked_qty")
-    .in("order_id", orderIds);
-  if (itemsErr) throw itemsErr;
+  const items = await fetchSafeItems(supabase, orderIds);
 
-  return (items ?? []).reduce((sum, it) => {
+  return items.reduce((sum, it) => {
     const qty = it.picked_qty ?? it.ordered_qty;
     return sum + (it.unit_price - (it.unit_cost ?? 0)) * qty;
   }, 0);
@@ -178,15 +219,11 @@ export async function salesmanAvgGpPercent(
   const orderIds = orders.map((o) => o.id);
   if (orderIds.length === 0) return null;
 
-  const { data: items, error: itemsErr } = await supabase
-    .from("order_items_safe")
-    .select("unit_price, unit_cost, ordered_qty, picked_qty")
-    .in("order_id", orderIds);
-  if (itemsErr) throw itemsErr;
+  const items = await fetchSafeItems(supabase, orderIds);
 
   let sales = 0;
   let cost = 0;
-  for (const it of items ?? []) {
+  for (const it of items) {
     const qty = it.picked_qty ?? it.ordered_qty;
     sales += it.unit_price * qty;
     cost += (it.unit_cost ?? 0) * qty;
@@ -203,13 +240,19 @@ export async function orderItemCounts(
   orderIds: string[]
 ): Promise<Record<string, number>> {
   if (orderIds.length === 0) return {};
-  const { data, error } = await supabase
-    .from("order_items")
-    .select("order_id")
-    .in("order_id", orderIds);
-  if (error) return {};
+  let data: { id: string; order_id: string }[];
+  try {
+    data = await fetchAllForIds<{ id: string; order_id: string }>(
+      orderIds,
+      (chunk, from, to) =>
+        supabase.from("order_items").select("id, order_id").in("order_id", chunk).order("id").range(from, to) as never,
+      { keyOf: (row) => row.id }
+    );
+  } catch {
+    return {};
+  }
   const counts: Record<string, number> = {};
-  for (const row of data ?? []) counts[row.order_id] = (counts[row.order_id] ?? 0) + 1;
+  for (const row of data) counts[row.order_id] = (counts[row.order_id] ?? 0) + 1;
   return counts;
 }
 
@@ -284,7 +327,20 @@ export interface MonthPoint {
   value: number;
 }
 
-const MONTH_LABELS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+const MONTH_LABELS = [
+  t("dashboard.monthJanUpper"),
+  t("dashboard.monthFebUpper"),
+  t("dashboard.monthMarUpper"),
+  t("dashboard.monthAprUpper"),
+  t("dashboard.monthMayUpper"),
+  t("dashboard.monthJunUpper"),
+  t("dashboard.monthJulUpper"),
+  t("dashboard.monthAugUpper"),
+  t("dashboard.monthSepUpper"),
+  t("dashboard.monthOctUpper"),
+  t("dashboard.monthNovUpper"),
+  t("dashboard.monthDecUpper"),
+];
 
 export interface MonthSegments {
   label: string;
@@ -305,17 +361,22 @@ export async function fetchPaymentsByMonthSegmented(
   const now = new Date();
   const start = new Date(now.getFullYear(), now.getMonth() - 11, 1);
 
-  let q = supabase
-    .from("payments")
-    .select("amount, created_at, collector_id, cheque_status")
-    .eq("status", "confirmed")
-    .gte("created_at", start.toISOString());
-  if (opts.collectedBy) q = q.eq("collector_id", opts.collectedBy);
-  const { data, error } = await q;
-  if (error) throw error;
+  type Row = { id: string; amount: number | string; created_at: string; cheque_status: string | null };
+  const data = await fetchAllPages<Row>(
+    (from, to) => {
+      let q = supabase
+        .from("payments")
+        .select("id, amount, created_at, collector_id, cheque_status")
+        .eq("status", "confirmed")
+        .gte("created_at", start.toISOString());
+      if (opts.collectedBy) q = q.eq("collector_id", opts.collectedBy);
+      return q.order("id").range(from, to) as never;
+    },
+    { keyOf: (p) => p.id }
+  );
 
   const byMonth = new Map<string, { cleared: number; bounced: number; other: number }>();
-  for (const p of data ?? []) {
+  for (const p of data) {
     const d = new Date(p.created_at as string);
     const key = `${d.getFullYear()}-${d.getMonth()}`;
     const bucket = byMonth.get(key) ?? { cleared: 0, bounced: 0, other: 0 };
@@ -386,18 +447,24 @@ export async function fetchTopCustomers(
   supabase: SupabaseClient,
   opts: { salesmanId?: string; limit?: number } = {}
 ): Promise<TopCustomer[]> {
-  let q = supabase
-    .from("orders")
-    .select("customer_id, subtotal, total")
-    .in("status", await fetchCountedStatuses(supabase))
-    .gte("updated_at", startOfMonthIso())
-    .not("customer_id", "is", null);
-  if (opts.salesmanId) q = q.eq("salesman_id", opts.salesmanId);
-  const { data, error } = await q;
-  if (error) throw error;
+  const statuses = await fetchCountedStatuses(supabase);
+  type Row = { id: string; customer_id: string; subtotal: number | null; total: number | null };
+  const data = await fetchAllPages<Row>(
+    (from, to) => {
+      let q = supabase
+        .from("orders")
+        .select("id, customer_id, subtotal, total")
+        .in("status", statuses)
+        .gte("updated_at", startOfMonthIso())
+        .not("customer_id", "is", null);
+      if (opts.salesmanId) q = q.eq("salesman_id", opts.salesmanId);
+      return q.order("id").range(from, to) as never;
+    },
+    { keyOf: (o) => o.id }
+  );
 
   const totals = new Map<string, number>();
-  for (const o of data ?? []) {
+  for (const o of data) {
     const id = o.customer_id as string;
     totals.set(id, (totals.get(id) ?? 0) + saleValue(o));
   }
@@ -412,7 +479,7 @@ export async function fetchTopCustomers(
   const nameById = new Map((customers ?? []).map((c) => [c.id, c.name]));
 
   return ids
-    .map((id) => ({ customerId: id, name: nameById.get(id) ?? "—", total: totals.get(id) ?? 0 }))
+    .map((id) => ({ customerId: id, name: nameById.get(id) ?? t("common.notSet"), total: totals.get(id) ?? 0 }))
     .sort((a, b) => b.total - a.total)
     .slice(0, opts.limit ?? 5);
 }
@@ -478,6 +545,8 @@ export async function fetchPaymentsSummary(
 // [from, to] date range — feeds Sales' adjustable-date orders/payments
 // widgets (§Sales: "widgets of orders and payments received, adjustable
 // with date").
+// Same rule as countOrdersThisMonth, for an arbitrary window: the orders
+// counted here are exactly the orders whose money the caller is showing.
 export async function countOrdersInRange(
   supabase: SupabaseClient,
   opts: { from: Date; to: Date; salesmanId?: string }
@@ -486,15 +555,12 @@ export async function countOrdersInRange(
   start.setHours(0, 0, 0, 0);
   const end = new Date(opts.to);
   end.setHours(23, 59, 59, 999);
-  let q = supabase
-    .from("orders")
-    .select("id", { count: "exact", head: true })
-    .gte("created_at", start.toISOString())
-    .lte("created_at", end.toISOString());
-  if (opts.salesmanId) q = q.eq("salesman_id", opts.salesmanId);
-  const { count, error } = await q;
-  if (error) throw error;
-  return count ?? 0;
+  const rows = await revenueIn(supabase, {
+    from: start,
+    to: end,
+    salesmanId: opts.salesmanId,
+  });
+  return rows.length;
 }
 
 export async function paymentsReceivedInRange(
@@ -505,28 +571,29 @@ export async function paymentsReceivedInRange(
   start.setHours(0, 0, 0, 0);
   const end = new Date(opts.to);
   end.setHours(23, 59, 59, 999);
-  let q = supabase
-    .from("payments")
-    .select("amount")
-    .eq("status", "confirmed")
-    .gte("created_at", start.toISOString())
-    .lte("created_at", end.toISOString());
-  if (opts.collectedBy) q = q.eq("collector_id", opts.collectedBy);
-  const { data, error } = await q;
-  if (error) throw error;
-  return (data ?? []).reduce((s, p) => s + p.amount, 0);
+  return confirmedPaymentsTotal(supabase, { fromIso: start.toISOString(), toIso: end.toISOString(), collectedBy: opts.collectedBy });
 }
 
 async function monthToDateConfirmedPayments(supabase: SupabaseClient, collectedBy?: string): Promise<number> {
-  let q = supabase
-    .from("payments")
-    .select("amount")
-    .eq("status", "confirmed")
-    .gte("created_at", startOfMonthIso());
-  if (collectedBy) q = q.eq("collector_id", collectedBy);
-  const { data, error } = await q;
-  if (error) throw error;
-  return (data ?? []).reduce((s, p) => s + p.amount, 0);
+  return confirmedPaymentsTotal(supabase, { fromIso: startOfMonthIso(), collectedBy });
+}
+
+// Σ amount of confirmed payments in a window. The arithmetic is what both
+// callers already did; only the reading is new — every page, not the first.
+async function confirmedPaymentsTotal(
+  supabase: SupabaseClient,
+  opts: { fromIso: string; toIso?: string; collectedBy?: string }
+): Promise<number> {
+  const data = await fetchAllPages<{ id: string; amount: number }>(
+    (from, to) => {
+      let q = supabase.from("payments").select("id, amount").eq("status", "confirmed").gte("created_at", opts.fromIso);
+      if (opts.toIso) q = q.lte("created_at", opts.toIso);
+      if (opts.collectedBy) q = q.eq("collector_id", opts.collectedBy);
+      return q.order("id").range(from, to) as never;
+    },
+    { keyOf: (p) => p.id }
+  );
+  return data.reduce((s, p) => s + p.amount, 0);
 }
 
 export interface ExpenseSlice {
@@ -549,22 +616,21 @@ export async function fetchSalesByCategory(
   supabase: SupabaseClient,
   opts: { groupBy?: "category" | "product"; salesmanId?: string; limit?: number } = {}
 ): Promise<CategorySale[]> {
-  let orderQ = supabase
-    .from("orders")
-    .select("id")
-    .in("status", await fetchCountedStatuses(supabase))
-    .gte("updated_at", startOfMonthIso());
-  if (opts.salesmanId) orderQ = orderQ.eq("salesman_id", opts.salesmanId);
-  const { data: orders, error } = await orderQ;
-  if (error) throw error;
-  const orderIds = (orders ?? []).map((o) => o.id);
+  const statuses = await fetchCountedStatuses(supabase);
+  const orders = await fetchAllPages<{ id: string }>(
+    (from, to) => {
+      let orderQ = supabase.from("orders").select("id").in("status", statuses).gte("updated_at", startOfMonthIso());
+      if (opts.salesmanId) orderQ = orderQ.eq("salesman_id", opts.salesmanId);
+      return orderQ.order("id").range(from, to) as never;
+    },
+    { keyOf: (o) => o.id }
+  );
+  const orderIds = orders.map((o) => o.id);
   if (orderIds.length === 0) return [];
 
-  const { data: items } = await supabase
-    .from("order_items_safe")
-    .select("product_id, sku, description, unit_price, ordered_qty, picked_qty")
-    .in("order_id", orderIds);
-  const rows = items ?? [];
+  // The widget has always drawn empty, rather than failed, when the lines
+  // cannot be read.
+  const rows = await fetchSafeItems(supabase, orderIds).catch(() => [] as SafeItemRow[]);
   if (rows.length === 0) return [];
 
   // Categories live on `products`, not on the order-item snapshot, so they
@@ -592,8 +658,8 @@ export async function fetchSalesByCategory(
     const qty = it.picked_qty ?? it.ordered_qty ?? 0;
     const label =
       opts.groupBy === "product"
-        ? it.description || it.sku || "Unknown"
-        : categoryByProduct.get(it.product_id) ?? "Uncategorized";
+        ? it.description || it.sku || t("dashboard.unknownProduct")
+        : categoryByProduct.get(it.product_id) ?? t("dashboard.uncategorized");
     const cur = byLabel.get(label) ?? { value: 0, units: 0 };
     cur.value += qty * (it.unit_price ?? 0);
     cur.units += qty;
@@ -618,7 +684,7 @@ export async function fetchExpenseBreakdown(_supabase: SupabaseClient): Promise<
 }> {
   const res = await fetch("/api/expenses");
   const json = await res.json();
-  if (!res.ok) throw new Error(json.error ?? "Failed to load expenses");
+  if (!res.ok) throw new Error(json.error ?? t("dashboard.failedToLoadExpenses"));
   const monthStart = startOfMonthIso().slice(0, 10);
   const data: { type: string; category: string | null; amount: number; date: string }[] = (
     json.expenses ?? []

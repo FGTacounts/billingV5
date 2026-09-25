@@ -5,7 +5,7 @@ import { t } from "@/lib/i18n";
 import { friendlyError } from "@/lib/errors";
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Check, X, Package, Truck, FileEdit, Ban, Clock, Pencil, Search, Trash2, Undo2, RotateCcw } from "lucide-react";
+import { Check, X, Package, Truck, FileEdit, Ban, Clock, Pencil, Search, Trash2, Undo2, RotateCcw, ChevronUp, ChevronDown } from "lucide-react";
 import { usePreferences } from "@/lib/hooks/usePreferences";
 import { useApprovalSettings } from "@/lib/hooks/useApprovalSettings";
 import { supabaseBrowser } from "@/lib/supabase/client";
@@ -38,7 +38,7 @@ import type { Seller } from "@/lib/queries/sales";
 import { fetchCustomers } from "@/lib/queries/customers";
 import { fetchProducts } from "@/lib/queries/products";
 import type { AppUser, Product } from "@/lib/types/db";
-import { subtotal, vat, total, formatAed, effectiveQty, lineDiscountPercent } from "@/lib/money";
+import { subtotal, formatAed, effectiveQty, lineDiscountPercent, billed, FALLBACK_VAT_RATE } from "@/lib/money";
 import Sheet from "@/components/ui/Sheet";
 import Button from "@/components/ui/Button";
 import { TextInput, Label } from "@/components/ui/Field";
@@ -84,6 +84,9 @@ export default function OrderDetail({
   const [gpDraft, setGpDraft] = useState("");
   const [editingSubtotal, setEditingSubtotal] = useState(false);
   const [subtotalDraft, setSubtotalDraft] = useState("");
+  // The discount on the whole order (RUN-ME-28), a manager's, at any stage.
+  const [editingOrderDiscount, setEditingOrderDiscount] = useState(false);
+  const [orderDiscountDraft, setOrderDiscountDraft] = useState("");
   // A line added to or taken off an order that has already been written —
   // the phone's addArticle/remove on the picking screen. Same rule as the
   // qty/price edit above and enforced in the same place: see
@@ -314,6 +317,79 @@ export default function OrderDetail({
     }
   }
 
+  // A manager picks or unpicks a line at any stage (owner, 2026-09-25).
+  // Optimistic with a real rollback; once an order is approved the server
+  // moves the stock and totals with the pick, so the reload brings those in.
+  async function togglePick(item: OrderItemRow) {
+    const next = item.picked_qty == null ? item.ordered_qty : null;
+    const previous = items;
+    setItems((prev) => prev.map((x) => (x.id === item.id ? { ...x, picked_qty: next } : x)));
+    try {
+      const res = await fetch("/api/orders/update-picked-qty", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ itemId: item.id, pickedQty: next }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? t("orders.updatePickedQtyFailed"));
+      tapSuccess();
+      await load();
+      onChanged();
+    } catch (e) {
+      setItems(previous);
+      toast.error(friendlyError(e, t("orders.updatePickedQtyFailed")));
+    }
+  }
+
+  // Moves a line one place up or down in the order a manager arranged, which
+  // is the order the invoice lists them in. Optimistic, rolled back on refusal.
+  async function moveItem(index: number, by: -1 | 1) {
+    const target = index + by;
+    if (target < 0 || target >= items.length) return;
+    const previous = items;
+    const next = [...items];
+    [next[index], next[target]] = [next[target], next[index]];
+    setItems(next);
+    try {
+      const res = await fetch("/api/orders/manager-edit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderId, lineOrder: next.map((x) => x.id) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? t("orders.rearrangeFailed"));
+    } catch (e) {
+      setItems(previous);
+      toast.error(friendlyError(e, t("orders.rearrangeFailed")));
+    }
+  }
+
+  // The discount on the whole order, taken off before VAT. Optimistic on the
+  // order row; the reload brings the recomputed VAT and total.
+  async function saveOrderDiscount(value: number) {
+    setEditingOrderDiscount(false);
+    if (!order || !Number.isFinite(value) || value < 0) return;
+    const amount = Math.round(value * 100) / 100;
+    if (amount === (order.discount_amount ?? 0)) return;
+    const previous = order;
+    setOrder({ ...order, discount_amount: amount });
+    try {
+      const res = await fetch("/api/orders/manager-edit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderId, discount: amount }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? t("orders.setOrderDiscountFailed"));
+      tapSuccess();
+      await load();
+      onChanged();
+    } catch (e) {
+      setOrder(previous);
+      toast.error(friendlyError(e, t("orders.setOrderDiscountFailed")));
+    }
+  }
+
   // Pricing from the margin instead of the price. A manager quotes in gross
   // profit far more often than in dirhams per unit, and working the price out
   // by hand is where mistakes happen.
@@ -408,8 +484,16 @@ export default function OrderDetail({
   // Sort control (§8.4) — remembered per-user via preferences, same
   // pattern as the Average Sale date-range memory. "Unpicked first" is the
   // default so the picker always sees what's left to do at the top.
+  //
+  // Only while picking, where the control is shown. Everywhere else the lines
+  // stand in the order a manager arranged them — the order the invoice
+  // prints — or rearranging would have nothing to show.
+  const pickingMode =
+    (user.role === "warehouse" || user.role === "manager" || user.role === "admin") &&
+    ["waiting", "picking"].includes(order?.status ?? "");
   const sortedItems = useMemo(() => {
     const copy = [...items];
+    if (!pickingMode) return copy;
     if (pickingSort === "article") {
       copy.sort((a, b) => (a.sku || "").localeCompare(b.sku || ""));
     } else if (pickingSort === "rack") {
@@ -422,7 +506,7 @@ export default function OrderDetail({
       });
     }
     return copy;
-  }, [items, pickingSort]);
+  }, [items, pickingSort, pickingMode]);
 
   if (loading || !order) {
     return (
@@ -436,11 +520,21 @@ export default function OrderDetail({
   const isWarehouse = user.role === "warehouse";
   const isSalesman = user.role === "salesman";
   const purgeDays = daysUntilPurge(order.rejected_at);
-  // §Next Updates Orders: "make order data editable" — scoped to
-  // draft/pending, own order or Manager; later stages go through the
-  // existing pick/edit-request flow instead.
+  // A manager or admin changes an order at any stage but the trash (owner,
+  // 2026-09-25) — the server moves stock and totals with each change.
+  const managerEdits = isManager && order.status !== "cancelled";
+  // §Next Updates Orders: "make order data editable" — a salesman's own
+  // order while draft/pending; a manager's at any stage (above).
   const canEditItems =
-    ["draft", "pending"].includes(order.status) && (isManager || order.salesman_id === user.id);
+    managerEdits || (["draft", "pending"].includes(order.status) && order.salesman_id === user.id);
+  // The Picked column: a manager sees and changes what is picked at every
+  // stage. While picking, the quantity box already is the pick.
+  const showPickedColumn = managerEdits && !pickingMode;
+  const showArrange = managerEdits && !pickingMode && items.length > 1;
+  const orderDiscountAmount = order.discount_amount ?? 0;
+  // Imported invoices carry no lines, so their stored subtotal is all there is.
+  const grossSubtotal = items.length ? subtotal(items) : (order.subtotal ?? 0) + orderDiscountAmount;
+  const fallbackBilled = billed(Math.max(0, grossSubtotal - orderDiscountAmount), FALLBACK_VAT_RATE);
   // Once accepted the order is the warehouse's: a line that is not on the
   // shelf can come off it and a forgotten one can go on, by the warehouse or
   // a manager, until approval moves stock (add-item / remove-item routes,
@@ -646,6 +740,7 @@ export default function OrderDetail({
         <table className="w-full text-subhead">
           <thead>
             <tr className="text-caption text-secondary uppercase text-left border-b border-hairline">
+              {showArrange && <th className="ps-1 py-2.5 font-medium"><span className="sr-only">{t("orders.headerArrange")}</span></th>}
               <th className="px-3 py-2.5 font-medium">{t("orders.headerItem")}</th>
               {(items.some((it) => it.product?.rack_location) ||
                 ((isWarehouse || isManager) && ["waiting", "picking"].includes(order.status))) && (
@@ -655,6 +750,9 @@ export default function OrderDetail({
                 <th className="px-3 py-2.5 font-medium text-right">{t("orders.headerSoh")}</th>
               )}
               <th className="px-3 py-2.5 font-medium text-right">{t("orders.headerQty")}</th>
+              {showPickedColumn && (
+                <th className="px-3 py-2.5 font-medium text-right">{t("orders.headerPicked")}</th>
+              )}
               <th className="px-3 py-2.5 font-medium text-right tabular-nums">{t("orders.headerPrice")}</th>
               {isManager && (
                 <th className="px-3 py-2.5 font-medium text-right tabular-nums">{t("orders.headerDiscount")}</th>
@@ -667,7 +765,7 @@ export default function OrderDetail({
             </tr>
           </thead>
           <tbody>
-            {sortedItems.map((it) => {
+            {sortedItems.map((it, index) => {
               const canPick =
                 (isWarehouse || isManager) && ["waiting", "picking"].includes(order.status);
               const showStrike =
@@ -679,6 +777,34 @@ export default function OrderDetail({
               const lineGpPct = lineTotal > 0 ? (lineGp / lineTotal) * 100 : 0;
               return (
                 <tr key={it.id} className="border-b border-hairline last:border-0">
+                  {showArrange && (
+                    <td className="ps-1 py-1 align-middle">
+                      <div className="flex flex-col">
+                        <button
+                          className="min-w-11 min-h-[22px] flex items-center justify-center text-secondary hover:text-accent disabled:opacity-30"
+                          disabled={index === 0}
+                          aria-label={t("orders.moveUpNamed", { name: it.description ?? it.sku })}
+                          onClick={() => {
+                            tap();
+                            moveItem(index, -1);
+                          }}
+                        >
+                          <ChevronUp size={14} />
+                        </button>
+                        <button
+                          className="min-w-11 min-h-[22px] flex items-center justify-center text-secondary hover:text-accent disabled:opacity-30"
+                          disabled={index === sortedItems.length - 1}
+                          aria-label={t("orders.moveDownNamed", { name: it.description ?? it.sku })}
+                          onClick={() => {
+                            tap();
+                            moveItem(index, 1);
+                          }}
+                        >
+                          <ChevronDown size={14} />
+                        </button>
+                      </div>
+                    </td>
+                  )}
                   <td className="px-3 py-2.5">
                     <div className="font-medium">{it.description ?? it.product_id}</div>
                     <div className="text-caption text-secondary">{it.sku}</div>
@@ -790,11 +916,17 @@ export default function OrderDetail({
                         <button
                           className="flex items-center gap-1 hover:text-accent ms-auto"
                           onClick={() => {
-                            setQtyDraft(String(it.ordered_qty));
+                            // A picked line's billed figure is its picked
+                            // quantity, and that is the one a manager's
+                            // edit changes (manager_edit_order).
+                            setQtyDraft(String(isManager ? effectiveQty(it) : it.ordered_qty));
                             setEditingQtyId(it.id);
                           }}
                         >
-                          {it.ordered_qty}
+                          {showStrike && (
+                            <span className="line-through text-secondary me-1">{it.ordered_qty}</span>
+                          )}
+                          {isManager ? effectiveQty(it) : it.ordered_qty}
                           <Pencil size={11} />
                         </button>
                       )
@@ -807,6 +939,33 @@ export default function OrderDetail({
                       effectiveQty(it)
                     )}
                   </td>
+                  {showPickedColumn && (
+                    <td className="px-3 py-2.5 text-right tabular-nums">
+                      <button
+                        className={`min-h-11 inline-flex items-center gap-1 ms-auto hover:text-accent ${
+                          it.picked_qty == null ? "text-secondary" : "text-accent"
+                        }`}
+                        aria-label={
+                          it.picked_qty == null
+                            ? t("orders.pickNamed", { name: it.description ?? it.sku })
+                            : t("orders.unpickNamed", { name: it.description ?? it.sku })
+                        }
+                        aria-pressed={it.picked_qty != null}
+                        onClick={() => {
+                          tap();
+                          togglePick(it);
+                        }}
+                      >
+                        {it.picked_qty == null ? (
+                          t("orders.notPicked")
+                        ) : (
+                          <>
+                            <Check size={13} /> {it.picked_qty}
+                          </>
+                        )}
+                      </button>
+                    </td>
+                  )}
                   <td className="px-3 py-2.5 text-right tabular-nums">
                     {/* A price is the manager's to change (2026-09-21); the
                         route refuses anyone else. */}
@@ -1032,21 +1191,57 @@ export default function OrderDetail({
                   setEditingSubtotal(true);
                 }}
               >
-                {formatAed(order.subtotal || subtotal(items))}
+                {formatAed(grossSubtotal)}
                 <Pencil size={11} />
               </button>
             )}
           </div>
         ) : (
-          <Row label={t("orders.subtotal")} value={formatAed(order.subtotal || subtotal(items))} />
+          <Row label={t("orders.subtotal")} value={formatAed(grossSubtotal)} />
         )}
-        <Row label={t("orders.vat")} value={formatAed(order.vat_amount || vat(items))} />
-        <Row label={t("common.total")} value={formatAed(order.total || total(items))} bold />
+        {managerEdits ? (
+          <div className="flex justify-between items-center text-secondary">
+            <span>{t("orders.orderDiscount")}</span>
+            {editingOrderDiscount ? (
+              <input
+                autoFocus
+                type="number"
+                min={0}
+                step="0.01"
+                aria-label={t("orders.orderDiscount")}
+                className="w-24 px-2 py-1 rounded-inner border border-hairline text-right tabular-nums"
+                value={orderDiscountDraft}
+                onChange={(e) => setOrderDiscountDraft(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && saveOrderDiscount(Number(orderDiscountDraft) || 0)}
+                onBlur={() => saveOrderDiscount(Number(orderDiscountDraft) || 0)}
+              />
+            ) : (
+              <button
+                className="tabular-nums flex items-center gap-1 hover:text-accent"
+                title={t("orders.setOrderDiscount")}
+                onClick={() => {
+                  setOrderDiscountDraft(orderDiscountAmount > 0 ? orderDiscountAmount.toFixed(2) : "");
+                  setEditingOrderDiscount(true);
+                }}
+              >
+                {orderDiscountAmount > 0 ? `−${formatAed(orderDiscountAmount)}` : t("common.notSet")}
+                <Pencil size={11} />
+              </button>
+            )}
+          </div>
+        ) : (
+          orderDiscountAmount > 0 && (
+            <Row label={t("orders.orderDiscount")} value={`−${formatAed(orderDiscountAmount)}`} />
+          )
+        )}
+        <Row label={t("orders.vat")} value={formatAed(order.vat_amount || fallbackBilled.vatAmount)} />
+        <Row label={t("common.total")} value={formatAed(order.total || fallbackBilled.total)} bold />
         {isManager && items.some((it) => it.unit_cost != null) && (
           <Row
             label={t("orders.grossProfit")}
             value={formatAed(
-              subtotal(items) -
+              grossSubtotal -
+                orderDiscountAmount -
                 items.reduce((s, it) => s + (it.unit_cost ?? 0) * effectiveQty(it), 0)
             )}
           />

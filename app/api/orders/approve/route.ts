@@ -3,6 +3,7 @@ import { getAppUser } from "@/lib/auth";
 import { supabaseCaller } from "@/lib/supabase/server";
 import { resolveVatRate } from "@/lib/queries/zones";
 import { toFils, toAed, billed } from "@/lib/money";
+import { orderDiscount } from "@/lib/orders-server";
 
 export const runtime = "nodejs";
 
@@ -156,9 +157,12 @@ export async function POST(req: NextRequest) {
     customerCountry = cust?.country_code ?? null;
   }
   const vatRate = await resolveVatRate(supabase, customerCountry, fallbackVatRate);
+  // The order-wide discount (RUN-ME-28) comes off before VAT, as it does in
+  // manager_edit_order; 0 on a database without it.
+  const discountFils = Math.round((await orderDiscount(supabase, orderId)) * 100);
   // VAT is rounded once, and the total is the two figures added — so the
   // lines on the invoice add up to the total printed on it.
-  const { subtotal, vatAmount, total } = billed(toAed(subtotalFils), vatRate);
+  const { subtotal, vatAmount, total } = billed(toAed(Math.max(0, subtotalFils - discountFils)), vatRate);
 
   const { error: approveErr } = await supabase
     .from("orders")

@@ -1,17 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAppUser } from "@/lib/auth";
 import { supabaseCaller } from "@/lib/supabase/server";
-import { recalcOrderTotals, stampEdited } from "@/lib/orders-server";
+import { recalcOrderTotals, stampEdited, managerEditOrder } from "@/lib/orders-server";
 import { lineDiscountPrice } from "@/lib/money";
 import { t } from "@/lib/i18n";
 
 export const runtime = "nodejs";
 
-// Edits a line item's quantity/price on a not-yet-accepted order (§Next
-// Updates Orders: "make order data editable"). Scoped to draft/pending —
-// once an order is accepted, quantity changes go through the existing
-// pick/edit-request flow instead (stock and invoices are already in play by
-// then, so a silent qty/price edit there would be unsafe).
+// Edits a line item's quantity/price. A salesman: their own order, while it
+// is draft/pending. A manager or admin: any order at any stage (owner,
+// 2026-09-25), through the database's manager_edit_order, which moves the
+// stock and the totals with the line. Until RUN-ME-28 has been run a manager
+// falls back to the draft/pending rule.
 //
 // `discountPercent` is the manager's per-product discount (owner, 2026-09-18).
 // There is no discount column on order_items, deliberately (2026-09-04): what
@@ -45,29 +45,18 @@ export async function POST(req: NextRequest) {
     .maybeSingle();
   if (orderErr || !order) return NextResponse.json({ error: t("orders.orderNotFound") }, { status: 404 });
 
-  if (!["draft", "pending"].includes(order.status)) {
-    return NextResponse.json({ error: t("orders.noLongerEditableDirectly") }, { status: 409 });
-  }
-  if (!isManager && order.salesman_id !== user.id) {
-    return NextResponse.json({ error: t("orders.onlyOwnOrders") }, { status: 403 });
-  }
-
-  const patch: Record<string, unknown> = {};
+  // Validated once, used by both paths below.
+  let qty: number | undefined;
   if (orderedQty !== undefined) {
-    const q = Number(orderedQty);
-    if (!Number.isFinite(q) || q < 0) return NextResponse.json({ error: t("orders.invalidQuantity") }, { status: 400 });
-    patch.ordered_qty = q;
+    qty = Number(orderedQty);
+    if (!Number.isFinite(qty) || qty < 0) return NextResponse.json({ error: t("orders.invalidQuantity") }, { status: 400 });
   }
+  let price: number | undefined;
   if (unitPrice !== undefined) {
-    // A price is the manager's to change (owner, 2026-09-21). A salesman's
-    // line charges the old price or the list price, and a lower one used to
-    // print as a discount nobody had given.
     if (!isManager) return NextResponse.json({ error: t("common.managerAccessRequired") }, { status: 403 });
-    const p = Number(unitPrice);
-    if (!Number.isFinite(p) || p < 0) return NextResponse.json({ error: t("orders.invalidPrice") }, { status: 400 });
-    patch.unit_price = p;
+    price = Number(unitPrice);
+    if (!Number.isFinite(price) || price < 0) return NextResponse.json({ error: t("orders.invalidPrice") }, { status: 400 });
   }
-
   if (discountPercent !== undefined) {
     if (!isManager) return NextResponse.json({ error: t("common.managerAccessRequired") }, { status: 403 });
     const pct = Number(discountPercent);
@@ -79,8 +68,28 @@ export async function POST(req: NextRequest) {
       : { data: null };
     const listPrice = Number(product?.price) || 0;
     if (listPrice <= 0) return NextResponse.json({ error: t("orders.noListPriceForDiscount") }, { status: 400 });
-    patch.unit_price = lineDiscountPrice(listPrice, pct);
+    price = lineDiscountPrice(listPrice, pct);
   }
+
+  if (isManager) {
+    const change: { op: "set"; id: string; qty?: number; unit_price?: number } = { op: "set", id: itemId };
+    if (qty !== undefined) change.qty = qty;
+    if (price !== undefined) change.unit_price = price;
+    const result = await managerEditOrder(supabase, order.id, [change]);
+    if (result.ok) return NextResponse.json({ ok: true, edited_stamped: true });
+    if (!result.missing) return NextResponse.json({ error: result.message }, { status: 400 });
+  }
+
+  if (!["draft", "pending"].includes(order.status)) {
+    return NextResponse.json({ error: t("orders.noLongerEditableDirectly") }, { status: 409 });
+  }
+  if (!isManager && order.salesman_id !== user.id) {
+    return NextResponse.json({ error: t("orders.onlyOwnOrders") }, { status: 403 });
+  }
+
+  const patch: Record<string, unknown> = {};
+  if (qty !== undefined) patch.ordered_qty = qty;
+  if (price !== undefined) patch.unit_price = price;
 
   const { error: updateErr } = await supabase.from("order_items").update(patch).eq("id", itemId);
   if (updateErr) return NextResponse.json({ error: updateErr.message }, { status: 400 });

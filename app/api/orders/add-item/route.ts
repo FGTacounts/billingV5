@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAppUser } from "@/lib/auth";
 import { supabaseCaller } from "@/lib/supabase/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
-import { recalcOrderTotals, stampEdited } from "@/lib/orders-server";
+import { recalcOrderTotals, stampEdited, managerEditOrder, type ManagerChange } from "@/lib/orders-server";
 import { resolveLinePrice } from "@/lib/money";
 import { t } from "@/lib/i18n";
 
@@ -17,9 +17,13 @@ export const runtime = "nodejs";
 // picking / packed: a manager or the warehouse (owner, 2026-09-21) — stock
 // is only deducted at approval, so a line added at those stages is deducted
 // with the rest. From approval on stock and an invoice are in play and the
-// change goes through the edit-request flow instead.
+// change goes through the edit-request flow instead — except for a manager
+// or admin, who may add a line at any stage (owner, 2026-09-25), through
+// manager_edit_order, which takes its stock off the shelf if approval has
+// already run.
 const BEFORE_ACCEPTANCE = ["draft", "pending"];
 const IN_THE_WAREHOUSE = ["waiting", "picking", "packed"];
+const PAST_PICKING = ["packed", "approved", "edit_requested", "delivering", "delivered"];
 
 export async function POST(req: NextRequest) {
   const user = await getAppUser();
@@ -49,17 +53,18 @@ export async function POST(req: NextRequest) {
   if (orderErr || !order) return NextResponse.json({ error: t("orders.orderNotFound") }, { status: 404 });
 
   const afterAcceptance = IN_THE_WAREHOUSE.includes(order.status);
-  if (afterAcceptance) {
-    if (!isManager && user.role !== "warehouse") {
-      return NextResponse.json({ error: t("common.warehouseOrManagerAccessRequired") }, { status: 403 });
+  // A manager may add at any stage; manager_edit_order checks the role
+  // itself. The stage rules are for everyone else.
+  if (!isManager) {
+    if (afterAcceptance) {
+      if (user.role !== "warehouse") {
+        return NextResponse.json({ error: t("common.warehouseOrManagerAccessRequired") }, { status: 403 });
+      }
+    } else if (!BEFORE_ACCEPTANCE.includes(order.status)) {
+      return NextResponse.json({ error: t("orders.noLongerEditableDirectly") }, { status: 409 });
+    } else if (order.salesman_id !== user.id) {
+      return NextResponse.json({ error: t("orders.onlyOwnOrders") }, { status: 403 });
     }
-  } else if (!BEFORE_ACCEPTANCE.includes(order.status)) {
-    return NextResponse.json(
-      { error: t("orders.noLongerEditableDirectly") },
-      { status: 409 }
-    );
-  } else if (!isManager && order.salesman_id !== user.id) {
-    return NextResponse.json({ error: t("orders.onlyOwnOrders") }, { status: 403 });
   }
 
   // The cost snapshot is why this reads the product through the service-role
@@ -108,6 +113,29 @@ export async function POST(req: NextRequest) {
     .eq("product_id", productId)
     .limit(1)
     .maybeSingle();
+
+  if (isManager) {
+    // The same merge as below, as changes the database applies with the
+    // stock. A line that is already picked stays picked at its new quantity
+    // once the order is past picking (the invoice bills the picked figure);
+    // before that the tick comes off, as it does for the warehouse.
+    const changes: ManagerChange[] = [];
+    if (!existing) {
+      changes.push({ op: "set", product_id: productId, qty: quantity, unit_price: unitPrice });
+    } else if (existing.picked_qty != null && PAST_PICKING.includes(order.status)) {
+      changes.push({ op: "set", id: existing.id, qty: existing.picked_qty + quantity });
+    } else {
+      if (existing.picked_qty != null) changes.push({ op: "pick", id: existing.id, qty: null });
+      changes.push({ op: "set", id: existing.id, qty: (existing.ordered_qty ?? 0) + quantity });
+    }
+    const result = await managerEditOrder(supabase, order.id, changes);
+    if (result.ok) return NextResponse.json({ ok: true, merged: Boolean(existing), edited_stamped: true });
+    if (!result.missing) return NextResponse.json({ error: result.message }, { status: 400 });
+    // No RUN-ME-28 yet: the rule from before it.
+    if (!afterAcceptance && !BEFORE_ACCEPTANCE.includes(order.status)) {
+      return NextResponse.json({ error: t("orders.noLongerEditableDirectly") }, { status: 409 });
+    }
+  }
 
   let itemId: string;
   if (existing) {

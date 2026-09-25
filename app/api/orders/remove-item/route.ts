@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAppUser } from "@/lib/auth";
 import { supabaseCaller } from "@/lib/supabase/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
-import { recalcOrderTotals, stampEdited } from "@/lib/orders-server";
+import { recalcOrderTotals, stampEdited, managerEditOrder } from "@/lib/orders-server";
 import { t } from "@/lib/i18n";
 
 export const runtime = "nodejs";
@@ -16,7 +16,10 @@ export const runtime = "nodejs";
 // come off it: a manager or the warehouse may remove one (owner, 2026-09-21).
 // Stock is only deducted at approval, so at every one of these stages the row
 // simply goes. From approval on, stock has moved and an invoice exists, and
-// the order is corrected through the edit-request flow instead.
+// the order is corrected through the edit-request flow instead — except by
+// a manager or admin, who may take a line off at any stage (owner,
+// 2026-09-25): manager_edit_order puts its stock back if approval had taken
+// it, and recomputes the totals, in one transaction.
 const BEFORE_ACCEPTANCE = ["draft", "pending"];
 const IN_THE_WAREHOUSE = ["waiting", "picking", "packed"];
 
@@ -43,6 +46,12 @@ export async function POST(req: NextRequest) {
     .eq("id", item.order_id)
     .maybeSingle();
   if (orderErr || !order) return NextResponse.json({ error: t("orders.orderNotFound") }, { status: 404 });
+
+  if (isManager) {
+    const result = await managerEditOrder(supabase, order.id, [{ op: "remove", id: itemId }]);
+    if (result.ok) return NextResponse.json({ ok: true, edited_stamped: true });
+    if (!result.missing) return NextResponse.json({ error: result.message }, { status: 400 });
+  }
 
   const afterAcceptance = IN_THE_WAREHOUSE.includes(order.status);
   if (afterAcceptance) {

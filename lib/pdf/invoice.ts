@@ -28,16 +28,29 @@ export const LINE = rgb(0.75, 0.75, 0.75);
 const COLS = {
   no: 20,
   sku: 45,
-  desc: 122,
+  desc: 170,
   uos: 32,
   qty: 28,
   price: 42,
   discount: 48,
   netPrice: 50,
-  subtotal: 48,
   vat: 36,
   netTotal: 52.28,
 };
+
+// Figures sit on the right of their column; the header above each one sits
+// the same way, so a heading lines up with the numbers under it.
+const RIGHT_COLS = new Set<keyof typeof COLS>(["qty", "price", "discount", "netPrice", "vat", "netTotal"]);
+
+// A light rule between every pair of columns, from `top` down `h` points.
+function drawColumnRules(page: PDFPage, top: number, h: number) {
+  let x = MARGIN;
+  const widths = Object.values(COLS);
+  for (let i = 0; i < widths.length - 1; i++) {
+    x += widths[i];
+    page.drawLine({ start: { x, y: top }, end: { x, y: top - h }, thickness: 0.4, color: LINE });
+  }
+}
 
 export interface Ctx {
   doc: PDFDocument;
@@ -213,24 +226,27 @@ function drawTableHeader(ctx: Ctx, y: number): number {
   const { page, bold } = ctx;
   const headerH = 18;
   page.drawRectangle({ x: MARGIN, y: y - headerH, width: CONTENT_W, height: headerH, color: SHADE });
-  const labels: [string, number][] = [
-    [t("documents.columnNo"), COLS.no],
-    [t("documents.sku"), COLS.sku],
-    [t("documents.columnDescription"), COLS.desc],
-    [t("documents.columnUos"), COLS.uos],
-    [t("documents.columnQty"), COLS.qty],
-    [t("documents.columnPrice"), COLS.price],
-    [t("documents.columnDiscount"), COLS.discount],
-    [t("documents.columnNetPrice"), COLS.netPrice],
-    [t("documents.columnSubtotal"), COLS.subtotal],
-    [t("documents.vat"), COLS.vat],
-    [t("documents.columnNetTotal"), COLS.netTotal],
+  const labels: [string, keyof typeof COLS][] = [
+    [t("documents.columnNo"), "no"],
+    [t("documents.sku"), "sku"],
+    [t("documents.columnDescription"), "desc"],
+    [t("documents.columnUos"), "uos"],
+    [t("documents.columnQty"), "qty"],
+    [t("documents.columnPrice"), "price"],
+    [t("documents.columnDiscount"), "discount"],
+    [t("documents.columnNetPrice"), "netPrice"],
+    [t("documents.vat"), "vat"],
+    [t("documents.columnNetTotal"), "netTotal"],
   ];
   let x = MARGIN;
-  for (const [label, w] of labels) {
-    page.drawText(label, { x: x + 3, y: y - 12, size: 6.5, font: bold, color: INK });
+  for (const [label, key] of labels) {
+    const w = COLS[key];
+    const size = 6.5;
+    const tx = RIGHT_COLS.has(key) ? x + w - 4 - bold.widthOfTextAtSize(label, size) : x + 3;
+    page.drawText(label, { x: tx, y: y - 12, size, font: bold, color: INK });
     x += w;
   }
+  drawColumnRules(page, y, headerH);
   page.drawRectangle({ x: MARGIN, y: y - headerH, width: CONTENT_W, height: headerH, borderColor: LINE, borderWidth: 0.75 });
   return y - headerH;
 }
@@ -244,17 +260,15 @@ interface LineCalc {
   price: number;
   discount: number;
   netPrice: number;
-  lineSubtotal: number;
   vat: number;
   netTotal: number;
 }
 
-// Matches the reference template's exact (if slightly unconventional)
-// per-line arithmetic: NET PRICE is the true pre-VAT line amount, VAT is
-// NET PRICE × rate, and the per-line "SUBTOTAL" column is NET PRICE minus
-// that VAT (not the same thing as the footer's "Subtotal without VAT",
-// which sums NET PRICE directly) — verified against the attached reference
-// PDF's numbers line by line rather than assumed.
+// Matches the reference template's per-line arithmetic: NET PRICE is the
+// true pre-VAT line amount and VAT is NET PRICE × rate — verified against
+// the attached reference PDF's numbers line by line rather than assumed.
+// The per-line SUBTOTAL column the template also had was removed at the
+// owner's request (2026-09-25).
 export function computeInvoiceLines(items: OrderItemRow[], vatRate: number): LineCalc[] {
   return items.map((it, i) => {
     const qty = it.picked_qty ?? it.ordered_qty;
@@ -283,7 +297,6 @@ export function computeInvoiceLines(items: OrderItemRow[], vatRate: number): Lin
       price,
       discount,
       netPrice,
-      lineSubtotal: netPrice - vatAmt,
       vat: vatAmt,
       netTotal: netPrice + vatAmt,
     };
@@ -311,10 +324,12 @@ function drawTableRow(ctx: Ctx, y: number, line: LineCalc): number {
   cell(AED(line.price), COLS.price, "right");
   cell(AED(line.discount), COLS.discount, "right");
   cell(AED(line.netPrice), COLS.netPrice, "right");
-  cell(AED(line.lineSubtotal), COLS.subtotal, "right");
   cell(AED(line.vat), COLS.vat, "right");
   cell(AED(line.netTotal), COLS.netTotal, "right");
   page.drawLine({ start: { x: MARGIN, y: y - rowH }, end: { x: A4.w - MARGIN, y: y - rowH }, thickness: 0.4, color: LINE });
+  drawColumnRules(page, y, rowH);
+  page.drawLine({ start: { x: MARGIN, y }, end: { x: MARGIN, y: y - rowH }, thickness: 0.4, color: LINE });
+  page.drawLine({ start: { x: A4.w - MARGIN, y }, end: { x: A4.w - MARGIN, y: y - rowH }, thickness: 0.4, color: LINE });
   return y - rowH;
 }
 

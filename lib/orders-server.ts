@@ -1,6 +1,6 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { subtotal as calcSubtotal, vat as calcVat, total as calcTotal, FALLBACK_VAT_RATE } from "@/lib/money";
+import { subtotalFils, toAed, billed, FALLBACK_VAT_RATE } from "@/lib/money";
 import { resolveVatRate } from "@/lib/queries/zones";
 
 // Shared by the three routes that change what is on an order —
@@ -17,6 +17,10 @@ import { resolveVatRate } from "@/lib/queries/zones";
  *
  * subtotal/vat_amount/total are NOT NULL columns (default 0), so an order
  * with no lines left is written as zeroes rather than nulls.
+ *
+ * The order-wide discount (RUN-ME-28) comes off before VAT, as the database's
+ * manager_edit_order does, so both routes to a total agree. Before RUN-ME-28
+ * there is no discount column and the discount is 0.
  */
 export async function recalcOrderTotals(
   supabase: SupabaseClient,
@@ -39,13 +43,12 @@ export async function recalcOrderTotals(
   const rate = await resolveVatRate(supabase, customerCountry, fallbackRate);
 
   const rows = allItems ?? [];
+  const discount = await orderDiscount(supabase, orderId);
+  const net = Math.max(0, subtotalFils(rows) - Math.round(discount * 100));
+  const { subtotal, vatAmount, total } = billed(toAed(net), rate);
   await supabase
     .from("orders")
-    .update({
-      subtotal: calcSubtotal(rows),
-      vat_amount: calcVat(rows, rate),
-      total: calcTotal(rows, rate),
-    })
+    .update({ subtotal, vat_amount: vatAmount, total })
     .eq("id", orderId);
 }
 
@@ -75,4 +78,53 @@ export async function stampEdited(
     .eq("id", orderId);
   if (error && /edited_(at|by)/.test(error.message ?? "")) editedColumnsMissing = true;
   return !error;
+}
+
+/** The order-wide discount in AED, or 0 before RUN-ME-28 has been run. */
+export async function orderDiscount(supabase: SupabaseClient, orderId: string): Promise<number> {
+  const { data, error } = await supabase.from("orders").select("discount_amount").eq("id", orderId).maybeSingle();
+  if (error) return 0;
+  return Number(data?.discount_amount) || 0;
+}
+
+/**
+ * One change in a manager's edit — see manager_edit_order in
+ * scratchpad/RUN-ME-28-manager-edits-any-order.sql for what each does.
+ */
+export type ManagerChange =
+  | { op: "set"; id: string; qty?: number; unit_price?: number }
+  | { op: "set"; product_id: string; qty: number; unit_price?: number }
+  | { op: "remove"; id: string }
+  | { op: "pick"; id: string; qty: number | null }
+  | { op: "arrange"; ids: string[] };
+
+export type ManagerEditResult =
+  | { ok: true }
+  | { ok: false; missing: true }
+  | { ok: false; missing: false; message: string };
+
+/**
+ * A manager's change to an order, at any stage (owner, 2026-09-25): the lines,
+ * the stock and the totals move together inside the database, or not at all.
+ * Runs as the caller, so the function sees who they are.
+ *
+ * `missing` means RUN-ME-28 has not been run yet. The routes then fall back
+ * to the rules they had before it, so nothing stops working in the meantime.
+ */
+export async function managerEditOrder(
+  supabase: SupabaseClient,
+  orderId: string,
+  changes: ManagerChange[],
+  discount?: number
+): Promise<ManagerEditResult> {
+  const { error } = await supabase.rpc("manager_edit_order", {
+    p_order_id: orderId,
+    p_changes: changes,
+    p_discount: discount ?? null,
+  });
+  if (!error) return { ok: true };
+  if (error.code === "PGRST202" || /manager_edit_order/.test(error.message ?? "")) {
+    return { ok: false, missing: true };
+  }
+  return { ok: false, missing: false, message: error.message };
 }

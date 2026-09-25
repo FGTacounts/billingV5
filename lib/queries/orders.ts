@@ -311,7 +311,35 @@ export async function fetchOrder(
   if (error) throw error;
   if (!data) return null;
   const [row] = await attachRelations(supabase, [data as unknown as Order]);
-  return row;
+  return { ...row, ...(await fetchManagerFields(supabase, id)) };
+}
+
+// Remembered after the first refusal, like the Edited stamp above: before
+// RUN-ME-28 neither column exists, and every order screen would otherwise
+// pay for a request it knows will fail.
+let managerFieldsMissing = false;
+
+/**
+ * The order-wide discount and the arranged line order (RUN-ME-28). Read
+ * separately from the order itself so a database without them still loads
+ * every order — a discount of 0 and no arrangement.
+ */
+async function fetchManagerFields(
+  supabase: SupabaseClient,
+  orderId: string
+): Promise<{ discount_amount: number; line_order: string[] | null }> {
+  const none = { discount_amount: 0, line_order: null };
+  if (managerFieldsMissing) return none;
+  const { data, error } = await supabase
+    .from("orders")
+    .select("discount_amount, line_order")
+    .eq("id", orderId)
+    .maybeSingle();
+  if (error) {
+    if (/discount_amount|line_order/.test(error.message ?? "")) managerFieldsMissing = true;
+    return none;
+  }
+  return { discount_amount: Number(data?.discount_amount) || 0, line_order: data?.line_order ?? null };
 }
 
 export interface OrderItemRow extends OrderItem {
@@ -355,7 +383,18 @@ export async function fetchOrderItems(
     // shouldn't take down the whole order screen.
   }
 
-  return rows.map((r) => ({ ...r, product: byId.get(r.product_id) ?? null }));
+  // In the order a manager arranged them; lines never arranged keep the order
+  // the database returned them in, after the arranged ones. Every reader —
+  // the order screen, the invoice PDF, the Excel — comes through here, so
+  // they all list the lines the same way.
+  const { line_order } = await fetchManagerFields(supabase, orderId);
+  const rank = new Map((line_order ?? []).map((id, i) => [id, i]));
+  const arranged = rows
+    .map((r, i) => ({ r, i }))
+    .sort((a, b) => (rank.get(a.r.id) ?? rank.size + a.i) - (rank.get(b.r.id) ?? rank.size + b.i))
+    .map(({ r }) => r);
+
+  return arranged.map((r) => ({ ...r, product: byId.get(r.product_id) ?? null }));
 }
 
 export async function updateOrderStatus(

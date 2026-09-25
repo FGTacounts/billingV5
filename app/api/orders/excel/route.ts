@@ -56,7 +56,6 @@ export async function GET(req: NextRequest) {
     { header: t("orders.columnPrice"), key: "price", width: 10 },
     { header: t("orders.columnDiscount"), key: "discount", width: 10 },
     { header: t("orders.columnNetPrice"), key: "netPrice", width: 12 },
-    { header: t("orders.columnSubtotal"), key: "subtotal", width: 12 },
     { header: t("orders.columnVat"), key: "vat", width: 10 },
     { header: t("orders.columnNetTotal"), key: "netTotal", width: 12 },
   ];
@@ -71,7 +70,6 @@ export async function GET(req: NextRequest) {
       price: l.price,
       discount: l.discount,
       netPrice: l.netPrice,
-      subtotal: l.lineSubtotal,
       vat: l.vat,
       netTotal: l.netTotal,
     });

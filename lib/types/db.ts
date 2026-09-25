@@ -229,6 +229,10 @@ export interface Order {
   total: number | null;
   subtotal: number | null;
   vat_amount: number | null;
+  // RUN-ME-28. Read only for a single order (fetchOrder), 0 / null before it
+  // has been run. subtotal is stored net of the discount.
+  discount_amount?: number;
+  line_order?: string[] | null;
   created_at: string;
   updated_at: string;
 }

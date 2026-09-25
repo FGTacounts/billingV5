@@ -2549,3 +2549,83 @@ GP.
 no re-stamped group left (largest shared date is 13 orders at midnight — real
 invoice dates), 49 of 558 orders dated September (AED 64,577 before status
 filtering), down from all 558.
+
+## 2026-09-25 — The per-line SUBTOTAL column is gone from every invoice
+
+Owner's request: "Remove the subtotal column". Removed from all four
+places it was printed — web invoice PDF (`lib/pdf/invoice.ts`), web Excel
+download (`app/api/orders/excel/route.ts`), and the phone's PDF and Excel
+exports (`OrderPDFExporter.swift`, `OrderExcelExporter.swift`). The column
+was NET PRICE minus VAT, which nobody reads off an invoice. The freed width
+goes to DESCRIPTION, so long product names wrap less. The footer's
+"Subtotal without VAT" total is a different thing and stays. In the phone's
+Excel (an HTML table), the header blocks' spans were each narrowed by one
+(Ship To, Payment Terms, Company signature, the footer spacer) so the grid
+still lines up at 10 visible columns plus the 3 hidden cost columns.
+
+Same day, web invoice PDF only: a light rule (the existing `LINE` grey,
+0.4pt) now runs between every column and down both table edges, and each
+heading takes its column's alignment — figures (QTY → NET TOTAL) and their
+headings are right-aligned, text columns left. The phone's PDF already had
+both (every cell stroked, headings aligned per column); its strokes are thin
+black and shared with the statement PDF, so they were left alone rather
+than restyled without being asked.
+
+## 2026-09-25 — A manager changes an order at any stage; stock follows
+
+Owner's decision, replacing the 2026-09-21 rule that an approved order is
+changed only through the edit-request flow. The owner was told it means an
+invoice already handed to a customer can differ from the one in the system,
+and chose it anyway. A manager or admin may now change quantity, price and
+discount, add or remove lines, pick or unpick a line, and rearrange the
+lines, at any status except cancelled (in the trash — restore it first).
+
+All of it goes through one database function, `manager_edit_order`
+(scratchpad/RUN-ME-28), on both apps, so the lines, the stock and the
+totals move in one transaction or not at all. Before approval only lines
+and totals change (approval deducts as before). From approval on
+(approved, edit_requested, delivering, delivered) the shelf moves by the
+difference. A raise the shelf cannot cover is refused rather than clamped:
+the stock trigger floors at 0, so clamping would lose count of what was
+taken and a later reversal would put back stock that never existed.
+
+- Order-wide discount: `orders.discount_amount`, AED, numeric — the same
+  unit as subtotal/vat_amount/total on the same row and as
+  payments.discount_amount. Rule 6 says integer minor units; this
+  database stores AED numeric everywhere, and one row mixing units is the
+  worse hazard. Taken off before VAT; `subtotal` is stored net of it, so
+  every report reading subtotal/total is already right.
+- Line order: `orders.line_order uuid[]`, not a position column on lines.
+  The web reads lines through `order_items_safe`, whose definition is only
+  in the live database; adding a column to it means rewriting the view
+  that hides cost, unseen. Unlisted lines sort after listed ones.
+- Unpicking after approval makes the invoice fall back to the ordered
+  quantity, so unpicking a short-picked line takes the difference off the
+  shelf — the same rule as any other quantity raise.
+- A new line on an order at packed or later is saved as picked at its
+  quantity, so the invoice shows it.
+
+2026-09-25, web side of the above:
+- The four line routes (update-item, add-item, remove-item,
+  update-picked-qty) keep their rules for salesmen and the warehouse. For a
+  manager or admin they call manager_edit_order first; if the database says
+  the function does not exist (RUN-ME-28 not run) they fall back to the
+  rules from before, so nothing stops working in the gap. Unpicking,
+  rearranging and the order discount have no "before" and say the database
+  needs updating. A new route, /api/orders/manager-edit, carries those last
+  two.
+- Adding an article a picked line already has: past picking the line stays
+  picked at the higher quantity (the invoice bills the picked figure);
+  before that the tick comes off and the warehouse picks it again, as it
+  always has.
+- A manager editing a quantity edits the billed figure: the picked quantity
+  if the line is picked, else the ordered one (the database's rule). The
+  cell shows that figure, with the ordered one struck through beside it
+  when they differ.
+- The picking sort (unpicked first / article / rack) now applies only while
+  picking, where its control is shown. Elsewhere it silently reordered the
+  lines, which would have hidden any arrangement. Rearranging is offered
+  outside picking only, for the same reason; while picking, the sort wins.
+- The screen's totals: Subtotal is the lines before the order discount,
+  then the discount, then VAT and total. recalcOrderTotals and the
+  approval both take the discount off before VAT, like the database does.

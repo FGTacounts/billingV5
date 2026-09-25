@@ -22,6 +22,14 @@
 -- imported invoice is the real invoice date. (None of the 537 has a
 -- status change on record, so in practice it is created_at.)
 --
+-- AND AGAIN on 2026-09-23 at 17:47:33 UTC: the same 537 orders,
+-- re-stamped a third time, so the Sales page read AED 1.2m for this
+-- month. The repair below no longer looks for one particular moment:
+-- it puts back every order that shares its updated_at with more than
+-- 20 others (no real invoice date looks like that), whenever the
+-- re-stamp happened. Once this file has run, a re-stamp can no longer
+-- move a sale, because sales read billed_at, which it does not touch.
+--
 -- This adds orders.billed_at:
 --   * filled from updated_at AFTER that repair, so the only figures
 --     that move when you run this are the ones that are wrong today;
@@ -64,7 +72,7 @@ begin
       sqlerrm, sqlstate;
   end;
 
-  -- The 2026-09-19 re-stamp, undone. Also puts updated_at itself right,
+  -- The re-stamps (2026-09-19, 2026-09-23, any other), undone. Also puts updated_at itself right,
   -- because the web app and the phones already out there read updated_at
   -- until their new versions are installed.
   update public.orders o
@@ -72,7 +80,12 @@ begin
            (select max(l.changed_at) from public.order_status_log l where l.order_id = o.id),
            o.created_at
          )
-   where o.updated_at = timestamptz '2026-09-19 15:56:46.501482+00';
+   where o.updated_at in (
+           select updated_at from public.orders
+            where updated_at <> date_trunc('day', updated_at at time zone 'UTC') at time zone 'UTC'
+            group by updated_at
+           having count(*) > 20
+         );
   get diagnostics repaired = row_count;
 
   update public.orders
@@ -82,7 +95,7 @@ begin
 
   execute 'alter table public.orders enable trigger user';
 
-  raise notice 'Orders put back to their real dates (expected 537 the first time, 0 after): %', repaired;
+  raise notice 'Orders put back to their real dates (expected about 537 the first time, 0 after): %', repaired;
   raise notice 'Orders given a billing date: %', filled;
 end
 $$;
@@ -153,9 +166,12 @@ union all
 select 'billing date differs from updated_at (0 the first time you run this)',
        count(*)::text from public.orders where billed_at is distinct from updated_at
 union all
-select 'orders still carrying the 2026-09-19 re-stamp (must be 0)',
-       count(*)::text from public.orders
-        where updated_at = timestamptz '2026-09-19 15:56:46.501482+00'
+select 'orders still sharing one re-stamped moment with 20+ others (must be 0)',
+       coalesce(sum(n), 0)::text from (
+         select count(*) as n from public.orders
+          where updated_at <> date_trunc('day', updated_at at time zone 'UTC') at time zone 'UTC'
+          group by updated_at having count(*) > 20
+       ) restamped
 union all
 select 'orders billed this month (should look like ONE month, not all of them)',
        count(*)::text from public.orders

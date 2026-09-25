@@ -2529,3 +2529,23 @@ the database — No `billed_at`, no `billed_at_manual`, and the 537 re-stamped
 orders unchanged, checked read-only. RUN-ME-26's columns are absent too. The
 SQL editor must have refused something; the owner has been asked for the
 message. The apps keep working on `updated_at` in the meantime, by design.
+
+## 2026-09-23 — RUN-ME-27 repairs any mass re-stamp, not one moment
+
+The Sales page showed AED 1.2m sale for September. Read against the live
+database: the 537 imported, delivered invoices were re-stamped a third
+time, at 2026-09-23 17:47:33 UTC, and RUN-ME-27 still has not been run
+(no `billed_at` column). Nothing in this repo bulk-updates orders; the
+cause is outside the code again. RUN-ME-27's repair looked for the exact
+2026-09-19 timestamp and would now have repaired nothing, so it matches
+any non-midnight `updated_at` shared by more than 20 orders instead. On
+the live data that is exactly the 537 (the next-largest shared moment is
+5). No app code changed: the Sales page already filters to this month —
+it was fed wrong dates. The low Total GP (AED 1,665) is correct-ish: the
+imported invoices have no line items, so only the app's own orders carry
+GP.
+
+2026-09-23 — RUN-ME-27 confirmed on the live database: `billed_at` present,
+no re-stamped group left (largest shared date is 13 orders at midnight — real
+invoice dates), 49 of 558 orders dated September (AED 64,577 before status
+filtering), down from all 558.

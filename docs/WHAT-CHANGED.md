@@ -960,3 +960,12 @@ all of them together.
 there is no billing-date column and the 537 re-dated orders are unchanged.
 RUN-ME-26 has not taken either. Paste each file again, with the role selector
 set to `postgres`, and send me whatever the editor prints in red.
+
+# 2026-09-23 — Sales showing AED 1.2m this month
+
+The 537 imported invoices were re-dated to today again (17:47 UTC), so
+"this month" on Sales and the Dashboard is every sale ever made. Nothing in
+the app did it. `scratchpad/RUN-ME-27-billing-date.sql` has been updated to
+repair this re-stamp (and any future one) — **run it now**, role selector
+set to `postgres`, and send back what it prints. After it runs, re-stamps
+can no longer move a sale.

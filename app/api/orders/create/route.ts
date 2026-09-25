@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAppUser } from "@/lib/auth";
 import { supabaseAdmin } from "@/lib/supabase/admin";
+import { resolveLinePrice } from "@/lib/money";
 import { t } from "@/lib/i18n";
 
 export const runtime = "nodejs";
@@ -69,10 +70,35 @@ export async function POST(req: NextRequest) {
   const productIds = [...new Set(lines.map((l) => l.product_id))];
   const { data: products, error: productsErr } = await admin
     .from("products")
-    .select("id, cost")
+    .select("id, cost, price")
     .in("id", productIds);
   if (productsErr) return NextResponse.json({ error: productsErr.message }, { status: 400 });
   const costById = new Map((products ?? []).map((p) => [p.id, p.cost]));
+
+  // Only a manager sets a price (owner, 2026-09-21). For anyone else the
+  // price the browser sent is not read at all: the line charges what this
+  // customer was last billed for the product, else the list price — worked
+  // out here, from figures read here. A lower price used to arrive from the
+  // form and print on the invoice as a discount nobody had given.
+  const callerSetsPrices = caller.role === "manager" || caller.role === "admin";
+  const priceFor = new Map<string, number>();
+  if (!callerSetsPrices) {
+    const oldPrices = new Map<string, number>();
+    if (customer_id) {
+      const { data: remembered } = await admin
+        .from("customer_prices")
+        .select("product_id, price")
+        .eq("customer_id", customer_id)
+        .in("product_id", productIds);
+      for (const row of remembered ?? []) oldPrices.set(row.product_id, row.price);
+    }
+    for (const p of products ?? []) {
+      priceFor.set(
+        p.id,
+        resolveLinePrice({ listPrice: Number(p.price) || 0, stickyPrice: oldPrices.get(p.id) ?? null }).price
+      );
+    }
+  }
 
   const { error: itemsErr } = await admin.from("order_items").insert(
     lines.map((l) => ({
@@ -80,7 +106,7 @@ export async function POST(req: NextRequest) {
       product_id: l.product_id,
       sku: l.sku,
       description: l.description,
-      unit_price: l.unit_price,
+      unit_price: callerSetsPrices ? l.unit_price : priceFor.get(l.product_id) ?? l.unit_price,
       unit_cost: costById.get(l.product_id) ?? null,
       ordered_qty: l.ordered_qty,
     }))

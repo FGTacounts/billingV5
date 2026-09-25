@@ -1,11 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Plus, FileText, ChevronDown, ChevronRight, Search, SlidersHorizontal, PackageCheck, Trash2 } from "lucide-react";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import {
   fetchOrders,
+  resubmitOrder,
+  deleteOrder,
   fetchOrdersPage,
   countOrders,
   fetchTrashedOrders,
@@ -107,11 +109,19 @@ function invoiceValue(o: OrderRow): number {
   return digits ? Number(digits[0]) : -1;
 }
 
+// The date an order is listed and sorted by: its billing date (owner,
+// 2026-09-22), the same date it counts on in sales and the one on its invoice.
+// Every row from lib/queries/orders.ts carries billed_at; updated_at is the
+// belt-and-braces for a row that somehow does not.
+function listDate(o: OrderRow): number {
+  return +new Date(o.billed_at ?? o.updated_at);
+}
+
 function sortOrders(rows: OrderRow[], sort: OrderSort): OrderRow[] {
   const out = [...rows];
   switch (sort) {
     case "oldest":
-      return out.sort((a, b) => +new Date(a.created_at) - +new Date(b.created_at));
+      return out.sort((a, b) => listDate(a) - listDate(b));
     case "invoice_desc":
       return out.sort((a, b) => invoiceValue(b) - invoiceValue(a));
     case "invoice_asc":
@@ -133,7 +143,7 @@ function sortOrders(rows: OrderRow[], sort: OrderSort): OrderRow[] {
         (a.salesman?.full_name ?? "").localeCompare(b.salesman?.full_name ?? "")
       );
     default:
-      return out.sort((a, b) => +new Date(b.created_at) - +new Date(a.created_at));
+      return out.sort((a, b) => listDate(b) - listDate(a));
   }
 }
 
@@ -200,6 +210,32 @@ export default function OrdersView({ user }: { user: AppUser }) {
   // watches this instead of subscribing itself: two useRealtimeTable("orders")
   // calls with no filter would collide on the same channel name.
   const [refreshKey, setRefreshKey] = useState(0);
+  // Multi-select (manager and admin). While it is on, tapping a row ticks it
+  // instead of opening it, in every list on the page. One bulk action:
+  // Delete — the same delete as the order's own, once per ticked order.
+  const [selecting, setSelecting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const selection = useMemo<OrderSelection | null>(
+    () =>
+      selecting
+        ? {
+            ids: selectedIds,
+            toggle: (id) =>
+              setSelectedIds((prev) => {
+                const next = new Set(prev);
+                if (next.has(id)) next.delete(id);
+                else next.add(id);
+                return next;
+              }),
+          }
+        : null,
+    [selecting, selectedIds]
+  );
+  function stopSelecting() {
+    setSelecting(false);
+    setSelectedIds(new Set());
+  }
 
   // WIP pipeline is naturally small/bounded (this is the fetch), unlike the
   // Delivered / Past-Orders archives which grow forever — those go through
@@ -222,6 +258,31 @@ export default function OrdersView({ user }: { user: AppUser }) {
   useEffect(() => {
     load();
   }, [load]);
+
+  // One at a time, through the same route as a single delete, so each order
+  // gets its stock put back and its payments released exactly as it would
+  // alone — and one refusal does not stop the rest.
+  async function deleteSelected() {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    if (!confirm(t("orders.deleteSelectedConfirm", { n: ids.length }))) return;
+    setBulkBusy(true);
+    let failed = 0;
+    for (const id of ids) {
+      try {
+        await deleteOrder(id);
+      } catch {
+        failed += 1;
+      }
+    }
+    setBulkBusy(false);
+    const done = ids.length - failed;
+    if (done > 0) toast.success(t("orders.deletedSelected", { n: done }));
+    if (failed > 0) toast.error(t("orders.deleteSelectedFailed", { n: failed }));
+    stopSelecting();
+    await load();
+    setRefreshKey((k) => k + 1);
+  }
 
   useRealtimeTable("orders", () => {
     load();
@@ -364,6 +425,7 @@ export default function OrdersView({ user }: { user: AppUser }) {
   if (loading) return <SkeletonList rows={6} />;
 
   return (
+    <OrderSelectionContext.Provider value={selection}>
     <div className="p-4 md:p-6 max-w-[1600px] mx-auto">
       <div className="flex items-center justify-between mb-5 gap-3 flex-wrap">
         <h1 className="text-large-title font-bold">
@@ -417,6 +479,29 @@ export default function OrdersView({ user }: { user: AppUser }) {
             </option>
           ))}
         </select>
+        {isManager &&
+          (selecting ? (
+            <div className="flex items-center gap-2 ms-auto">
+              <span className="text-caption text-secondary tabular-nums">
+                {t("orders.selectedCount", { n: selectedIds.size })}
+              </span>
+              <Button
+                tier="plain"
+                disabled={bulkBusy || selectedIds.size === 0}
+                className="text-[--status-danger] flex items-center gap-1.5"
+                onClick={deleteSelected}
+              >
+                <Trash2 size={15} /> {bulkBusy ? t("orders.deletingSelected") : t("common.delete")}
+              </Button>
+              <Button tier="plain" disabled={bulkBusy} onClick={stopSelecting}>
+                {t("common.done")}
+              </Button>
+            </div>
+          ) : (
+            <Button tier="plain" className="ms-auto" onClick={() => setSelecting(true)}>
+              {t("orders.select")}
+            </Button>
+          ))}
       </div>
 
       {switcherStats && (
@@ -646,6 +731,7 @@ export default function OrdersView({ user }: { user: AppUser }) {
         <OrderDetail orderId={openId} user={user} onClose={() => setOpenId(null)} onChanged={load} />
       )}
     </div>
+    </OrderSelectionContext.Provider>
   );
 }
 
@@ -694,13 +780,21 @@ function TrashSection({
 }) {
   const isManager = user.role === "manager" || user.role === "admin";
   const [rows, setRows] = useState<TrashedOrderRow[]>([]);
+  // A manager who rejects the wrong order finds it here beside the deleted
+  // ones. The salesman's own Rejected section above is unchanged.
+  const [rejected, setRejected] = useState<OrderRow[]>([]);
   const [open, setOpen] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const supabase = supabaseBrowser();
     // A salesman sees what they deleted; a manager sees everything.
-    setRows(await fetchTrashedOrders(supabase, isManager ? {} : { salesmanId: user.id }));
+    const [trashed, turnedDown] = await Promise.all([
+      fetchTrashedOrders(supabase, isManager ? {} : { salesmanId: user.id }),
+      isManager ? fetchOrders(supabase, { status: ["rejected"] }).catch(() => []) : Promise.resolve([]),
+    ]);
+    setRows(trashed);
+    setRejected(turnedDown);
   }, [isManager, user.id]);
 
   useEffect(() => {
@@ -736,11 +830,11 @@ function TrashSection({
       >
         {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
         <Trash2 size={13} />
-        {t("orders.trash")} <span className="tabular-nums">({rows.length})</span>
+        {t("orders.trash")} <span className="tabular-nums">({rows.length + rejected.length})</span>
       </button>
 
       {open && (
-        rows.length === 0 ? (
+        rows.length + rejected.length === 0 ? (
           <div className="text-subhead text-secondary px-1 py-2">{t("orders.nothingDeleted")}</div>
         ) : (
           <div className="bg-surface border border-hairline rounded-card divide-y divide-hairline">
@@ -795,6 +889,47 @@ function TrashSection({
                       </Button>
                     </>
                   )}
+                </div>
+              </div>
+            ))}
+            {rejected.map((o) => (
+              <div key={o.id} className="flex items-center justify-between gap-3 px-4 py-3">
+                <div className="min-w-0">
+                  <div className="text-subhead font-medium truncate">
+                    {o.customer?.name ?? o.new_customer_note ?? t("orders.unnamedCustomer")}
+                    {o.invoice_number && (
+                      <span className="text-secondary"> · #{o.invoice_number}</span>
+                    )}
+                  </div>
+                  <div className="text-caption text-secondary truncate tabular-nums">
+                    {formatAed(o.total ?? 0)}
+                    {o.rejected_at &&
+                      ` · ${t("orders.rejectedOn", {
+                        date: new Date(o.rejected_at).toLocaleDateString("en-GB", {
+                          day: "2-digit",
+                          month: "short",
+                        }),
+                      })}`}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <Button
+                    tier="tinted"
+                    disabled={busyId === o.id}
+                    className="!px-3 !py-1.5 text-caption"
+                    onClick={() =>
+                      act(
+                        o.id,
+                        async () => {
+                          await resubmitOrder(supabaseBrowser(), o.id, user.id);
+                          return {};
+                        },
+                        t("orders.backInPending")
+                      )
+                    }
+                  >
+                    {t("orders.restore")}
+                  </Button>
                 </div>
               </div>
             ))}
@@ -917,6 +1052,15 @@ function PaginatedOrderSection({
   );
 }
 
+// Multi-select reaches every list on the page through context rather than
+// through Section / PaginatedOrderSection / OrderList one prop at a time.
+// Null means "not selecting": rows open as they always have.
+interface OrderSelection {
+  ids: Set<string>;
+  toggle: (id: string) => void;
+}
+const OrderSelectionContext = createContext<OrderSelection | null>(null);
+
 function OrderList({
   rows,
   onOpen,
@@ -926,6 +1070,8 @@ function OrderList({
   onOpen: (id: string) => void;
   columns?: OrderColumnKey[];
 }) {
+  const selection = useContext(OrderSelectionContext);
+  const activate = (id: string) => (selection ? selection.toggle(id) : onOpen(id));
   // "N items" per row (§iPhone orders mockup). Fetched here rather than
   // widening fetchOrders, so the count follows whatever rows are on screen
   // and costs one extra query per page of results.
@@ -979,17 +1125,32 @@ function OrderList({
           return (
             <div
               key={o.id}
-              onClick={() => onOpen(o.id)}
-              role="button"
+              onClick={() => activate(o.id)}
+              role={selection ? "checkbox" : "button"}
+              aria-checked={selection ? selection.ids.has(o.id) : undefined}
               tabIndex={0}
               onKeyDown={(e) => {
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
-                  onOpen(o.id);
+                  activate(o.id);
                 }
               }}
-              className="w-full cursor-pointer hover:bg-black/[0.02] dark:hover:bg-white/[0.03] text-left"
+              className={`w-full cursor-pointer hover:bg-black/[0.02] dark:hover:bg-white/[0.03] text-left ${
+                selection ? "flex items-center" : ""
+              } ${selection?.ids.has(o.id) ? "bg-accent/[0.06]" : ""}`}
             >
+              {selection && (
+                <span className="ps-4 shrink-0 grid place-items-center min-h-[44px]" aria-hidden>
+                  <input
+                    type="checkbox"
+                    tabIndex={-1}
+                    readOnly
+                    checked={selection.ids.has(o.id)}
+                    className="w-4 h-4 accent-accent pointer-events-none"
+                  />
+                </span>
+              )}
+              <div className={selection ? "flex-1 min-w-0" : "contents"}>
               {/* Phone / tablet */}
               <div className="lg:hidden flex items-center justify-between gap-3 px-4 py-3.5">
                 <div className="min-w-0">
@@ -998,7 +1159,7 @@ function OrderList({
                   </div>
                   <div className="text-caption text-secondary">
                     {o.invoice_number ? `#${o.invoice_number} · ` : ""}
-                    {new Date(o.created_at).toLocaleDateString()}
+                    {new Date(o.billed_at ?? o.updated_at).toLocaleDateString()}
                     {o.salesman?.full_name ? ` · ${o.salesman.full_name}` : ""}
                     {columns.includes("district") && o.customer?.district ? ` · ${o.customer.district}` : ""}
                     {itemCounts[o.id] != null
@@ -1026,7 +1187,7 @@ function OrderList({
               {/* Desktop table row */}
               <div className="hidden lg:grid grid-cols-[92px_78px_1fr_110px_110px_110px_190px] gap-3 items-center px-4 py-2.5">
                 <span className="text-caption text-secondary uppercase tabular-nums">
-                  {new Date(o.created_at).toLocaleDateString("en-GB", {
+                  {new Date(o.billed_at ?? o.updated_at).toLocaleDateString("en-GB", {
                     day: "2-digit",
                     month: "short",
                     year: "numeric",
@@ -1086,6 +1247,7 @@ function OrderList({
                     </>
                   )}
                 </span>
+              </div>
               </div>
             </div>
           );

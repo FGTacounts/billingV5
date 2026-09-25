@@ -788,6 +788,31 @@ same ones the customer's own statement shows, so the two always agree. On the
 phone a salesman can open their own; nobody can open a colleague's except a
 manager or admin.
 
+## 9. Approving from the Inbox, and choosing what needs approval
+
+**Run `scratchpad/RUN-ME-26-which-actions-need-approval.sql`** in Supabase →
+SQL Editor. Until it is run the new Settings section says it is not available
+and everything keeps needing a manager, as now.
+
+**Approve from the Inbox.** Every request under *Needs your attention* — an
+order edit request, a goods return, a customer change — has an **Approve**
+button on its own row, on the web and on the phone. Tapping the rest of the
+row still opens the order or Payments, where Deny and the details are. A
+return raised at collection can now be approved before its products are
+entered; they can still be entered afterwards from Payments.
+
+**The manager is told.** Raising any of the three now puts a notification in
+every manager's and admin's bell. Until today none of them did, except the
+order edit request on the web.
+
+**What needs approval (admin only).** Settings → General → *What needs
+approval* has three ticks: customer changes, editing an approved order, goods
+returns. Unticked, that action happens straight away instead of going to a
+manager: a salesman edits customers directly, the warehouse reopens an
+approved order itself, a return comes off the balance the moment it is raised.
+Only an admin can change these — the database refuses a manager — and the
+database, not the screen, is what lets the salesman or warehouse through.
+
 ## What I could not check
 
 - Nothing here has been clicked through while signed in: the app is behind a
@@ -798,3 +823,140 @@ manager or admin.
   failure as before today, fixed by running RUN-ME-24.
 - On the phone, the work compiles and its unit tests pass; none of it has been
   tapped through on a device.
+
+---
+
+# 2026-09-21 — Picking on the phone
+
+**The warehouse could not tick lines on the phone — the tick came straight
+back off.** The phone's write was being refused by the database, for the same
+reason the product list was once empty: after an update the library asks for
+every column back, staff are not allowed to read `unit_cost`, and the database
+refuses the whole request over that one column. The phone hid the refusal, and
+the picking screen's 2-second refresh then showed what the server had — an
+un-ticked line. The same fault silently broke removing a line from the picking
+screen, saving a stock-capped quantity when approving on the phone, and
+emptying an order from the Trash on the phone.
+
+All four now ask for nothing back. If the database ever does refuse a tick,
+the picking screen now says "Could not save the pick" with the reason instead
+of quietly undoing it.
+
+**What you need to do:** nothing in Supabase. Rebuild the phone app and
+install it on the warehouse handsets. The web app was not affected — it picks
+through its own server route.
+
+**What I could not check:** I cannot sign in as a warehouse user, so this was
+confirmed from the code and the library's source, not by ticking a line on a
+handset.
+
+# 2026-09-21 — Recently deleted
+
+Orders → **Trash** is now called **Recently deleted**, on the web and the
+phone. For a manager or admin it lists rejected orders as well as deleted
+ones. **Restore** on a deleted order works as before; on a rejected order it
+puts the order back in Pending, exactly as Resubmit does. The Rejected section
+the salesman uses is unchanged. Nothing to run in Supabase.
+
+# 2026-09-21 — Removing a product after the order is accepted
+
+A manager or the warehouse can now remove a line from an order that is
+Waiting, Picking or Packed — the bin icon on the order's lines on the web,
+"Remove from order" (press and hold a line) on the phone's picking screen.
+The totals are recalculated and the order shows Edited. Once an order is
+approved the stock has moved, so it still goes through Request edit.
+
+On the phone that menu item used to appear at every stage but never worked;
+it now works, and only appears at those three stages. Nothing to run in
+Supabase.
+
+# 2026-09-21 — Adding a product after the order is accepted
+
+The same people at the same stages as removing one: a manager or the
+warehouse, while the order is Waiting, Picking or Packed. On the web it is
+"Add article" under the order's lines; on the phone it is the Add article
+button on the picking screen, which now appears only at those stages. If the
+article is already on the order its quantity goes up instead, and on the web
+a line that was already ticked is un-ticked so the new quantity gets picked.
+Nothing to run in Supabase.
+
+# 2026-09-21 — No discount unless a manager gives one
+
+**Where the unwanted discounts came from.** Two places. When a manager gave a
+whole-order discount, the app saved it against the customer and took it off
+every later order for them, whoever wrote it. And on the web a salesman could
+type a lower price on their own draft or pending order; anything under list
+price prints on the invoice as a Discount.
+
+**Now:** a new line charges the customer's old price if they have one, else
+the list price. A discount exists only where a manager or admin gives one —
+Disc % on a product, or the order discount on that order, which is no longer
+remembered for the customer's next order. Only a manager or admin can change
+a price; a salesman sees it as text, and the server ignores any price a
+salesman's browser sends and works it out itself.
+
+Nothing to run in Supabase. No customer had a saved discount, so no existing
+price changed. Orders already written keep the prices they have.
+
+# 2026-09-21 — The billing date, and a fault found in the live data
+
+**Run `scratchpad/RUN-ME-27-billing-date.sql`** in Supabase → SQL Editor, with
+the role selector on `postgres`. It is safe to run more than once.
+
+**Why it matters today, not just for the new feature.** On 19 September at
+19:56 UAE time something updated 537 of your 558 orders in one go. The
+database stamps "today" on any order that is touched, and the app reads that
+stamp as the billing date — so right now every order you have is dated
+September 2026. **Sales this month is showing every sale on record, and aging
+is treating every invoice as a few days old, so nothing shows as overdue.** I
+could not find what did it; nothing in the app or its SQL files updates orders
+in bulk. RUN-ME-27 puts those 537 orders back to their real invoice dates
+first, and tells you how many it fixed (expect 537).
+
+**What it adds.** A proper billing date on each order. It moves when an
+order's status changes and no longer when somebody edits a note, a PO number
+or a line — which is what keeps causing this. A manager or admin can change
+it: open the order → Edit details → **Billing date**. A date set by hand stays
+put. Sales, the dashboard, reports, aging, statements, the Invoices page and
+the invoice itself all follow it. Until you run the file the field is shown
+greyed out and everything works as before.
+
+**Not changed:** the Date column on the Orders list still shows when the order
+was written. Say if you want it to show the billing date instead.
+
+# 2026-09-21 — Selecting several orders
+
+Manager and admin: Orders → **Select** (beside the sort menu). Tap orders to
+tick them, then **Delete** — they go to Recently deleted, each exactly as if
+deleted on its own (stock back, payments released), and can be restored from
+there. **Done** leaves select mode. Delete is the only bulk action.
+
+# 2026-09-21 — The same things on the phone
+
+- **Billing date:** manager and admin, in the order editor's customer card,
+  once RUN-ME-27 has been run (hidden until then). Reports, aging and the
+  statement follow it.
+- **Selecting several orders:** Orders → All Orders → **Select**, tick, then
+  **Delete**. Same rules as the web.
+- **Invoices from the phone** now print the billing date as the invoice date,
+  and a due date of that plus the customer's overdue days. Before, both
+  lines showed the day the order was written — so the due date was always the
+  invoice date. The web's invoice already worked this way.
+- Adding more of an article whose line is already ticked now takes the tick
+  off, as on the web.
+
+**What I could not check on the phone:** none of it has been tapped through —
+the app is behind a login. It builds, and the export, analytics and price
+tests pass.
+
+# 2026-09-22 — Orders list shows the billing date
+
+The Date column on Orders (web and phone, All Orders) now shows the billing
+date, and Newest/Oldest sort by it. Until RUN-ME-27 has taken effect that date
+is the same wrong September date sales and aging show; running the file fixes
+all of them together.
+
+**RUN-ME-27 did not take.** Checked against the database on 22 September:
+there is no billing-date column and the 537 re-dated orders are unchanged.
+RUN-ME-26 has not taken either. Paste each file again, with the role selector
+set to `postgres`, and send me whatever the editor prints in red.

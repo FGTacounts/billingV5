@@ -10,6 +10,8 @@ import { t } from "@/lib/i18n";
 // generic inbox.
 export interface InboxItem {
   id: string;
+  /** The order's or the return's own id, which is what approving it needs. */
+  refId: string;
   kind: "edit_request" | "grv";
   title: string;
   subtitle: string;
@@ -48,6 +50,7 @@ export async function fetchInboxItems(
   for (const o of orders ?? []) {
     items.push({
       id: `order-${o.id}`,
+      refId: o.id,
       kind: "edit_request",
       title: `${t("inbox.editRequest")}${o.invoice_number ? ` · ${t("inbox.invoiceNumber", { number: o.invoice_number })}` : ""}`,
       subtitle: o.customer_id ? nameById.get(o.customer_id) ?? t("inbox.unknownCustomer") : t("inbox.unknownCustomer"),
@@ -58,6 +61,7 @@ export async function fetchInboxItems(
   for (const g of grvs ?? []) {
     items.push({
       id: `grv-${g.id}`,
+      refId: g.id,
       kind: "grv",
       title: t("inbox.goodsReturnAwaitingApproval"),
       subtitle: g.customer_id ? nameById.get(g.customer_id) ?? t("inbox.unknownCustomer") : t("inbox.unknownCustomer"),

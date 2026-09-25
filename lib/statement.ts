@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { billingDateColumn, billedAtSelect } from "@/lib/billingDate";
 import { t } from "@/lib/i18n";
 import { money } from "@/lib/money";
 import { fetchOutstandingInvoices } from "@/lib/queries/aging";
@@ -67,18 +68,20 @@ export async function buildStatement(
   }
   // Paged throughout (lib/paging.ts): a chain's statement is years of
   // invoices across several branches, and one request stops at 1,000 rows.
+  // The billing date comes through lib/billingDate.ts.
   type OrderRow = {
     id: string;
     invoice_number: number | null;
     subtotal: number | null;
     vat_amount: number | null;
     total: number | null;
-    updated_at: string;
+    billed_at: string;
   };
+  const select: string = `id, invoice_number, subtotal, vat_amount, total, ${billedAtSelect(await billingDateColumn(supabase))}`;
   const orderRows = await fetchAllForIds<OrderRow>(customerIds, (chunk, from, to) =>
     supabase
       .from("orders")
-      .select("id, invoice_number, subtotal, vat_amount, total, updated_at")
+      .select(select)
       .in("customer_id", chunk)
       .eq("status", "delivered")
       .order("id")
@@ -177,7 +180,7 @@ export async function buildStatement(
       if (scope === "outstanding" ? settled : !settled) continue;
     }
     entries.push({
-      date: o.updated_at,
+      date: o.billed_at,
       invNo: o.invoice_number != null ? String(o.invoice_number) : t("common.notSet"),
       description: "INVOICE",
       invoiceAmount: o.subtotal ?? 0,

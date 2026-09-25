@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { invalidateOrderFacts } from "@/lib/queries/dashboard";
 import { invalidateAging } from "@/lib/queries/aging";
 import { t } from "@/lib/i18n";
+import { billingDateColumn, billedAtSelect, type BillingDateColumn } from "@/lib/billingDate";
 import type {
   Order,
   OrderItem,
@@ -19,8 +20,12 @@ export interface OrderRow extends Order {
   salesman: Pick<AppUser, "id" | "full_name" | "phone"> | null;
 }
 
-const ORDER_SELECT =
+const ORDER_COLUMNS =
   "id, status, customer_id, salesman_id, new_customer_note, warehouse_note, manager_note, salesman_note, invoice_number, po_number, rejected_at, total, subtotal, vat_amount, created_at, updated_at";
+
+// Every order row carries `billed_at` — the real column once RUN-ME-27 has
+// been run, `updated_at` under that name until then (lib/billingDate.ts).
+const orderSelect = (col: BillingDateColumn) => `${ORDER_COLUMNS}, ${billedAtSelect(col)}`;
 
 // `phone` is not on every database yet. When it is absent the salesman's
 // number is left off the invoice rather than the whole order fetch failing.
@@ -65,8 +70,10 @@ let editedColumnsMissing = false;
 // a database without RUN-ME-12) raises the same 42703, and mistaking it for
 // this one would turn the stamp off for the rest of the session.
 async function withEditedStamp<R extends { error: { code?: string; message?: string } | null }>(
+  supabase: SupabaseClient,
   build: (select: string) => PromiseLike<R>
 ): Promise<R> {
+  const ORDER_SELECT = orderSelect(await billingDateColumn(supabase));
   if (!editedColumnsMissing) {
     const first = await build(`${ORDER_SELECT}, edited_at, edited_by`);
     if (!first.error) return first;
@@ -128,9 +135,9 @@ export async function fetchOrders(
     salesmanId?: string;
     customerId?: string;
     limit?: number;
-    // Revenue window, matched on `updated_at` — the same column every sales
-    // figure is bucketed by (see saleValue/fetchSaleTrend), so a list built
-    // with these agrees with the totals beside it.
+    // Revenue window, matched on the billing date — the same column every
+    // sales figure is bucketed by (see saleValue/fetchSaleTrend), so a list
+    // built with these agrees with the totals beside it.
     from?: Date;
     to?: Date;
   } = {}
@@ -138,6 +145,7 @@ export async function fetchOrders(
   // Built inside the closure rather than once outside it: both fallbacks
   // (no trash columns, no Edited stamp) re-run the query, and a PostgREST
   // builder that has already been awaited cannot be re-used.
+  const billed = await billingDateColumn(supabase);
   const build = (select: string, filterDeleted: boolean) => {
     let q = supabase
       .from("orders")
@@ -147,15 +155,15 @@ export async function fetchOrders(
     if (opts.status?.length) q = q.in("status", opts.status);
     if (opts.excludeStatus?.length) q = q.not("status", "in", `(${opts.excludeStatus.join(",")})`);
     if (opts.salesmanId) q = q.eq("salesman_id", opts.salesmanId);
-    if (opts.from) q = q.gte("updated_at", opts.from.toISOString());
-    if (opts.to) q = q.lte("updated_at", opts.to.toISOString());
+    if (opts.from) q = q.gte(billed, opts.from.toISOString());
+    if (opts.to) q = q.lte(billed, opts.to.toISOString());
     if (opts.customerId) q = q.eq("customer_id", opts.customerId);
     if (opts.limit) q = q.limit(opts.limit);
     return filterDeleted ? q.is("deleted_at", null) : q;
   };
 
   const { data, error } = await withoutDeleted((filterDeleted) =>
-    withEditedStamp((select) => build(select, filterDeleted))
+    withEditedStamp(supabase, (select) => build(select, filterDeleted))
   );
   if (error) throw error;
   return attachRelations(supabase, (data as unknown as Order[]) ?? []);
@@ -224,7 +232,7 @@ export async function fetchOrdersPage(
   };
 
   const { data, error } = await withoutDeleted((filterDeleted) =>
-    withEditedStamp((select) => build(select, filterDeleted))
+    withEditedStamp(supabase, (select) => build(select, filterDeleted))
   );
   if (error) throw error;
   const rows = (data as unknown as Order[]) ?? [];
@@ -251,6 +259,7 @@ export async function fetchTrashedOrders(
   opts: { salesmanId?: string } = {}
 ): Promise<TrashedOrderRow[]> {
   if (trashColumnsMissing) return [];
+  const ORDER_SELECT = orderSelect(await billingDateColumn(supabase));
   let q = supabase
     .from("orders")
     .select(`${ORDER_SELECT}, deleted_at, deleted_by, deleted_from_status`)
@@ -296,7 +305,7 @@ export async function fetchOrder(
   supabase: SupabaseClient,
   id: string
 ): Promise<OrderRow | null> {
-  const { data, error } = await withEditedStamp((select) =>
+  const { data, error } = await withEditedStamp(supabase, (select) =>
     supabase.from("orders").select(select).eq("id", id).maybeSingle()
   );
   if (error) throw error;
@@ -456,6 +465,35 @@ async function notifySalesman(
   }
 }
 
+/**
+ * Every active manager and admin, skipping whoever did it.
+ *
+ * Exported for the requests that are not about an order — a customer change,
+ * a goods return — which need a manager's decision just as much and used to
+ * reach nobody until somebody happened to open the Inbox.
+ */
+export async function notifyEveryManager(
+  supabase: SupabaseClient,
+  actorId: string,
+  type: string,
+  title: string,
+  body?: string
+) {
+  try {
+    const { data: managers } = await supabase
+      .from("users")
+      .select("id")
+      .in("role", ["manager", "admin"])
+      .eq("is_active", true);
+    for (const m of managers ?? []) {
+      if (m.id === actorId) continue;
+      await notify(supabase, m.id, type, title, body ?? "");
+    }
+  } catch {
+    // Best-effort by design — see above.
+  }
+}
+
 async function notifyManagers(
   supabase: SupabaseClient,
   actorId: string,
@@ -466,15 +504,7 @@ async function notifyManagers(
 ) {
   try {
     const ref = await orderRef(supabase, orderId);
-    const { data: managers } = await supabase
-      .from("users")
-      .select("id")
-      .in("role", ["manager", "admin"])
-      .eq("is_active", true);
-    for (const m of managers ?? []) {
-      if (m.id === actorId) continue;
-      await notify(supabase, m.id, type, title(ref), body?.(ref));
-    }
+    await notifyEveryManager(supabase, actorId, type, title(ref), body?.(ref));
   } catch {
     // Best-effort by design — see above.
   }
@@ -597,6 +627,31 @@ export async function markPacked(
 export async function requestEdit(supabase: SupabaseClient, orderId: string, actorId: string) {
   await updateOrderStatus(supabase, orderId, "edit_requested");
   await logStatus(supabase, orderId, actorId);
+  // Nothing moves until a manager decides, so tell them now.
+  await notifyManagers(
+    supabase,
+    actorId,
+    "edit_requested",
+    (r) => t("orders.notifEditRequested", { invoice: r.invoice }),
+    orderId,
+    (r) => r.customerName ?? t("orders.notifApproveInInbox")
+  );
+}
+
+/**
+ * The warehouse reopening an approved order itself, where the admin has
+ * switched that request off (lib/approvals.ts).
+ *
+ * One database call rather than the writes "Grant edit" makes, because the
+ * warehouse cannot write stock or order totals: the function checks the switch
+ * and the role again, then moves stock and status together
+ * (scratchpad/RUN-ME-26).
+ */
+export async function reopenOrderWithoutApproval(supabase: SupabaseClient, orderId: string) {
+  const { error } = await supabase.rpc("reopen_order_without_approval", { p_order_id: orderId });
+  if (error) throw error;
+  invalidateOrderFacts();
+  invalidateAging();
 }
 
 export async function denyEditRequest(supabase: SupabaseClient, orderId: string, actorId: string) {

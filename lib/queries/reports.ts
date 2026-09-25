@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { billingDateColumn, billedAtSelect } from "@/lib/billingDate";
 import { fetchCountedStatuses } from "@/lib/reportStage";
 
 function startOfMonthIso(): string {
@@ -26,7 +27,7 @@ export async function fetchBalanceSheet(supabase: SupabaseClient): Promise<Balan
     .from("orders")
     .select("id, subtotal")
     .in("status", await fetchCountedStatuses(supabase))
-    .gte("updated_at", start);
+    .gte(await billingDateColumn(supabase), start);
   const orderRows = orders ?? [];
   const monthlySales = orderRows.reduce((s, o) => s + (o.subtotal ?? 0), 0);
 

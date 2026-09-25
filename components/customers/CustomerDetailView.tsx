@@ -1,5 +1,6 @@
 "use client";
 
+import { useApprovalSettings } from "@/lib/hooks/useApprovalSettings";
 import { toast } from "@/lib/toast";
 import { friendlyError } from "@/lib/errors";
 import { t } from "@/lib/i18n";
@@ -38,6 +39,9 @@ export default function CustomerDetailView({
   onDeleted: () => void;
 }) {
   const isManager = (user.role === "manager" || user.role === "admin");
+  // Decides only what the edit button is called here; the editor itself is
+  // opened by CustomersView, which asks the same question.
+  const approvals = useApprovalSettings();
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [invoices, setInvoices] = useState<InvoiceAging[]>([]);
   const [loading, setLoading] = useState(true);
@@ -219,7 +223,7 @@ export default function CustomerDetailView({
               )
             ) : (
               <Button tier="tinted" onClick={onEdit}>
-                {t("customers.suggestChange")}
+                {approvals.customerChanges ? t("customers.suggestChange") : t("common.edit")}
               </Button>
             )}
           </div>

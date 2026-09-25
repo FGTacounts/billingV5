@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { Search, Plus, Users, FileDown, FileSpreadsheet, SlidersHorizontal } from "lucide-react";
 import { usePreferences } from "@/lib/hooks/usePreferences";
+import { useApprovalSettings } from "@/lib/hooks/useApprovalSettings";
 import { t } from "@/lib/i18n";
 import { requestCustomerChange } from "@/lib/queries/customerRequests";
 import { toast } from "@/lib/toast";
@@ -144,6 +145,11 @@ function CustomerAdjustViewPopover({
 }
 
 export default function CustomersView({ user, isManager }: { user: AppUser; isManager: boolean }) {
+  // Whether what this person types reaches the customer record directly. Always
+  // for a manager; for everyone else only where the admin has switched the
+  // customer request off (lib/approvals.ts).
+  const approvals = useApprovalSettings();
+  const writesDirectly = isManager || !approvals.customerChanges;
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [aging, setAging] = useState<Map<string, { totalDue: number; totalSale: number; totalPaid: number; oldestDays: number }>>(new Map());
   const [search, setSearch] = useState("");
@@ -256,7 +262,7 @@ export default function CustomersView({ user, isManager }: { user: AppUser; isMa
               away. The label says which is happening rather than letting
               someone find out after typing it all in. */}
           <Button tier="primary" onClick={() => setEditing("new")} className="flex items-center gap-1.5">
-            <Plus size={16} /> {isManager ? t("customers.addCustomer") : t("customers.suggestCustomer")}
+            <Plus size={16} /> {writesDirectly ? t("customers.addCustomer") : t("customers.suggestCustomer")}
           </Button>
         </div>
       </div>
@@ -455,7 +461,7 @@ export default function CustomersView({ user, isManager }: { user: AppUser; isMa
 
       {editing && (
         <CustomerEditor
-          asRequest={!isManager}
+          asRequest={!writesDirectly}
           requestedBy={user.id}
           // Same remount guard as ProductEditor — without it, going from
           // editing a customer to "Add customer" reuses the instance and

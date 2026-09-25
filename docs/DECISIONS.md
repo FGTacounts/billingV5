@@ -1949,3 +1949,583 @@ ManagerDashboardView.swift and SettingsView.swift.
 2026-09-19 — `npm run test:tenancy` still fails on `order_items_safe` and on
 nothing else — the same known failure as before (its RUN-ME has not been run).
 This change adds no table, view or policy.
+
+## 2026-09-19 — The product list is paged, on both apps
+
+Closes "NOT fixed, and live today: the product list" in the 2026-09-19
+section "Reads that grow are paged, on both apps". That section, `lib/paging.ts`
+and `scripts/test-paging.mjs` were written on branch
+claude/wonderful-heyrovsky-936d2b and were still uncommitted there when this
+was done; the helper, its test and the `test:paging` script were copied here
+byte for byte so the two branches merge without a difference in them. Both
+branches append to the end of this file, so merging them will stop on this
+file: keep both sections, that one first.
+
+2026-09-19 — What was wrong, measured — Read-only against the live project
+(isdeheipdfmwzmmnnidr): `count: exact` says 1,604 products, 1,416 active. The
+one-request read `fetchProductsServer` made returned exactly 1,000 of the
+1,416. The 416 missing were the last by SKU, from every full listing built on
+it: the Products page once its full list replaced the first screenful, the
+"all products" list behind a new order, import-order-lines' SKU matching, the
+Drive photo browser, the Settings data sheet, the Excel and PDF exports, the
+photographed-order scan's catalogue, and the dashboard's sales-by-category
+lookup (which asks for inactive ones too: 1,000 of 1,604).
+
+2026-09-19 — Web: `fetchProductsServer` pages the whole-list read through
+`fetchAllPages`, ordered by `sku` then `id` and de-duplicated on `id`. `sku`
+is already unique (imports upsert on it), so `id` changes no row's position;
+it is there so the ordering is unique by construction rather than by a
+constraint this file cannot see. When `opts.limit` is given the read is still
+ONE request of that many rows — the first screenful must not wait for the
+catalogue — and a `limit` above 1,000 would still be cut to 1,000; nothing
+asks for one (the only caller sends 50). The is_active, search and stock-group
+filters are the same filters, applied to every page. The column-fallback retry
+is the same: any error, on any page, retries the whole read with the columns
+that have always been there, and a stock-group filter still throws rather than
+being silently dropped. A search or a stock group comes back in one short
+page, so they cost one request as before.
+
+2026-09-19 — Phone: `AppDataManager.fetchProductsAsync` was the same single
+request — on both its paths, the `products_safe` view and the raw-table
+fallback — so the phone's catalogue, and the order screen built from it, had
+the same 1,000 of 1,416. Both paths now go through `Paging.fetchAll`, `sku`
+then `id`, keyed on `id`. What decides which path is used did not change: any
+failure reading `products_safe` still switches the session to the raw table
+without cost.
+
+2026-09-19 — No pricing, cost or stock rule changed — Same column lists per
+role on the web (MANAGER_COLS / RESTRICTED_COLS), same view-or-table choice on
+the phone. Checked rather than assumed: through the new code a salesman
+session's 1,416 rows carry no cost and no override figure; a manager's carry
+them.
+
+2026-09-19 — Proven read-only against the live database, by running the real
+`fetchProductsServer` (not a copy of its query) under Node: active list 1,416
+= the database's own count, 1,416 distinct ids, for a manager and for a
+salesman; with inactive included 1,604 = count; `limit: 60` returns 60 and
+they are the head of the full list; the first 1,000 rows are the same rows in
+the same order as the old read returned; search finds the last SKU. The
+phone's query shape (is_active, `sku` then `id`, `.range`) was run the same
+way against both `products_safe` and `products`: one request 1,000, paged
+1,416, count 1,416. The phone itself was not signed in and driven; its build
+and unit tests pass.
+
+2026-09-19 — NOT fixed, found while looking, live today because `products`
+is already past 1,000:
+- Web `lib/job-runners.ts` order import reads every product
+  (`id, sku, description, price, cost`) in one unordered request to match
+  SKUs: about 600 products, and not predictably which, cannot be matched.
+- Web `existingProductSkus` (same file; scan-articles preview and its
+  save-time re-check) reads every SKU in one request, so an existing SKU can
+  be offered as new. The unique SKU should then refuse the insert — the whole
+  batch, not the one row.
+- Web `fetchStockSnapshot` (lib/queries/reports.ts) — the stock valuation
+  report sums 1,000 of 1,604 products. A money figure that is short today.
+- Phone stock report (FinancialReportsView, `products` where active, by SKU):
+  1,000 of 1,416, same understatement. It counts active products only where
+  the web counts all of them; that difference is older than this and was left.
+- Phone `ManagerProductsView` product insights: `products (id, sku)` in one
+  unordered request, and `purchases` in one request, so VAC / China / days
+  since arrival are blank for products outside the 1,000.
+- Phone Settings backup (SettingsView): customers, products, orders, payments
+  and expenses are each ONE request. The backup file holds 1,000 of 1,604
+  products today and will lose orders at 1,000 (531 now). A backup that is
+  quietly not whole is the worst of these.
+Each wants `fetchAllPages` / `Paging.fetchAll` with `.order("id")`, and its own
+check. Not slipped in here: the owner asked for the product list and a report.
+
+2026-09-19 — Customers: 355 rows, nothing wrong today. Whole-table reads that
+will need paging before 1,000: web `fetchCustomers` (ordered by `name`, which
+is not unique — it needs `id` as a second key when paged), `nextCustomerCode`
+(reads every code to find the highest; past 1,000 it could offer a code
+already in use), the order-import job's customer lookup, `fetchRoutePriorities`'
+customer read, and the customer form's group-name list; phone
+`fetchCustomersAsync` (by `name`) and the Settings backup above. Reads filtered
+by an id list (`.in("id", …)`) are bounded by the list and are chunked where
+the list can be long; product and customer imports already chunk at 500.
+
+2026-09-19 — `npm run test:tenancy` fails on `order_items_safe` and on nothing
+else — the same known failure; its RUN-ME has not been run. This change adds
+no table, view, policy or column.
+
+2026-09-19 — This Mac's `xcode-select` points at the Command Line Tools, so a
+bare `xcodebuild` refuses to run. Changing it needs an administrator password
+and is a system setting; builds were run with
+`DEVELOPER_DIR=~/Downloads/Xcode.app/Contents/Developer` instead. With
+`-quiet`, Xcode 27.1 prints "error: the following command failed with exit
+code 0" beside ordinary deprecation warnings in files this did not touch; the
+build exits 0 and produces Billing.app.
+
+2026-09-19 — Scope for "make the app fit for the iPhone Duo" — There is no
+spec section naming the foldable iPhone Duo, so per rule 2 I stopped and
+asked before building anything. The owner asked for everything possible:
+both layout adaptation (existing screens reflow when the fold changes) and
+behavior fit for a device whose usable width changes at runtime, not just a
+cosmetic pass. Scope is the iPhone app only (Billing/Billing/); the web app
+has no foldable-equivalent surface. Inventory taken before any change: no
+`UIScreen.main`, no `AppDelegate`/`UIApplicationDelegate`, no orientation
+API usage anywhere — the app is already pure SwiftUI scene lifecycle, which
+is the hard part of foldable readiness and was already done. `horizontalSizeClass`
+already drives the phone/pad-style layout switch in ManagerDashboardView,
+SalesmanDashboardView, WarehouseDashboardView, SalesView, and ~15 other
+files, and is a live environment value, so those should already adapt when
+the Duo unfolds (compact -> regular) without changes. Concrete gaps found,
+being fixed as separate small steps rather than one large change: (1)
+`AppPlatform.isMac` in Constants.swift is idiom-based and won't flip on
+unfold since `UIDevice.current.userInterfaceIdiom` stays `.phone` on a
+folded/unfolded iPhone — two call sites in ManagerDashboardView gate wide
+layout on it instead of on sizeClass; (2) 14 sheets still use the deprecated
+`NavigationView`; (3) AppNavigation's sidebar is pinned to 64/224pt and
+won't use extra unfolded width; (4) several report/table views
+(FinancialReportsView, SalesView, ManagerDashboardView, AppNavigation,
+ManagerProductsView) size columns with fixed pixel widths instead of
+proportionally, so they won't use the extra width either. Working through
+these one at a time per the "small steps, report, wait" rule rather than as
+one sweeping change.
+
+2026-09-19 — Duo readiness step 1: NavigationView -> NavigationStack (iPhone
+app) — Migrated all 14 `NavigationView { ... }` sheet/full-screen-cover roots
+to `NavigationStack { ... }` (AddCustomerSheet, AddArticleSheet, AIScanView,
+ArticleDetailSheet, ManagerProductsView x2, ManagerCustomersView,
+ManagerDashboardView x4, NewOrderView, SalesmanOrdersTab, SalesView). Checked
+every site first for `NavigationLink`, `.navigationViewStyle`, `EditButton`,
+and double-wrapping before changing anything — all 14 were self-contained
+sheet roots with only `.navigationTitle`/`.toolbar`, so this is a behavior-
+identical rename, not a layout change. `NavigationView` forces single-column
+even on a wide unfolded screen; `NavigationStack` doesn't carry that
+constraint (this app already hand-rolls its own sidebar for wide layouts
+rather than using NavigationSplitView, so no further change follows from
+this by itself — this step only removes the deprecated/legacy-behavior API).
+Found `ArticleDetailSheet.swift` has zero call sites anywhere in the
+codebase while checking this — dead code, left alone since removing it
+wasn't asked for.
+
+2026-09-19 — Duo readiness: closing out the inventory, most items were false
+positives — Checked the remaining candidates from the 2026-09-19 inventory
+before changing anything else: AppNavigation's 64/224pt sidebar is a
+standard fixed-width nav rail (same pattern as Finder/Mail), not a bug.
+ManagerDashboardView's two `AppPlatform.isMac` gates already fall back to
+reasonable single-column layouts on unfold (one of the two already branches
+on sizeClass separately for a stacked layout; the other's plain list isn't
+broken, just less differentiated). The fixed-pixel table columns in
+FinancialReportsView/SalesView/ManagerDashboardView/ManagerProductsView all
+sit inside `ScrollView(.horizontal)` with one flexible text column already
+absorbing extra width — unfolding already shows more columns with zero
+changes; making them proportional would look worse, not better. Net result:
+the only real change from this pass was the NavigationView -> NavigationStack
+migration (already done, build-verified with `BuildProject`). Not making
+further changes rather than manufacture busywork against a codebase that
+was already close to Duo-ready.
+
+## 2026-09-19 — Approving from the Inbox, and telling the manager there is something to approve
+
+2026-09-19 — Every request in the Inbox has an Approve button on its own row —
+Owner's request: "all requests. in the inbox add an approve request button."
+An order edit request and a pending goods return used to be rows that only
+opened the order or Payments; the customer-change request already had its two
+buttons. Approve on an edit request is the same call as "Grant edit" on the
+order (`/api/orders/grant-edit`, manager-only on the server); on a return it
+is `approveGrv`, the same one Payments uses. The rest of the row still opens
+the order or Payments, which is where Deny, the products and the amount live —
+Rejected: a Deny beside it. It was not asked for, and turning an edit request
+down is one tap away on the order.
+
+2026-09-19 — A return raised at collection can be approved from the Inbox
+before its products are entered — The 2026-09-18 entry says the manager opens
+it, enters what came back, and approves. That order is no longer forced: the
+owner asked for approval on all requests, Payments already approved from its
+list without opening the return, and `saveGrv` corrects the lines of an
+approved return and moves stock by the difference. What is lost if nobody goes
+back is the products on the GRV product report, not the money — the credit is
+the agreed `amount` either way.
+
+2026-09-19 — "Apply" on a customer-change request now reads "Approve" — One
+word for one act across the three kinds of request. Nothing about what it does
+changed.
+
+2026-09-19 — Raising a request notifies every active manager and admin — An
+edit request, a customer change and a goods return each waited for a manager
+to happen to open the Inbox; none of the three produced a notification. They
+now do, from the functions that raise them (`requestEdit`,
+`requestCustomerChange`, `createGrv`, `createGrvRequest`) rather than from the
+screens, so a second screen raising the same request cannot forget to. Same
+rule as the order notifications: best-effort, never undoing the request, and
+never sent to the person who raised it. No database change — staff could
+already write a notification for a colleague, which is how order handovers
+reach the salesman.
+
+2026-09-19 — SUPERSEDED the same day by "The admin decides which actions need
+approval", below; the owner asked for it next.
+2026-09-19 — Not built yet: the admin switches for which actions need a
+request — The owner asked for them in the same message. Switching a request
+off means a salesman or the warehouse writes what only a manager can write
+today (the customer record, an approved order's stock, a return's approval),
+and that is decided by the database's policies, not by hiding a button. It
+needs its own RUN-ME SQL and the owner's answer on which actions are on the
+list, so it is a separate step.
+
+## 2026-09-19 — The admin decides which actions need approval
+
+2026-09-19 — Three switches, because there are three requests — Owner's
+request: "in the settings of the admin. He can enable and disable which all
+features are needed to be requested and not requested." The app raises exactly
+three things as a request to a manager: a customer change, the warehouse
+reopening an approved order, and a goods return. Those are the list. Order
+approval itself (pending → accepted → approved) is not on it: that is the
+pipeline, not a request, and approving is what issues the invoice number —
+Rejected: a generic "permissions matrix" of every action per role. Nobody
+asked for it and every cell would be a new way to get the money wrong.
+
+2026-09-19 — The switches live in `app_settings` and default to ON — Three
+booleans (`customer_changes_need_approval`, `order_edits_need_approval`,
+`goods_returns_need_approval`) on the one settings row, beside
+`delivery_enabled`, which is the same kind of answer. ON is today's behaviour,
+so running RUN-ME-26 changes nothing by itself, and an app that cannot read
+the columns treats everything as needing approval. A missing setting must
+never quietly remove a check.
+
+2026-09-19 — The database enforces each switch; the apps only choose which
+call to make — Hiding "Request edit" and showing "Reopen" would be a button
+the database refuses, or worse, one it does not. So: customers get two extra
+policies that match only while that switch is off; reopening an order and
+finalising a return are `security definer` functions that check the switch,
+the caller's role or authorship, and the row's state, then move stock and
+status in one transaction. Functions rather than wider policies for those two
+because RLS cannot limit a salesman to one column of `products`: a policy that
+let them put stock back would let them change a price — Rejected: doing the
+non-manager path in a Next.js route with the service key. The phone talks to
+the database directly and would have needed its own copy.
+
+2026-09-19 — Only an admin can change them, and a trigger says so — The owner
+put it "in the settings of the admin". Managers can already update
+`app_settings` (delivery step, theme) and RLS cannot tell columns apart, so a
+before-update trigger refuses a change to these three from anyone who is not
+an admin. The service role passes: it is the server and the import tools.
+
+2026-09-19 — With returns switched off, a return is final for whoever raises
+it, manager included — The function lets the person who raised a pending
+return finalise it, whatever their role. A manager raising a return and then
+approving their own request, with approvals switched off, would be ceremony.
+`approved_by` records that same person: nobody else looked, and the column
+should not pretend somebody did.
+
+2026-09-19 — A return that cannot be finalised falls back to a request — If
+the switch is off but the function is refused or missing, the return stays
+pending and the managers are notified, exactly as when the switch is on.
+Nothing is lost and nothing is credited that the database did not agree to.
+
+2026-09-19 — Requests already waiting when a switch goes off stay in the
+Inbox — Switching a request off changes what happens to the next one. The
+ones already raised still need their Approve; applying them silently because a
+setting changed would be the app deciding something a manager had not.
+
+2026-09-19 — The order screen's own edit-request notification is gone —
+It wrote "Edit requested / Warehouse requested to edit an approved order" to
+every manager from the button's click handler. `requestEdit` now sends the
+notification (with the invoice number and the customer), so the handler's copy
+would have been a second one for the same event.
+
+## 2026-09-19 — The phone's side of Inbox approval and the approval switches
+
+2026-09-19 — On the phone each pending return is now its own Inbox row — It
+was one summary line ("Check Reports → GRV to review") with no action. An
+Approve button needs a return to belong to, so the line became rows carrying
+the customer and the amount when there is one. The rows are not tappable
+beyond Approve: the old line opened nothing either, and navigation there was
+not asked for.
+
+2026-09-19 — The phone keeps the requester's note on a customer change — The
+web has no such note. Rather than drop it or send two notifications, the note
+becomes the notification's body ("<who>: <note>"); the title matches the web.
+
+2026-09-19 — The phone's salesman "Request Edit" still always goes to a
+manager — The web only gives that button to the warehouse, and
+`reopen_order_without_approval` accepts the warehouse or a manager. The phone
+also lets a salesman request an edit (SalesmanOrdersTab). With order edits
+switched off that request is unchanged: a salesman putting stock back and
+clearing an invoice's totals on their own is a wider permission than the owner
+described, so it is left for the owner to decide rather than assumed.
+
+2026-09-19 — The phone's `updateCustomer` now checks the write took — With the
+customer switch off a salesman writes customers directly, and a write the
+database declines reports success with nothing changed. Without the check it
+would look saved until the next sync. Rollback only; no new message.
+
+2026-09-19 — The phone says On/Off where the web says Ticked/Unticked — Its
+controls are switches, not checkboxes. Every other string is the web's.
+
+## 2026-09-21 — Picking on the phone un-ticked itself
+
+2026-09-21 — The phone's writes to `order_items` now ask for nothing back
+(`return=minimal`) — The Supabase Swift library asks for every column back
+after an update or delete. Staff logins are not granted `unit_cost`
+(RUN-ME-4), so the database refused the whole write; the phone logged that to
+its debug log and nowhere else, and the 2-second refresh on the picking screen
+then replaced the tick with what the server had — no tick. Four writes were
+affected: the tick itself, removing a line, saving a stock-capped quantity at
+approval, and emptying an order from the Trash. It is the same trap that
+emptied the product list (WHAT-CHANGED §1) and that the phone's importer
+already avoids — Rejected: routing the phone's ticks through the web's
+/api/orders/update-picked-qty, which would make picking depend on the web app
+being deployed and reachable from the warehouse floor, and would not fit
+OfflineOrderQueue, which replays whole orders; rejected granting `unit_cost`
+back, which undoes the cost lockdown.
+
+2026-09-21 — A line the database refuses is now reported, not only logged —
+`syncOrderItemsInDB` still attempts every line, then throws the first refusal,
+so `updateOrder` answers false and the picking screen says "Could not save the
+pick" with the database's reason. This is the 2026-09-12 rule ("a rejection by
+the database is reported") applied to the lines as well as the header. A lost
+connection is still queued, not reported.
+
+## 2026-09-21 — Recently deleted
+
+2026-09-21 — The Trash in Orders is now "Recently deleted", and for a manager
+it also lists rejected orders — Asked for by the owner: a manager who deletes
+or rejects the wrong order should find it in one place. Restore on a rejected
+order is the existing Resubmit (back to Pending, `rejected_at` cleared), so
+there is one un-reject rule, not two. Only the label changed; the i18n keys
+and the phone's Account → Trash (local drafts, a different thing) did not —
+Rejected: moving rejected orders out of the Rejected section, which is where
+a salesman fixes and resubmits their own and was not asked to change (rule
+1); rejected a new `restore` route for rejections, which would duplicate
+Resubmit.
+
+2026-09-21 — A salesman's Recently deleted is unchanged — It still shows only
+the orders they deleted. Their rejected orders are already in front of them
+in the Rejected section with Resubmit.
+
+## 2026-09-21 — Removing a line after the order is accepted
+
+2026-09-21 — A manager or the warehouse may remove a line while the order is
+waiting, picking or packed — Asked for by the owner; the stages and the two
+roles were proposed and confirmed. Stock is only deducted at approval, so at
+these stages the row simply goes and the totals are recalculated; nothing has
+to be put back. From approval on the rule is unchanged: the edit-request flow,
+which reverses the stock first. Draft/pending is unchanged too (own order, or
+a manager) — Rejected: allowing it at any stage, which would change an issued
+invoice and leave its stock deducted; rejected giving it to the salesman after
+acceptance, which was not asked for.
+
+2026-09-21 — After acceptance the web removes the line with the admin key,
+after checking role and stage in the route — The warehouse holds no write
+privilege on `order_items`; its picks already go this way
+(update-picked-qty). A delete the row-level rules decline reports success
+with nothing removed, which is the failure this avoids.
+
+2026-09-21 — The phone's "Remove from order" is now limited to the same
+stages — It was offered on the picking screen at every stage, to warehouse
+and manager. It had never worked: the delete was refused for the same reason
+the ticks were (see above). Fixing that write would have let a line be taken
+off an approved or delivered invoice with its stock still deducted, so the
+button now appears only while the order is waiting, picking or packed. This
+narrows what the screen offers, not what anyone could actually do.
+
+## 2026-09-21 — Adding a line after the order is accepted
+
+2026-09-21 — Adding follows removing: a manager or the warehouse, while the
+order is waiting, picking or packed — The owner asked for "ability to add
+items on an order" straight after confirming the rule for removing them, so
+it is one rule in both routes, not a second one. The line is priced by
+`resolveLinePrice` exactly as before, and deducted at approval with the rest.
+Quantity and price edits were NOT widened: nobody asked, and the warehouse
+changing a price is a different permission.
+
+2026-09-21 — On the web, adding more of an article whose line is already
+ticked takes the tick off — A picked line bills its picked quantity, so the
+extra boxes would otherwise never be billed; and nobody has picked them yet.
+The phone was left as found: there the same action raises the picked
+quantity and the line stays ticked, because its sync never flips a pick
+without an explicit tick. The two disagree on that one case; changing the
+phone's sync for it was judged riskier today than the disagreement.
+
+2026-09-21 — The phone's "Add article" on the picking screen is limited to
+the same stages — Same reasoning as "Remove from order" above: it was offered
+at every stage, including on approved and delivered invoices.
+
+## 2026-09-21 — No discount unless a manager gives one
+
+2026-09-21 — The price rule is now: a price a manager states > the customer's
+old price > list. The customer's remembered whole-order discount is gone from
+it — The owner: "there should be no unnecessary discounts. The manager adds a
+discount on the products he wants", and, asked for the order of things, "list
+price, then the old price, and then if any discount is applied on that
+specific product or the complete order". A manager's order discount used to
+be saved to `customer_discounts` and then taken off every later order for
+that customer, a salesman's included, with nobody choosing it. This REPLACES
+rule 3 of the 2026-09-18 "One rule, `resolveLinePrice`" decision. Both apps.
+The live table held 0 rows when this was done, so no customer's prices moved
+— Rejected: keeping the remembered discount as a pre-filled suggestion in the
+manager's field, which shows a discount that is not applied; rejected
+dropping the old price too, which the owner explicitly kept.
+
+2026-09-21 — The manager's order discount belongs to the order it is given
+on — It is no longer written to `customer_discounts` or read back on the
+customer's next order, on either app. The table and its rows are left alone.
+
+2026-09-21 — Only a manager or admin changes a line's price, and the server
+enforces it on the web — Asked and answered ("No, manager only").
+`/api/orders/update-item` refuses `unitPrice` from anyone else, and
+`/api/orders/create` does not read a non-manager's prices at all: it prices
+each line itself from the old price or the list price. The new-order sheet
+and the order's line table show a salesman the price as text. A price written
+on an imported or scanned document counts only for a manager. This narrows
+the 2026-09-04 "a price written on the document wins" decision to managers —
+Rejected: trusting the form, which is where a salesman's lower price came in
+and printed on the invoice as a discount.
+
+2026-09-21 — Known limit: on the phone this is enforced by the screens, not
+the database — The phone writes `order_items` directly, so a salesman's price
+is whatever the app sends. Its price field was already manager-only. Closing
+that properly needs a database trigger that refuses a non-manager's
+`unit_price` change; not written, because it has to let the phone's own
+order creation through and deserves its own step.
+
+2026-09-21 — The phone's order-wide discount was already manager-only — The
+owner chose "Manager only"; `NewOrderView` already shows it only to
+`isManager`. An admin does not get it there (2026-09-18 note) and that was
+not widened.
+
+## 2026-09-21 — The billing date becomes its own column, and a manager can change it
+
+2026-09-21 — `orders.billed_at` replaces `updated_at` as the billing date
+(RUN-ME-27) — The owner asked for the date on an order to be changeable "like
+the salesman", and chose the billing date over `created_at` when shown that
+sales, aging and statements read the former. This is the column the
+2026-09-04 note said would end "that whole class of accident"; it is now
+asked for. Every reader moved: sales and dashboard figures, reports, aging,
+statements, the Invoices page, the invoice PDF/Excel and their file names,
+and `fetchOrders`' from/to window — Rejected: letting a manager write
+`updated_at` directly, which the next edit of any kind would overwrite.
+
+2026-09-21 — It is stamped when the status changes, not once at approval —
+That is when the billing date effectively moves today, and
+`reports_from_status` defaults to `delivered`, so stamping once at approval
+would move every order delivered in a later month than it was approved into
+the earlier month. A note, a PO number or a line edit no longer moves it.
+Proposed to the owner in those words and accepted.
+
+2026-09-21 — A date set by hand sticks (`billed_at_manual`) — Otherwise the
+manager's correction is undone by the next status change. The trigger sets the
+flag whenever `billed_at` itself is written, and refuses that write from
+anyone but a manager, an admin or the service role. Consequence: the web only
+sends `billed_at` when the manager actually changed it, and the phone writes
+it as its own small update, never in the whole-header write it makes on every
+tick — either would mark every order as hand-dated.
+
+2026-09-21 — One helper decides the column, and rows always carry
+`billed_at` (lib/billingDate.ts) — Until RUN-ME-27 is run the column does not
+exist and PostgREST refuses the whole request. The helper probes once, and
+readers select `billed_at:updated_at` — PostgREST's rename — so the code
+below the query reads one name either way. "Missing" is re-checked every five
+minutes because a server instance outlives the moment the SQL is run; "there"
+is never re-checked. Verified read-only against the live database: the probe
+answers 42703 and the renamed select works — Rejected: the select-then-retry
+used elsewhere, which at ~25 call sites is 25 copies of the same fallback.
+
+2026-09-21 — NOT changed: the Date column on the Orders list still shows
+`created_at` — The owner asked for "the date on orders" to be changeable, and
+the list shows when an order was written, which is not the date that was made
+editable. Switching the list to the billing date changes what every row shows
+and how the list reads against its sort, so it is asked, not assumed.
+
+2026-09-21 — FOUND while checking the fallback: every order was re-dated on
+2026-09-19 — One update at 15:56:46.501482 UTC stamped `updated_at` on 537 of
+558 orders, all delivered imported invoices with no status history. All 558
+orders therefore carried a September 2026 billing date: "sales this month" was
+every sale on record and nothing was overdue. It is the 2026-09-04 accident
+again. The cause was not found — no RUN-ME file, script or route does a bulk
+update of orders. RUN-ME-27 repairs it before filling `billed_at`, by
+RUN-ME-11's rule (last status change, else `created_at`), and puts
+`updated_at` right too because the deployed web app and the phones in the
+field still read it. It also lists any other moment many orders share, leaving
+out exact-midnight dates: imported invoices are dated at midnight and up to 13
+share one, which is real.
+
+## 2026-09-21 — Multi-select on the Orders list
+
+2026-09-21 — Manager and admin can tick several orders and delete them
+together; Delete is the only bulk action — Asked for as "select options" for
+the manager; asked which actions, the owner said continue on the suggestion
+of Delete alone. Accept and Reject in bulk were not built: each is a decision
+about one order. While selecting, tapping a row ticks it instead of opening
+it, in every list on the page.
+
+2026-09-21 — A bulk delete is the single delete, once per order, in turn —
+Same route, so each order's stock goes back and its payments are released
+exactly as they would alone, and one refusal does not stop the rest; the
+count that failed is reported — Rejected: a bulk route, which would be a
+second copy of the three-consequence delete to keep in step.
+
+2026-09-21 — Selection reaches the lists through React context — Three
+components sit between the page and a row (Section, PaginatedOrderSection,
+OrderList); a prop through each for one feature was the alternative.
+
+### The phone's side of the billing date (logged here; the iOS project has no log of its own)
+
+2026-09-21 — `Billing/BillingDate.swift` is the phone's copy of
+lib/billingDate.ts, and `Order.revenueDate` is now `billedAt ?? updatedAt ??
+date` — All ~31 report sites and the statement already went through
+`revenueDate` (2026-09-05), so that one line moved them. The aging and the
+financial reports name their columns, so they ask `BillingDate.column()`
+first, exactly as the web does. The main order list selects `*` into a
+Codable, so an absent column just decodes as nil and needs no retry; one row
+that carries a `billed_at` proves the column exists (it is NOT NULL).
+
+2026-09-21 — On the phone the Billing date row is hidden until the column
+exists; on the web it is shown greyed out — The web already greys out the PO
+number before its migration, so it follows that. The phone's editor has no
+such pattern and a control that cannot work is worse than none. Manager and
+admin only, in ManagerOrderEditorView's customer card.
+
+2026-09-21 — The phone writes the billing date BEFORE the rest of a save, as
+its own update — A Save that also changes status would otherwise stamp the
+date first and then have it overwritten by hand; written first, the status
+change finds a hand-set date and leaves it. It is written only when the day
+differs from the day the sheet opened with, so a date that moved underneath an
+open sheet is not written back as hand-set. The old time of day is kept; noon
+UTC where there was none.
+
+2026-09-21 — Known limits on the phone, not changed — (1) adding to a ticked
+line raises the quantity from what the line SHOWS (the picked quantity), the
+web from `ordered_qty`; they differ only if the two already differed. (2) If
+the un-tick fails on a dead connection, the offline queue replays whole
+orders, which never flips a pick, so the tick survives on the server until
+un-ticked again. Both are the existing queue and sync rules.
+
+### The phone's multi-select and invoice dates (logged here; the iOS project has no log of its own)
+
+2026-09-21 — On the phone, multi-select is on the manager's All Orders tab
+only — That tab lists every order with a status filter, which covers the ask;
+New Orders, Warehouse and Delivery have their own tap behaviours. The Delivery
+tab is the same view with a preset status, so Select is hidden there. Same
+rules as the web: manager and admin, Delete only, `OrderTrash.delete` once per
+order in turn, both counts reported. Ticks survive a search or filter change
+as on the web, so the count and the confirmation always show the true number.
+
+2026-09-21 — The phone's invoice now prints the billing date, and a real due
+date — Its PDF and Excel printed the day the order was WRITTEN as Inv Date and
+again as Due Date. The web prints the billing date and that date plus the
+customer's overdue-threshold days (90 where there is none). With the billing
+date now editable, a manager who corrected it would have got two different
+invoices for one order from the two apps. Layout and wording untouched; the
+file name's month follows too. This changes a document, so it is flagged to
+the owner — Rejected: leaving it, since an invoice whose due date equals its
+invoice date was never right.
+
+## 2026-09-22 — The Orders list shows the billing date
+
+2026-09-22 — The Date column on the Orders list, and its newest/oldest sort,
+use the billing date on both apps — Asked for ("yes, show the billing date")
+after being flagged on 2026-09-21. Sort and column change together so the list
+reads in the order it is sorted. `created_at` is no longer shown anywhere on
+the list; it remains the order's own field. Consequence until RUN-ME-27 is
+run: the column shows `updated_at`, which today is the 2026-09-19 re-stamp for
+every delivered order — the same wrong date sales and aging already use, and
+the file fixes all three at once.
+
+2026-09-22 — FOUND: RUN-ME-27 was reported run but nothing from it reached
+the database — No `billed_at`, no `billed_at_manual`, and the 537 re-stamped
+orders unchanged, checked read-only. RUN-ME-26's columns are absent too. The
+SQL editor must have refused something; the owner has been asked for the
+message. The apps keep working on `updated_at` in the meantime, by design.

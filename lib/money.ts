@@ -120,9 +120,11 @@ export function billed(subtotalAed: number, rate: number): {
   return { subtotal: toAed(sub), vatAmount: toAed(tax), total: toAed(sub + tax) };
 }
 
-// customer_discounts is one row per customer (percent or flat amount),
-// applied across all their line items — takes a back seat to a specific
-// per-product sticky price (customer_prices), which is more authoritative.
+// A percent-or-amount discount taken off a price. It used to be applied to
+// every line automatically from the customer's remembered discount
+// (customer_discounts); since 2026-09-21 nothing is discounted unless a
+// manager does it on that product or that order, and resolveLinePrice no
+// longer calls this.
 export function applyDiscount(
   price: number,
   discount: { discount_type: "percent" | "amount"; discount_value: number } | null
@@ -144,26 +146,30 @@ export function applyDiscount(
 //      what was agreed, on paper (2026-09-04);
 //   2. else the price this customer was last billed for this product
 //      (customer_prices, written at approval);
-//   3. else the list price less the customer's standing discount;
-//   4. else the list price.
+//   3. else the list price.
+//
+// There is no automatic discount (owner, 2026-09-21): a customer's remembered
+// whole-order discount used to be rule 3 and came off every later order
+// without anybody choosing it. A discount now exists only where a manager
+// gives one — Disc % on a product, or the order discount on that order.
+// Rule 1 is a manager's too: callers pass `statedPrice` only for a manager,
+// and /api/orders/create prices a salesman's lines itself.
 //
 // A remembered price of zero is NOT a price: it is what a free sample or a
 // mis-keyed line leaves behind, and honouring it would bill the next order at
 // nothing. It falls through to the rules below it.
+// "discount" is still a reason a LINE can carry on screen — the manager's
+// order discount sets it — but this function never returns it.
 export type PriceReason = "stated" | "sticky_price" | "discount" | null;
 
 export function resolveLinePrice(input: {
   listPrice: number;
   stickyPrice?: number | null;
-  customerDiscount?: { discount_type: "percent" | "amount"; discount_value: number } | null;
   statedPrice?: number | null;
 }): { price: number; reason: PriceReason } {
   const usable = (n: number | null | undefined): n is number => n != null && Number.isFinite(n) && n > 0;
   if (usable(input.statedPrice)) return { price: money(input.statedPrice), reason: "stated" };
   if (usable(input.stickyPrice)) return { price: money(input.stickyPrice), reason: "sticky_price" };
-  if (input.customerDiscount) {
-    return { price: applyDiscount(input.listPrice, input.customerDiscount), reason: "discount" };
-  }
   return { price: money(input.listPrice), reason: null };
 }
 

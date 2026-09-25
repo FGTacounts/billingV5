@@ -23,6 +23,7 @@ import {
   rejectCustomerChange,
   type CustomerChangeRequest,
 } from "@/lib/queries/customerRequests";
+import { approveGrv } from "@/lib/queries/grv";
 
 const ICON = { edit_request: FileEdit, grv: RotateCcw } as const;
 
@@ -108,6 +109,31 @@ export default function InboxView({ user }: { user: AppUser }) {
     loadChanges();
   }
 
+  // Approving from the row, so a manager who came here from the notification
+  // does not have to open the order or Payments first. The row goes at once
+  // and comes back where it was if the approval does not land.
+  async function approveItem(item: InboxItem) {
+    const before = items;
+    setItems(before.filter((i) => i.id !== item.id));
+    try {
+      if (item.kind === "edit_request") {
+        const res = await fetch("/api/orders/grant-edit", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ orderId: item.refId }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error ?? t("inbox.didntGoThrough"));
+      } else {
+        await approveGrv(supabaseBrowser(), item.refId, user.id);
+      }
+      toast.success(t("inbox.approved"));
+    } catch (e) {
+      setItems(before);
+      toast.error(e instanceof Error && e.message ? e.message : t("inbox.didntGoThrough"));
+    }
+  }
+
   const needsAttention = changes.length > 0 || items.length > 0;
   const hasAnything = needsAttention || notifications.length > 0 || news.length > 0;
 
@@ -179,22 +205,29 @@ export default function InboxView({ user }: { user: AppUser }) {
                     {items.map((item) => {
                       const Icon = ICON[item.kind];
                       return (
-                        <button
-                          key={item.id}
-                          onClick={() => router.push(item.href)}
-                          className="w-full flex items-center gap-3 px-4 py-3.5 text-left hover:bg-black/[0.02] dark:hover:bg-white/[0.03]"
-                        >
-                          <div className="w-9 h-9 rounded-full bg-accent/12 text-accent grid place-items-center shrink-0">
-                            <Icon size={16} />
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <div className="text-subhead font-semibold truncate">{item.title}</div>
-                            <div className="text-caption text-secondary truncate">{item.subtitle}</div>
-                          </div>
-                          <div className="text-caption text-secondary shrink-0 tabular-nums">
-                            {new Date(item.createdAt).toLocaleDateString()}
-                          </div>
-                        </button>
+                        <div key={item.id} className="flex items-center gap-3 pe-4">
+                          <button
+                            onClick={() => router.push(item.href)}
+                            className="min-w-0 flex-1 flex items-center gap-3 ps-4 py-3.5 text-start hover:bg-black/[0.02] dark:hover:bg-white/[0.03]"
+                          >
+                            <div className="w-9 h-9 rounded-full bg-accent/12 text-accent grid place-items-center shrink-0">
+                              <Icon size={16} />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="text-subhead font-semibold truncate">{item.title}</div>
+                              <div className="text-caption text-secondary truncate">{item.subtitle}</div>
+                            </div>
+                            <div className="text-caption text-secondary shrink-0 tabular-nums">
+                              {new Date(item.createdAt).toLocaleDateString()}
+                            </div>
+                          </button>
+                          <button
+                            onClick={() => approveItem(item)}
+                            className="shrink-0 px-3 py-1.5 rounded-card bg-accent text-white text-caption font-semibold"
+                          >
+                            {t("inbox.approve")}
+                          </button>
+                        </div>
                       );
                     })}
                   </Card>

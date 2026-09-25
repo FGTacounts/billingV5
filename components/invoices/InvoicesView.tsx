@@ -43,8 +43,8 @@ export default function InvoicesView({ isManager }: { isManager: boolean }) {
     }
     const sorted = [...rows];
     switch (sortKey) {
-      case "newest": sorted.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()); break;
-      case "oldest": sorted.sort((a, b) => new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime()); break;
+      case "newest": sorted.sort((a, b) => new Date(b.billed_at ?? b.updated_at).getTime() - new Date(a.billed_at ?? a.updated_at).getTime()); break;
+      case "oldest": sorted.sort((a, b) => new Date(a.billed_at ?? a.updated_at).getTime() - new Date(b.billed_at ?? b.updated_at).getTime()); break;
       case "invoice_desc": sorted.sort((a, b) => Number(b.invoice_number ?? 0) - Number(a.invoice_number ?? 0)); break;
       case "invoice_asc": sorted.sort((a, b) => Number(a.invoice_number ?? 0) - Number(b.invoice_number ?? 0)); break;
     }
@@ -198,7 +198,7 @@ export default function InvoicesView({ isManager }: { isManager: boolean }) {
                   })}
                 </div>
                 <div className="text-caption text-secondary">
-                  {t("invoices.deliveredOn", { date: new Date(o.updated_at).toLocaleDateString() })}
+                  {t("invoices.deliveredOn", { date: new Date(o.billed_at ?? o.updated_at).toLocaleDateString() })}
                 </div>
               </div>
               <a

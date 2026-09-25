@@ -111,11 +111,13 @@ console.log("\nThe customer's old price");
     r({ listPrice: 25, stickyPrice: 21.5 }).price === 21.5 && r({ listPrice: 25, stickyPrice: 21.5 }).reason === "sticky_price");
   check("the old price holds even after the list price goes UP", r({ listPrice: 30, stickyPrice: 21.5 }).price === 21.5);
   check("the old price holds even after the list price goes DOWN", r({ listPrice: 18, stickyPrice: 21.5 }).price === 21.5);
-  check("the old price beats the customer's standing discount",
+  // 2026-09-21: nothing is discounted unless a manager does it. A remembered
+  // customer discount handed to the rule must change nothing.
+  check("a remembered customer discount is NOT applied — percent",
+    r({ listPrice: 25, customerDiscount: pct10 }).price === 25 && r({ listPrice: 25, customerDiscount: pct10 }).reason === null);
+  check("a remembered customer discount is NOT applied — amount", r({ listPrice: 25, customerDiscount: off2 }).price === 25);
+  check("the old price still applies beside a remembered discount",
     r({ listPrice: 25, stickyPrice: 24, customerDiscount: pct10 }).price === 24);
-  check("no old price: the standing percent discount applies",
-    r({ listPrice: 25, customerDiscount: pct10 }).price === 22.5 && r({ listPrice: 25, customerDiscount: pct10 }).reason === "discount");
-  check("no old price: the standing amount discount applies", r({ listPrice: 25, customerDiscount: off2 }).price === 23);
   check("a price written on the scanned or imported document beats everything",
     r({ listPrice: 25, stickyPrice: 21.5, customerDiscount: pct10, statedPrice: 19 }).price === 19 &&
       r({ listPrice: 25, stickyPrice: 21.5, statedPrice: 19 }).reason === "stated");
@@ -123,10 +125,10 @@ console.log("\nThe customer's old price");
     r({ listPrice: 25, stickyPrice: 21.5, statedPrice: null }).price === 21.5 &&
       r({ listPrice: 25, stickyPrice: 21.5, statedPrice: 0 }).price === 21.5);
   check("an old price of zero is not a price — the next order is not billed at nothing",
-    r({ listPrice: 25, stickyPrice: 0 }).price === 25 && r({ listPrice: 25, stickyPrice: 0, customerDiscount: pct10 }).price === 22.5);
+    r({ listPrice: 25, stickyPrice: 0 }).price === 25 && r({ listPrice: 25, stickyPrice: 0, customerDiscount: pct10 }).price === 25);
   check("a broken old price is ignored", r({ listPrice: 25, stickyPrice: NaN }).price === 25 && r({ listPrice: 25, stickyPrice: -4 }).price === 25);
   check("every resolved price is storable",
-    [r({ listPrice: 19.99, customerDiscount: { discount_type: "percent", discount_value: 7.5 } }), r({ listPrice: 10, stickyPrice: 21.499999999 })]
+    [r({ listPrice: 19.999 }), r({ listPrice: 10, stickyPrice: 21.499999999 })]
       .every((x) => isCleanMoney(x.price)));
 }
 

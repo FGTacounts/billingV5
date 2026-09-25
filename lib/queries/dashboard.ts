@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { billingDateColumn, billedAtSelect } from "@/lib/billingDate";
 import type { OrderStatus } from "@/lib/types/db";
 import { fetchOutstandingInvoices, getOverdueThresholdDays } from "@/lib/queries/aging";
 import { fetchCountedStatuses } from "@/lib/reportStage";
@@ -43,7 +44,9 @@ export interface RevenueOrder {
   salesman_id: string | null;
   subtotal: number | null;
   total: number | null;
-  updated_at: string;
+  // The billing date: orders.billed_at, or updated_at under that name on a
+  // database without RUN-ME-27 (lib/billingDate.ts).
+  billed_at: string;
 }
 
 const REVENUE_TTL_MS = 10_000;
@@ -67,13 +70,14 @@ async function revenueOrders(supabase: SupabaseClient): Promise<RevenueOrder[]> 
   revenueInFlight = (async () => {
     const statuses = await fetchCountedStatuses(supabase);
     const since = revenueWindowIso();
+    const billed = await billingDateColumn(supabase);
     const rows = await fetchAllPages<RevenueOrder>(
       (from, to) =>
         supabase
           .from("orders")
-          .select("id, salesman_id, subtotal, total, updated_at")
+          .select(`id, salesman_id, subtotal, total, ${billedAtSelect(billed)}`)
           .in("status", statuses)
-          .gte("updated_at", since)
+          .gte(billed, since)
           .order("id")
           .range(from, to) as never,
       { keyOf: (o) => o.id }
@@ -97,7 +101,7 @@ export async function revenueIn(
   const toMs = opts.to ? opts.to.getTime() : Infinity;
   return rows.filter((o) => {
     if (opts.salesmanId && o.salesman_id !== opts.salesmanId) return false;
-    const t = new Date(o.updated_at).getTime();
+    const t = new Date(o.billed_at).getTime();
     return t >= fromMs && t <= toMs;
   });
 }
@@ -290,7 +294,7 @@ export async function fetchSaleTrend(
 
   const byDay = new Map<string, number>();
   for (const o of data ?? []) {
-    const key = (o.updated_at as string).slice(0, 10);
+    const key = (o.billed_at as string).slice(0, 10);
     byDay.set(key, (byDay.get(key) ?? 0) + saleValue(o));
   }
 
@@ -422,7 +426,7 @@ export async function fetchSalesByMonth(
 
   const byMonth = new Map<string, number>();
   for (const o of data ?? []) {
-    const d = new Date(o.updated_at as string);
+    const d = new Date(o.billed_at as string);
     const key = `${d.getFullYear()}-${d.getMonth()}`;
     byMonth.set(key, (byMonth.get(key) ?? 0) + saleValue(o));
   }
@@ -448,6 +452,7 @@ export async function fetchTopCustomers(
   opts: { salesmanId?: string; limit?: number } = {}
 ): Promise<TopCustomer[]> {
   const statuses = await fetchCountedStatuses(supabase);
+  const billed = await billingDateColumn(supabase);
   type Row = { id: string; customer_id: string; subtotal: number | null; total: number | null };
   const data = await fetchAllPages<Row>(
     (from, to) => {
@@ -455,7 +460,7 @@ export async function fetchTopCustomers(
         .from("orders")
         .select("id, customer_id, subtotal, total")
         .in("status", statuses)
-        .gte("updated_at", startOfMonthIso())
+        .gte(billed, startOfMonthIso())
         .not("customer_id", "is", null);
       if (opts.salesmanId) q = q.eq("salesman_id", opts.salesmanId);
       return q.order("id").range(from, to) as never;
@@ -617,9 +622,10 @@ export async function fetchSalesByCategory(
   opts: { groupBy?: "category" | "product"; salesmanId?: string; limit?: number } = {}
 ): Promise<CategorySale[]> {
   const statuses = await fetchCountedStatuses(supabase);
+  const billed = await billingDateColumn(supabase);
   const orders = await fetchAllPages<{ id: string }>(
     (from, to) => {
-      let orderQ = supabase.from("orders").select("id").in("status", statuses).gte("updated_at", startOfMonthIso());
+      let orderQ = supabase.from("orders").select("id").in("status", statuses).gte(billed, startOfMonthIso());
       if (opts.salesmanId) orderQ = orderQ.eq("salesman_id", opts.salesmanId);
       return orderQ.order("id").range(from, to) as never;
     },

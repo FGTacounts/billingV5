@@ -103,7 +103,7 @@ export async function buildInvoiceSlice(
 
     const items = await fetchOrderItems(db, order.id);
     const bytes = await buildInvoicePdf(order, items, "tax", settings?.vat_rate);
-    const base = invoiceFileBase(order.invoice_number, order.updated_at ?? order.created_at);
+    const base = invoiceFileBase(order.invoice_number, order.billed_at ?? order.updated_at ?? order.created_at);
     let name = `${base}.pdf`;
     while (taken.has(name)) name = `${base}-${order.id.slice(0, 6)}.pdf`;
     taken.add(name);

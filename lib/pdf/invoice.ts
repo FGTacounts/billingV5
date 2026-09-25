@@ -184,10 +184,10 @@ function drawInfoBox(ctx: Ctx, x: number, w: number, top: number, bottom: number
   const rows: [string, string][] = [
     [t("documents.custNo"), order.customer?.code ?? t("common.notSet")],
     [t("documents.invNo"), order.invoice_number ? String(order.invoice_number) : t("common.notSet")],
-    [t("documents.invDate"), invoiceDate(order.updated_at ?? order.created_at)],
+    [t("documents.invDate"), invoiceDate(order.billed_at ?? order.updated_at ?? order.created_at)],
     [
       t("documents.dueDate"),
-      dueDate(order.updated_at ?? order.created_at, order.customer?.overdue_threshold_days ?? DEFAULT_OVERDUE_DAYS),
+      dueDate(order.billed_at ?? order.updated_at ?? order.created_at, order.customer?.overdue_threshold_days ?? DEFAULT_OVERDUE_DAYS),
     ],
     [t("documents.crNo"), t("common.notSet")],
   ];

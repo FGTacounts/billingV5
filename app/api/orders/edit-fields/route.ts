@@ -16,12 +16,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: t("common.managerAccessRequired") }, { status: 403 });
   }
 
-  const { orderId, invoice_number, customer_id, salesman_id, po_number } = (await req.json()) as {
+  const { orderId, invoice_number, customer_id, salesman_id, po_number, billed_at } = (await req.json()) as {
     orderId: string;
     invoice_number?: string | null;
     customer_id?: string | null;
     salesman_id?: string | null;
     po_number?: string | null;
+    billed_at?: string;
   };
   if (!orderId) return NextResponse.json({ error: t("orders.orderIdRequired") }, { status: 400 });
 
@@ -29,6 +30,16 @@ export async function POST(req: NextRequest) {
   if (invoice_number !== undefined) patch.invoice_number = invoice_number || null;
   if (customer_id !== undefined) patch.customer_id = customer_id || null;
   if (po_number !== undefined) patch.po_number = po_number || null;
+  // The billing date (RUN-ME-27). The database marks a date written here as
+  // set by hand, so later status changes leave it alone — which is why the
+  // form only sends it when it was actually changed.
+  if (billed_at !== undefined) {
+    const when = new Date(billed_at);
+    if (!billed_at || Number.isNaN(when.getTime())) {
+      return NextResponse.json({ error: t("orders.billingDateInvalid") }, { status: 400 });
+    }
+    patch.billed_at = when.toISOString();
+  }
 
   const supabase = supabaseCaller();
 
@@ -55,6 +66,11 @@ export async function POST(req: NextRequest) {
     patch.salesman_id = salesman_id;
   }
   const { error } = await supabase.from("orders").update(patch).eq("id", orderId);
+  // Matched on the column's name: a write to a column PostgREST does not know
+  // is refused as PGRST204, a read as 42703, and both name it.
+  if (error && billed_at !== undefined && /billed_at/.test(error.message)) {
+    return NextResponse.json({ error: t("orders.billingDateNeedsSql") }, { status: 409 });
+  }
   if (error && po_number !== undefined) {
     // po_number column may not exist yet — retry without it.
     const { po_number: _drop, ...rest } = patch;

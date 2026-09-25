@@ -3,6 +3,9 @@ import { invalidateAging } from "@/lib/queries/aging";
 import { invalidateOrderFacts } from "@/lib/queries/dashboard";
 import { money } from "@/lib/money";
 import { fetchAllForIds, fetchAllPages } from "@/lib/paging";
+import { t } from "@/lib/i18n";
+import { notifyEveryManager } from "@/lib/queries/orders";
+import { fetchApprovalSettings } from "@/lib/approvals";
 import type { GrvReturn, GrvItem, Customer } from "@/lib/types/db";
 
 // A goods return (GRV) is a credit note. It reaches the customer's balance
@@ -153,7 +156,53 @@ export async function createGrv(
     .from("grv_items")
     .insert(items.map((it) => ({ grv_id: data.id, product_id: it.product_id, qty: it.qty, unit_value: it.unit_value })));
   if (itemsErr) throw itemsErr;
+  await settleNewReturn(supabase, data.id as string, customerId, submittedBy);
   return data.id as string;
+}
+
+/**
+ * What happens to a return the moment it exists.
+ *
+ * Where the admin has switched the goods-return request off
+ * (lib/approvals.ts) it is final at once: the database puts the goods back and
+ * marks it approved in one step, for the person who raised it and nobody else
+ * (scratchpad/RUN-ME-26). Otherwise — or if the database refuses — it stays
+ * pending and the managers are told, as before. Returns whether it was
+ * finalised, so the screen can say which of the two happened.
+ */
+async function settleNewReturn(
+  supabase: SupabaseClient,
+  grvId: string,
+  customerId: string,
+  submittedBy: string
+): Promise<boolean> {
+  const approvals = await fetchApprovalSettings(supabase);
+  if (!approvals.goodsReturns) {
+    const { error } = await supabase.rpc("approve_return_without_approval", { p_grv_id: grvId });
+    if (!error) {
+      returnsChanged();
+      return true;
+    }
+  }
+  await notifyReturnRaised(supabase, customerId, submittedBy);
+  return false;
+}
+
+// A pending return is off nobody's balance until a manager approves it, so
+// the managers hear about it the moment it is raised.
+async function notifyReturnRaised(supabase: SupabaseClient, customerId: string, submittedBy: string) {
+  try {
+    const { data: customer } = await supabase.from("customers").select("name").eq("id", customerId).maybeSingle();
+    await notifyEveryManager(
+      supabase,
+      submittedBy,
+      "grv_requested",
+      t("inbox.notifGoodsReturn", { customer: customer?.name ?? t("inbox.unknownCustomer") }),
+      t("inbox.notifApproveInInbox")
+    );
+  } catch {
+    // Best-effort by design.
+  }
 }
 
 /**
@@ -168,7 +217,7 @@ export async function createGrv(
 export async function createGrvRequest(
   supabase: SupabaseClient,
   input: { customerId: string; submittedBy: string; amount: number; paymentId?: string | null; notes?: string | null }
-): Promise<string | null> {
+): Promise<{ id: string; approved: boolean } | null> {
   const { data, error } = await supabase
     .from("grv_returns")
     .insert({
@@ -187,7 +236,8 @@ export async function createGrvRequest(
     if (code === "42703" || code === "PGRST204") return null;
     throw error;
   }
-  return data.id as string;
+  const approved = await settleNewReturn(supabase, data.id as string, input.customerId, input.submittedBy);
+  return { id: data.id as string, approved };
 }
 
 // Sum of approved GRV credit per customer — a credit note that reduces the

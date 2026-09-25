@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { t } from "@/lib/i18n";
+import { notifyEveryManager } from "@/lib/queries/orders";
 
 // Customer changes raised by a salesman or the warehouse, waiting for a
 // manager.
@@ -59,7 +60,36 @@ export async function requestCustomerChange(
   if (!data || data.length === 0) {
     return { ok: false, error: t("customers.requestNotSent") };
   }
+  // The change waits on a manager, so tell them rather than leaving it to be
+  // found. Best-effort: a bell that fails does not unsend the request.
+  await notifyRequestRaised(supabase, input);
   return { ok: true };
+}
+
+async function notifyRequestRaised(
+  supabase: SupabaseClient,
+  input: { customerId: string | null; payload: Record<string, unknown>; requestedBy: string }
+) {
+  try {
+    const [{ data: who }, { data: customer }] = await Promise.all([
+      supabase.from("users").select("full_name").eq("id", input.requestedBy).maybeSingle(),
+      input.customerId
+        ? supabase.from("customers").select("name").eq("id", input.customerId).maybeSingle()
+        : Promise.resolve({ data: null as { name: string } | null }),
+    ]);
+    const name = who?.full_name ?? t("inbox.someone");
+    await notifyEveryManager(
+      supabase,
+      input.requestedBy,
+      "customer_change_requested",
+      input.customerId
+        ? t("inbox.wantsToChange", { who: name, customer: customer?.name ?? t("inbox.aCustomer") })
+        : t("inbox.suggestedNewCustomer", { who: name }),
+      t("inbox.notifApproveInInbox")
+    );
+  } catch {
+    // Best-effort by design.
+  }
 }
 
 /** Everything still waiting on a manager. */

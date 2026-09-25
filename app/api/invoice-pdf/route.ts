@@ -34,7 +34,7 @@ export async function GET(req: NextRequest) {
     supabase.from("app_settings").select("vat_rate").limit(1).maybeSingle(),
   ]);
   const bytes = await buildInvoicePdf(order, items, kind, settings.data?.vat_rate);
-  const fileName = `${invoiceFileBase(order.invoice_number, order.updated_at ?? order.created_at)}.pdf`;
+  const fileName = `${invoiceFileBase(order.invoice_number, order.billed_at ?? order.updated_at ?? order.created_at)}.pdf`;
 
   return new NextResponse(Buffer.from(bytes), {
     headers: {

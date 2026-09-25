@@ -11,8 +11,8 @@ import { supabaseBrowser } from "@/lib/supabase/client";
 import { fetchCustomers } from "@/lib/queries/customers";
 import { fetchProducts } from "@/lib/queries/products";
 import { customerCondition } from "@/lib/queries/aging";
-import type { AppUser, Customer, Product, CustomerDiscount } from "@/lib/types/db";
-import { applyDiscount, resolveLinePrice } from "@/lib/money";
+import type { AppUser, Customer, Product } from "@/lib/types/db";
+import { resolveLinePrice } from "@/lib/money";
 import { formatAed } from "@/lib/money";
 import Sheet from "@/components/ui/Sheet";
 import Button from "@/components/ui/Button";
@@ -62,11 +62,10 @@ export default function NewOrderSheet({
   const [noteText, setNoteText] = useState("");
   const [noteRecipient, setNoteRecipient] = useState<"warehouse" | "salesman">("warehouse");
 
-  const [customerDiscount, setCustomerDiscount] = useState<CustomerDiscount | null>(null);
   // Order-total discount (Manager-only, §3A) — "100% = no discount" is the
-  // convention the spec asks for in the UI, converted to/from the existing
-  // customer_discounts "% off" convention (discount_value=5 means 5% off)
-  // that applyDiscount() and every other reader of this table already use.
+  // convention the spec asks for in the UI. It belongs to THIS order: it is
+  // no longer remembered against the customer and brought back on their next
+  // one (owner, 2026-09-21 — a discount exists only where a manager gives it).
   const [orderDiscountPct, setOrderDiscountPct] = useState(100);
   const isManager = (user.role === "manager" || user.role === "admin");
 
@@ -109,33 +108,17 @@ export default function NewOrderSheet({
     setHoldWarning(null);
     setHoldReason(null);
     const supabase = supabaseBrowser();
-    // customer_discounts is currently missing from the live schema
-    // (confirmed via PostgREST introspection) — remembered order-total
-    // discounts can't persist until it exists again. Degrades to "no
-    // remembered discount" rather than breaking customer selection.
-    const [{ condition, oldestDays }, discountResult] = await Promise.all([
-      customerCondition(supabase, c.id),
-      supabase
-        .from("customer_discounts")
-        .select("customer_id, discount_type, discount_value, updated_at")
-        .eq("customer_id", c.id)
-        .maybeSingle(),
-    ]);
+    const { condition, oldestDays } = await customerCondition(supabase, c.id);
     if (condition === "bad" || oldestDays > c.overdue_threshold_days) {
       setHoldWarning({ condition, oldestDays });
     }
-    const cd = discountResult.error ? null : (discountResult.data as CustomerDiscount) ?? null;
-    setCustomerDiscount(cd);
-    setOrderDiscountPct(cd && cd.discount_type === "percent" ? 100 - cd.discount_value : 100);
   }, []);
 
   // Manager-only (§3A): re-derives every current line's price from its
   // catalog price × pct/100 — a fresh recompute, not a compounding
-  // multiply, so re-entering the same pct twice is idempotent. Would
-  // persist to customer_discounts to remember as "last time" for next
-  // order, but that table doesn't exist in the live schema right now — the
-  // discount still applies to this order, it just won't be remembered.
-  async function applyOrderDiscount(pct: number) {
+  // multiply, so re-entering the same pct twice is idempotent. Applies to
+  // this order and is not remembered for the customer's next one.
+  function applyOrderDiscount(pct: number) {
     setOrderDiscountPct(pct);
     setLines((prev) =>
       prev.map((l) => ({
@@ -144,21 +127,6 @@ export default function NewOrderSheet({
         recommendedReason: pct === 100 ? l.recommendedReason : "discount",
       }))
     );
-    if (!customer) return;
-    const supabase = supabaseBrowser();
-    try {
-      const { error } = await supabase
-        .from("customer_discounts")
-        .upsert(
-          { customer_id: customer.id, discount_type: "percent", discount_value: 100 - pct, updated_at: new Date().toISOString() },
-          { onConflict: "customer_id" }
-        );
-      if (error) throw error;
-      setCustomerDiscount({ customer_id: customer.id, discount_type: "percent", discount_value: 100 - pct, updated_at: new Date().toISOString() });
-    } catch {
-      // Table doesn't exist yet — the discount is still applied locally to
-      // this order, it just won't be remembered for next time.
-    }
   }
 
   // "Use [Customer]'s last prices" (§3B) — re-applies remembered per-item
@@ -181,9 +149,8 @@ export default function NewOrderSheet({
         const resolved = resolveLinePrice({
           listPrice: l.product.price,
           stickyPrice: priceByProduct.get(l.product.id) ?? null,
-          customerDiscount,
         });
-        if (resolved.reason === "sticky_price" || resolved.reason === "discount") {
+        if (resolved.reason === "sticky_price") {
           return { ...l, price: resolved.price, recommendedReason: resolved.reason };
         }
         return l;
@@ -223,26 +190,24 @@ export default function NewOrderSheet({
           next[existing] = {
             ...next[existing],
             qty: next[existing].qty + qty,
-            ...(stated != null ? { price: stated } : {}),
+            ...(stated != null && isManager ? { price: stated } : {}),
           };
           continue;
         }
-        const sticky = priceByProduct.get(product.id);
-        let price = product.price;
-        let recommendedReason: Line["recommendedReason"] = null;
-        if (stated != null) {
-          // A price written on the document that was imported or scanned is
-          // what was agreed with the customer, so it wins over the price we
-          // would otherwise remember for them.
-          price = stated;
-        } else if (sticky != null) {
-          price = sticky;
-          recommendedReason = "sticky_price";
-        } else if (customerDiscount) {
-          price = applyDiscount(product.price, customerDiscount);
-          recommendedReason = "discount";
-        }
-        next.push({ product, qty, price, recommendedReason });
+        // The one shared rule. A price written on the imported or scanned
+        // document counts only for a manager — for anyone else the server
+        // prices the line anyway (/api/orders/create).
+        const resolved = resolveLinePrice({
+          listPrice: product.price,
+          stickyPrice: priceByProduct.get(product.id) ?? null,
+          statedPrice: isManager ? stated ?? null : null,
+        });
+        next.push({
+          product,
+          qty,
+          price: resolved.price,
+          recommendedReason: resolved.reason === "stated" ? null : resolved.reason,
+        });
       }
       return next;
     });
@@ -284,7 +249,7 @@ export default function NewOrderSheet({
         .eq("customer_id", customer.id)
         .eq("product_id", p.id)
         .maybeSingle();
-      const resolved = resolveLinePrice({ listPrice: p.price, stickyPrice: cp?.price ?? null, customerDiscount });
+      const resolved = resolveLinePrice({ listPrice: p.price, stickyPrice: cp?.price ?? null });
       price = resolved.price;
       recommendedReason = resolved.reason === "stated" ? null : resolved.reason;
     }
@@ -654,19 +619,24 @@ export default function NewOrderSheet({
                       )}
                     </td>
                     <td className="px-2.5 py-2.5 text-right tabular-nums">
-                      <input
-                        ref={(el) => {
-                          if (!cellRefs.current[i]) cellRefs.current[i] = [];
-                          cellRefs.current[i][0] = el;
-                        }}
-                        type="number"
-                        min={0}
-                        step="0.01"
-                        value={l.price}
-                        onChange={(e) => updatePrice(l.product.id, Number(e.target.value) || 0)}
-                        onKeyDown={(e) => handleCellKeyDown(e, i, 0)}
-                        className="w-20 text-right tabular-nums px-1.5 py-1 rounded-inner border border-hairline bg-canvas"
-                      />
+                      {/* Only a manager changes a price; everyone else reads it. */}
+                      {isManager ? (
+                        <input
+                          ref={(el) => {
+                            if (!cellRefs.current[i]) cellRefs.current[i] = [];
+                            cellRefs.current[i][0] = el;
+                          }}
+                          type="number"
+                          min={0}
+                          step="0.01"
+                          value={l.price}
+                          onChange={(e) => updatePrice(l.product.id, Number(e.target.value) || 0)}
+                          onKeyDown={(e) => handleCellKeyDown(e, i, 0)}
+                          className="w-20 text-right tabular-nums px-1.5 py-1 rounded-inner border border-hairline bg-canvas"
+                        />
+                      ) : (
+                        l.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                      )}
                     </td>
                     <td className="px-2.5 py-2.5">
                       <div className="flex items-center justify-center gap-1">

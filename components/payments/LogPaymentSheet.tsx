@@ -196,14 +196,15 @@ export default function LogPaymentSheet({
       }
 
       if (grvNum > 0) {
-        const requestId = await createGrvRequest(supabase, {
+        const request = await createGrvRequest(supabase, {
           customerId: customer.id,
           submittedBy: user.id,
           amount: grvNum,
           paymentId,
           notes: [notes.trim(), partialNote].filter(Boolean).join(" ") || null,
         });
-        if (requestId) toast.success(t("payments.grvRequestRaised", { amount: formatAed(grvNum) }));
+        if (request?.approved) toast.success(t("payments.grvReturnCredited", { amount: formatAed(grvNum) }));
+        else if (request) toast.success(t("payments.grvRequestRaised", { amount: formatAed(grvNum) }));
         else toast.error(t("payments.grvRequestNeedsSql"));
       }
       onSaved();

@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { billingDateColumn, billedAtSelect } from "@/lib/billingDate";
 import { fetchApprovedGrvCreditByCustomer } from "@/lib/queries/grv";
 import { fetchCountedStatuses } from "@/lib/reportStage";
 import { fetchAllForIds, fetchAllPages } from "@/lib/paging";
@@ -132,15 +133,18 @@ async function buildOutstandingInvoices(
   // Every read below is paged (lib/paging.ts). One request stops at 1,000
   // rows without saying so, and an invoice that falls off the end of this one
   // falls out of every balance in the app.
+  //
+  // Age runs from the billing date (lib/billingDate.ts).
   const statuses = await fetchCountedStatuses(supabase);
   type OrderRow = {
     id: string;
     customer_id: string | null;
     invoice_number: number | null;
     total: number | null;
-    updated_at: string;
+    billed_at: string;
     extended_due_date: string | null;
   };
+  const billedAt = billedAtSelect(await billingDateColumn(supabase));
   const readOrders = (columns: string) =>
     fetchAllPages<OrderRow>((from, to) => {
       let query = supabase.from("orders").select(columns).in("status", statuses);
@@ -150,9 +154,9 @@ async function buildOutstandingInvoices(
     });
   let orderRows: OrderRow[];
   try {
-    orderRows = await readOrders("id, customer_id, invoice_number, total, updated_at, extended_due_date");
+    orderRows = await readOrders(`id, customer_id, invoice_number, total, ${billedAt}, extended_due_date`);
   } catch {
-    orderRows = (await readOrders("id, customer_id, invoice_number, total, updated_at")).map((o) => ({
+    orderRows = (await readOrders(`id, customer_id, invoice_number, total, ${billedAt}`)).map((o) => ({
       ...o,
       extended_due_date: null,
     }));
@@ -217,13 +221,13 @@ async function buildOutstandingInvoices(
     const balance = Math.max(0, total - paid);
     const effectiveSinceMs = o.extended_due_date
       ? new Date(o.extended_due_date as string).getTime()
-      : new Date(o.updated_at as string).getTime();
+      : new Date(o.billed_at as string).getTime();
     const daysOutstanding = Math.max(0, Math.floor((now - effectiveSinceMs) / (24 * 60 * 60 * 1000)));
     return {
       orderId: o.id,
       customerId: o.customer_id as string,
       invoiceNumber: o.invoice_number,
-      invoiceDate: o.updated_at as string,
+      invoiceDate: o.billed_at as string,
       total,
       paid,
       balance,

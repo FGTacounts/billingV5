@@ -59,6 +59,10 @@ export async function POST(req: NextRequest) {
     patch.ordered_qty = q;
   }
   if (unitPrice !== undefined) {
+    // A price is the manager's to change (owner, 2026-09-21). A salesman's
+    // line charges the old price or the list price, and a lower one used to
+    // print as a discount nobody had given.
+    if (!isManager) return NextResponse.json({ error: t("common.managerAccessRequired") }, { status: 403 });
     const p = Number(unitPrice);
     if (!Number.isFinite(p) || p < 0) return NextResponse.json({ error: t("orders.invalidPrice") }, { status: 400 });
     patch.unit_price = p;

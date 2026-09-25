@@ -7,6 +7,7 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Check, X, Package, Truck, FileEdit, Ban, Clock, Pencil, Search, Trash2, Undo2, RotateCcw } from "lucide-react";
 import { usePreferences } from "@/lib/hooks/usePreferences";
+import { useApprovalSettings } from "@/lib/hooks/useApprovalSettings";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { useRealtimeTable } from "@/lib/realtime/useRealtimeTable";
 import {
@@ -19,16 +20,19 @@ import {
   startPicking,
   markPacked,
   requestEdit,
+  reopenOrderWithoutApproval,
   denyEditRequest,
   startDelivering,
   cancelOrder,
-  notify,
   daysUntilPurge,
   type OrderRow,
   type OrderItemRow,
 } from "@/lib/queries/orders";
 import { requestExtension } from "@/lib/queries/payments";
 import { deleteOrder } from "@/lib/queries/orders";
+import { billingDateColumn } from "@/lib/billingDate";
+import { invalidateOrderFacts } from "@/lib/queries/dashboard";
+import { invalidateAging } from "@/lib/queries/aging";
 import { fetchSalesmen } from "@/lib/queries/expenses";
 import type { Seller } from "@/lib/queries/sales";
 import { fetchCustomers } from "@/lib/queries/customers";
@@ -437,6 +441,13 @@ export default function OrderDetail({
   // existing pick/edit-request flow instead.
   const canEditItems =
     ["draft", "pending"].includes(order.status) && (isManager || order.salesman_id === user.id);
+  // Once accepted the order is the warehouse's: a line that is not on the
+  // shelf can come off it and a forgotten one can go on, by the warehouse or
+  // a manager, until approval moves stock (add-item / remove-item routes,
+  // same rule). Quantity and price edits keep the narrower canEditItems.
+  const canRemoveItems =
+    canEditItems ||
+    (["waiting", "picking", "packed"].includes(order.status) && (isManager || isWarehouse));
   // A manager may delete any order; a salesman only their own, and only
   // while it is still theirs to change.
   const canDelete =
@@ -652,7 +663,7 @@ export default function OrderDetail({
               {isManager && items.some((it) => it.unit_cost != null) && (
                 <th className="px-3 py-2.5 font-medium text-right tabular-nums">{t("orders.gp")}</th>
               )}
-              {canEditItems && <th className="px-3 py-2.5 font-medium"><span className="sr-only">{t("common.remove")}</span></th>}
+              {canRemoveItems && <th className="px-3 py-2.5 font-medium"><span className="sr-only">{t("common.remove")}</span></th>}
             </tr>
           </thead>
           <tbody>
@@ -797,7 +808,9 @@ export default function OrderDetail({
                     )}
                   </td>
                   <td className="px-3 py-2.5 text-right tabular-nums">
-                    {canEditItems ? (
+                    {/* A price is the manager's to change (2026-09-21); the
+                        route refuses anyone else. */}
+                    {canEditItems && isManager ? (
                       editingPriceId === it.id ? (
                         <input
                           autoFocus
@@ -912,7 +925,7 @@ export default function OrderDetail({
                       )}
                     </td>
                   )}
-                  {canEditItems && (
+                  {canRemoveItems && (
                     <td className="px-3 py-2.5 text-right">
                       <button
                         className="p-1.5 -m-1.5 text-secondary hover:text-[--status-danger] transition-colors"
@@ -937,7 +950,7 @@ export default function OrderDetail({
       {/* A forgotten article, added where the order is being read rather than
           by starting a second order. Same search, same debounce and same
           result row as the new-order sheet. */}
-      {canEditItems && (
+      {canRemoveItems && (
         <div className="mb-4">
           {!addingItem ? (
             <Button tier="plain" onClick={() => setAddingItem(true)} className="flex items-center gap-1.5">
@@ -1061,6 +1074,25 @@ export default function OrderDetail({
 // §Orders: "Manager has complete flexibility over an order at any stage
 // (invoice number, customer, salesman, PO number editable)" — a Manager-only
 // sheet layered over the order detail, independent of status.
+// <input type="date"> speaks YYYY-MM-DD in the viewer's own timezone.
+function localDateInput(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+// The picked day at the order's original time of day, as UTC ISO — so two
+// orders billed the same day keep the order they were billed in.
+function moveToDate(originalIso: string | null | undefined, day: string): string {
+  const [y, m, d] = day.split("-").map(Number);
+  const at = originalIso ? new Date(originalIso) : new Date();
+  const moved = new Date(at);
+  moved.setFullYear(y, m - 1, d);
+  return moved.toISOString();
+}
+
 function EditOrderFieldsSheet({
   order,
   onClose,
@@ -1080,10 +1112,18 @@ function EditOrderFieldsSheet({
   const [salesmen, setSalesmen] = useState<Seller[]>([]);
   const [salesmanId, setSalesmanId] = useState(order.salesman_id ?? "");
   const [saving, setSaving] = useState(false);
+  // The billing date — the date this order counts on in sales, aging and
+  // statements, and the date printed on its invoice. Editable only once
+  // RUN-ME-27 has added the column; until then it is shown and disabled,
+  // like the PO number before its migration.
+  const billedAtOriginal = order.billed_at ?? order.updated_at;
+  const [billedOn, setBilledOn] = useState(localDateInput(billedAtOriginal));
+  const [billedSupported, setBilledSupported] = useState(false);
 
   useEffect(() => {
     const supabase = supabaseBrowser();
     fetchSalesmen(supabase).then(setSalesmen);
+    billingDateColumn(supabase).then((col) => setBilledSupported(col === "billed_at"));
     supabase
       .from("orders")
       .select("po_number")
@@ -1117,10 +1157,18 @@ function EditOrderFieldsSheet({
           customer_id: customerId || null,
           ...(salesmanId ? { salesman_id: salesmanId } : {}),
           ...(poSupported ? { po_number: poNumber.trim() || null } : {}),
+          // Sent only when it was actually changed: writing it at all marks
+          // the date as set by hand, which stops status changes moving it.
+          ...(billedSupported && billedOn && billedOn !== localDateInput(billedAtOriginal)
+            ? { billed_at: moveToDate(billedAtOriginal, billedOn) }
+            : {}),
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? t("orders.saveFailed"));
+      // Sales and aging are cached, and both are bucketed by this date.
+      invalidateOrderFacts();
+      invalidateAging();
       onSaved();
     } catch (e) {
       toast.error(friendlyError(e, t("orders.saveFailed")));
@@ -1151,6 +1199,19 @@ function EditOrderFieldsSheet({
         {!poSupported && t("orders.notAvailableYet")}
       </Label>
       <TextInput value={poNumber} onChange={(e) => setPoNumber(e.target.value)} disabled={!poSupported} />
+
+      <Label>
+        {t("orders.billingDate")}
+        {!billedSupported && t("orders.notAvailableYet")}
+      </Label>
+      <TextInput
+        type="date"
+        className="tabular-nums"
+        value={billedOn}
+        onChange={(e) => setBilledOn(e.target.value)}
+        disabled={!billedSupported}
+      />
+      <p className="text-caption text-secondary mt-1">{t("orders.billingDateHint")}</p>
 
       <Label>{t("orders.customer")}</Label>
       {customerId && !customerSearch ? (
@@ -1311,6 +1372,7 @@ function OrderActions({
   // Undoing an approval puts stock back and un-bills an invoice, so it asks
   // first — the same two-step the reject button uses.
   const [confirmUnapprove, setConfirmUnapprove] = useState(false);
+  const approvals = useApprovalSettings();
 
   // One approval call for every Approve button below. The server cuts any
   // line to what the shelf holds; when it has, the approver is told which
@@ -1581,22 +1643,16 @@ function OrderActions({
             disabled={busy}
             onClick={() =>
               run(async () => {
-                await requestEdit(supabase, order.id, user.id);
-                const { data: managers } = await supabase.from("users").select("id").in("role", ["manager", "admin"]);
-                for (const m of managers ?? []) {
-                  await notify(
-                    supabase,
-                    m.id,
-                    "edit_requested",
-                    t("orders.editRequestedTitle"),
-                    t("orders.editRequestedBody")
-                  );
-                }
+                // Where the admin has switched this request off, the warehouse
+                // reopens the order itself. Otherwise it goes to the managers,
+                // who are told by requestEdit.
+                if (approvals.orderEdits) await requestEdit(supabase, order.id, user.id);
+                else await reopenOrderWithoutApproval(supabase, order.id);
               })
             }
             className="flex items-center gap-1.5"
           >
-            <FileEdit size={15} /> {t("orders.requestEdit")}
+            <FileEdit size={15} /> {approvals.orderEdits ? t("orders.requestEdit") : t("orders.reopenForEdit")}
           </Button>
         )}
         <Button

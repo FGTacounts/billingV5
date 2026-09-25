@@ -86,7 +86,7 @@ export async function GET(req: NextRequest) {
   totalRow.font = { bold: true };
 
   const buffer = await wb.xlsx.writeBuffer();
-  const fileName = `${invoiceFileBase(order.invoice_number, order.updated_at ?? order.created_at)}.xlsx`;
+  const fileName = `${invoiceFileBase(order.invoice_number, order.billed_at ?? order.updated_at ?? order.created_at)}.xlsx`;
   return new NextResponse(buffer, {
     headers: {
       "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

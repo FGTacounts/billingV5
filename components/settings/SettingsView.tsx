@@ -2,6 +2,14 @@
 
 import { toast } from "@/lib/toast";
 import { DELIVERY_STEP_DEFAULT, setDeliveryEnabled } from "@/lib/deliveryStep";
+import {
+  APPROVALS_DEFAULT,
+  approvalSettingsSupported,
+  fetchApprovalSettings,
+  setApprovalNeeded,
+  type ApprovalKey,
+  type ApprovalSettings,
+} from "@/lib/approvals";
 import { friendlyError } from "@/lib/errors";
 import { formatAed } from "@/lib/money";
 import { fetchMonthlyTargets, saveIncentive, type MonthlyTargets } from "@/lib/queries/targets";
@@ -40,7 +48,7 @@ import { Label, TextInput } from "@/components/ui/Field";
 import { Pill } from "@/components/ui/Badge";
 import Sheet from "@/components/ui/Sheet";
 import DataGrid from "./DataGrid";
-import { t } from "@/lib/i18n";
+import { t, type MessageKey } from "@/lib/i18n";
 
 // Categorized per Order Flow & Additions §6 — replaces the old flat
 // Appearance/General/Users/Account tab set. Users stays Manager-only
@@ -228,6 +236,7 @@ function GeneralTab({ isManager, role }: { isManager: boolean; role: AppUser["ro
 
       {isManager && <ReportStageSection />}
       {isManager && <DeliveryStepSection />}
+      {role === "admin" && <ApprovalsSection />}
       <BottomBarSection role={role} />
       {isManager && <OverdueThresholdSection />}
       {isManager && <MapsKeySection />}
@@ -1759,6 +1768,77 @@ function DeliveryStepSection() {
           </span>
         </span>
       </label>
+    </div>
+  );
+}
+
+// Which actions wait for a manager. Admin only, here and in the database: a
+// trigger refuses anyone else who tries to change one of these.
+//
+// Unticking one hands a salesman or the warehouse something only a manager
+// could do until now, so each line says plainly what that is.
+const APPROVAL_ROWS: { key: ApprovalKey; title: MessageKey; hint: MessageKey }[] = [
+  { key: "customerChanges", title: "settings.approvalCustomerChanges", hint: "settings.approvalCustomerChangesHint" },
+  { key: "orderEdits", title: "settings.approvalOrderEdits", hint: "settings.approvalOrderEditsHint" },
+  { key: "goodsReturns", title: "settings.approvalGoodsReturns", hint: "settings.approvalGoodsReturnsHint" },
+];
+
+function ApprovalsSection() {
+  const [settings, setSettings] = useState<ApprovalSettings>(APPROVALS_DEFAULT);
+  const [unsupported, setUnsupported] = useState(false);
+  const [savingKey, setSavingKey] = useState<ApprovalKey | null>(null);
+
+  useEffect(() => {
+    fetchApprovalSettings(supabaseBrowser()).then((next) => {
+      setSettings(next);
+      setUnsupported(!approvalSettingsSupported());
+    });
+  }, []);
+
+  async function save(key: ApprovalKey, needed: boolean) {
+    setSavingKey(key);
+    const prev = settings;
+    setSettings({ ...prev, [key]: needed }); // Optimistic, rolled back below if it does not take.
+    const result = await setApprovalNeeded(supabaseBrowser(), key, needed);
+    if (!result.ok) {
+      setSettings(prev);
+      toast.error(result.error ?? t("settings.couldntSaveThat"));
+    } else {
+      toast.success(needed ? t("settings.approvalNowNeeded") : t("settings.approvalNoLongerNeeded"));
+    }
+    setSavingKey(null);
+  }
+
+  if (unsupported) {
+    return (
+      <div>
+        <Label>{t("settings.approvals")}</Label>
+        <p className="text-caption text-secondary">{t("settings.approvalsUnsupported")}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <Label>{t("settings.approvals")}</Label>
+      <p className="text-caption text-secondary mb-3">{t("settings.approvalsIntro")}</p>
+      <div className="flex flex-col gap-3">
+        {APPROVAL_ROWS.map((row) => (
+          <label key={row.key} className="flex items-start gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={settings[row.key]}
+              disabled={savingKey !== null}
+              onChange={(e) => save(row.key, e.target.checked)}
+              className="mt-0.5"
+            />
+            <span>
+              <span className="block text-subhead font-semibold">{t(row.title)}</span>
+              <span className="block text-caption text-secondary mt-1">{t(row.hint)}</span>
+            </span>
+          </label>
+        ))}
+      </div>
     </div>
   );
 }

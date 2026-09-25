@@ -12,10 +12,15 @@ export const runtime = "nodejs";
 // WarehouseOrderPickView.addArticle(_:), which the web could not do at all:
 // a forgotten article meant a second order or a deleted one.
 //
-// Who may, and when, is exactly update-item's rule and deliberately not a
-// second one: draft/pending only, your own order unless you are a manager.
-// Past that point stock and invoices are in play and the change goes through
-// the pick/edit-request flow instead.
+// Who may, and when, is remove-item's rule and deliberately not a second
+// one. Draft/pending: your own order unless you are a manager. Waiting /
+// picking / packed: a manager or the warehouse (owner, 2026-09-21) — stock
+// is only deducted at approval, so a line added at those stages is deducted
+// with the rest. From approval on stock and an invoice are in play and the
+// change goes through the edit-request flow instead.
+const BEFORE_ACCEPTANCE = ["draft", "pending"];
+const IN_THE_WAREHOUSE = ["waiting", "picking", "packed"];
+
 export async function POST(req: NextRequest) {
   const user = await getAppUser();
   if (!user) return NextResponse.json({ error: t("common.notSignedIn") }, { status: 401 });
@@ -43,13 +48,17 @@ export async function POST(req: NextRequest) {
     .maybeSingle();
   if (orderErr || !order) return NextResponse.json({ error: t("orders.orderNotFound") }, { status: 404 });
 
-  if (!["draft", "pending"].includes(order.status)) {
+  const afterAcceptance = IN_THE_WAREHOUSE.includes(order.status);
+  if (afterAcceptance) {
+    if (!isManager && user.role !== "warehouse") {
+      return NextResponse.json({ error: t("common.warehouseOrManagerAccessRequired") }, { status: 403 });
+    }
+  } else if (!BEFORE_ACCEPTANCE.includes(order.status)) {
     return NextResponse.json(
       { error: t("orders.noLongerEditableDirectly") },
       { status: 409 }
     );
-  }
-  if (!isManager && order.salesman_id !== user.id) {
+  } else if (!isManager && order.salesman_id !== user.id) {
     return NextResponse.json({ error: t("orders.onlyOwnOrders") }, { status: 403 });
   }
 
@@ -71,30 +80,19 @@ export async function POST(req: NextRequest) {
   // The customer's remembered price is the price, falling back to the list
   // price — the same resolution NewOrderSheet.addProduct does for a line
   // added at order time, so a line added afterwards is priced identically.
-  // Resolved by the one shared rule (lib/money.ts resolveLinePrice). Until
-  // 2026-09-18 this route knew about the remembered price but not about the
-  // customer's standing discount, so the same article cost one price on a new
-  // order and another when added to an order already written.
+  // Resolved by the one shared rule (lib/money.ts resolveLinePrice): the old
+  // price, else the list price. No automatic discount (2026-09-21).
   let stickyPrice: number | null = null;
-  let customerDiscount: { discount_type: "percent" | "amount"; discount_value: number } | null = null;
   if (order.customer_id) {
-    const [{ data: sticky }, { data: discount }] = await Promise.all([
-      admin
-        .from("customer_prices")
-        .select("price")
-        .eq("customer_id", order.customer_id)
-        .eq("product_id", productId)
-        .maybeSingle(),
-      admin
-        .from("customer_discounts")
-        .select("discount_type, discount_value")
-        .eq("customer_id", order.customer_id)
-        .maybeSingle(),
-    ]);
+    const { data: sticky } = await admin
+      .from("customer_prices")
+      .select("price")
+      .eq("customer_id", order.customer_id)
+      .eq("product_id", productId)
+      .maybeSingle();
     stickyPrice = sticky?.price ?? null;
-    customerDiscount = (discount as typeof customerDiscount) ?? null;
   }
-  const unitPrice = resolveLinePrice({ listPrice: product.price, stickyPrice, customerDiscount }).price;
+  const unitPrice = resolveLinePrice({ listPrice: product.price, stickyPrice }).price;
 
   // Adding an article the order already has adds to that line rather than
   // opening a second one, which is what the phone does
@@ -105,7 +103,7 @@ export async function POST(req: NextRequest) {
   // another box is not a reason to reprice what was agreed.
   const { data: existing } = await admin
     .from("order_items")
-    .select("id, ordered_qty")
+    .select("id, ordered_qty, picked_qty")
     .eq("order_id", orderId)
     .eq("product_id", productId)
     .limit(1)
@@ -113,9 +111,18 @@ export async function POST(req: NextRequest) {
 
   let itemId: string;
   if (existing) {
+    // A picked line bills its picked quantity, so more boxes on a line that
+    // is already ticked would not be billed at all. The tick comes off and
+    // the line is picked again at its new quantity.
+    const merged: Record<string, unknown> = { ordered_qty: (existing.ordered_qty ?? 0) + quantity };
+    if (existing.picked_qty != null) {
+      merged.picked_qty = null;
+      merged.picked_by_id = null;
+      merged.picked_at = null;
+    }
     const { error: mergeErr } = await admin
       .from("order_items")
-      .update({ ordered_qty: (existing.ordered_qty ?? 0) + quantity })
+      .update(merged)
       .eq("id", existing.id);
     if (mergeErr) return NextResponse.json({ error: mergeErr.message }, { status: 400 });
     itemId = existing.id as string;
@@ -137,8 +144,11 @@ export async function POST(req: NextRequest) {
     itemId = inserted.id as string;
   }
 
-  await recalcOrderTotals(supabase, order.id, order.customer_id);
-  const stamped = await stampEdited(supabase, order.id, user.id);
+  // The warehouse holds no write privilege on orders' totals; role and stage
+  // were checked above (same as remove-item).
+  const writer = afterAcceptance ? admin : supabase;
+  await recalcOrderTotals(writer, order.id, order.customer_id);
+  const stamped = await stampEdited(writer, order.id, user.id);
 
   return NextResponse.json({ ok: true, itemId, merged: Boolean(existing), edited_stamped: stamped });
 }

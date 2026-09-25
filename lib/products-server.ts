@@ -1,6 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Product } from "@/lib/types/db";
+import { fetchAllPages } from "@/lib/paging";
 
 // Shared by /api/products (client-facing CRUD) and the server-side export
 // routes (Excel/PDF) that also need product rows without an extra HTTP hop
@@ -57,17 +58,33 @@ export async function fetchProductsServer(
     stockGroupId?: string;
   } = { isManager: false }
 ): Promise<Product[]> {
-  const run = async (cols: string) => {
-    let q = admin.from("products").select(cols).order("sku");
-    // The first screenful is asked for on its own so a thousand-row
-    // catalogue does not stand between the user and the page.
-    if (opts.limit) q = q.limit(opts.limit);
+  // A fresh query each time it is called: paging asks for one per page.
+  // `sku` then `id`, so the order is unique and no row can sit on two pages
+  // or fall between them.
+  const build = (cols: string) => {
+    let q = admin.from("products").select(cols).order("sku").order("id");
     if (opts.activeOnly !== false) q = q.eq("is_active", true);
     if (opts.search) {
       q = q.or(`sku.ilike.%${opts.search}%,description.ilike.%${opts.search}%,barcode.ilike.%${opts.search}%`);
     }
     if (opts.stockGroupId) q = q.eq("stock_group_id", opts.stockGroupId);
     return q;
+  };
+
+  const run = async (cols: string): Promise<{ data: any[] | null; error: unknown }> => {
+    // The first screenful is asked for on its own so a thousand-row
+    // catalogue does not stand between the user and the page. One request,
+    // deliberately short.
+    if (opts.limit) return build(cols).limit(opts.limit);
+    // Everything else is the whole list, and one request answers with at most
+    // 1,000 rows without saying so (lib/paging.ts). There are more active
+    // products than that, so it is read a page at a time.
+    try {
+      const data = await fetchAllPages<any>((from, to) => build(cols).range(from, to), { keyOf: (row) => row.id });
+      return { data, error: null };
+    } catch (error) {
+      return { data: null, error };
+    }
   };
 
   const cols = opts.isManager ? MANAGER_COLS : RESTRICTED_COLS;

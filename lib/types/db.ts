@@ -217,6 +217,10 @@ export interface Order {
   // optional so a missing column never breaks an order fetch.
   po_number?: string | null;
   rejected_at: string | null;
+  // The billing date. Every order fetched through lib/queries/orders.ts
+  // carries it: orders.billed_at once RUN-ME-27 has been run, updated_at
+  // under this name until then (lib/billingDate.ts).
+  billed_at?: string | null;
   // The Edited stamp. Absent until
   // scratchpad/RUN-ME-19-order-edited-stamp.sql is run — optional, like
   // po_number, so a missing column never breaks an order fetch.

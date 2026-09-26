@@ -65,7 +65,11 @@ export async function fetchProductsServer(
     let q = admin.from("products").select(cols).order("sku").order("id");
     if (opts.activeOnly !== false) q = q.eq("is_active", true);
     if (opts.search) {
-      q = q.or(`sku.ilike.%${opts.search}%,description.ilike.%${opts.search}%,barcode.ilike.%${opts.search}%`);
+      // Quoted, because PostgREST reads `(`, `)` and `,` in an or() filter as
+      // its own syntax: searching "GBA (white glove)" found nothing, so the
+      // six SKUs with brackets could not be added to an order by their code.
+      const term = `"%${opts.search.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}%"`;
+      q = q.or(`sku.ilike.${term},description.ilike.${term},barcode.ilike.${term}`);
     }
     if (opts.stockGroupId) q = q.eq("stock_group_id", opts.stockGroupId);
     return q;

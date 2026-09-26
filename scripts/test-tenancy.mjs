@@ -53,6 +53,19 @@ const SKIP = (name) => name.startsWith("rpc/");
 // means the permission was there.
 const PERMISSION_DENIED = "42501";
 
+// "cannot insert into view". Postgres raises this while REWRITING the
+// statement, which happens before it checks anybody's privileges — so it is
+// not a permission answer at all. A view with no INSTEAD OF trigger that is
+// not auto-updatable takes no write from anyone, including the service-role
+// key, which was how this was settled on 2026-09-26: the all-powerful key
+// got the same code as the public one.
+//
+// This check used to read it as "the privilege is there", and reported
+// order_items_safe as a problem for two weeks after the privilege had been
+// revoked. A relation nothing can be written to is refusing the write; that
+// is a pass.
+const CANNOT_WRITE_TO_RELATION = "55000";
+
 function loadEnv() {
   const file = path.join(ROOT, ".env.local");
   if (!fs.existsSync(file)) {
@@ -183,6 +196,9 @@ async function probeWrite(url, key, table, definition) {
   if (res.ok) return { ok: false, note: "ACCEPTED THE WRITE" };
   const body = await res.json().catch(() => ({}));
   if (body?.code === PERMISSION_DENIED) return { ok: true, note: "refused" };
+  if (body?.code === CANNOT_WRITE_TO_RELATION) {
+    return { ok: true, note: "refused (takes no writes at all)" };
+  }
   // PostgREST turned the request away before Postgres saw it, so nothing was
   // learned about the permission either way.
   if (String(body?.code ?? "").startsWith("PGRST")) {

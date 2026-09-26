@@ -2629,3 +2629,88 @@ taken and a later reversal would put back stock that never existed.
 - The screen's totals: Subtotal is the lines before the order discount,
   then the discount, then VAT and total. recalcOrderTotals and the
   approval both take the discount off before VAT, like the database does.
+
+## 2026-09-26 — Excel order import dropping items
+
+2026-09-26 — The bulk order import (Orders → Import, `importOrders` in
+lib/job-runners.ts) reads the catalogue a page at a time, ordered by `id` —
+It was the first item on the 2026-09-19 "NOT fixed" list: one unordered
+request, capped at 1,000 of the 1,624 products, so about 600 SKUs (not
+predictably which) were reported unknown and their lines left out of the
+imported order. Proven read-only against the live database: the new read
+returns 1,624 rows, 1,624 distinct. Inactive products are still matched by
+this import, as before — unchanged.
+
+2026-09-26 — The product search quotes what was typed — PostgREST reads `(`,
+`)` and `,` inside an `or()` filter as its own syntax, so typing
+"GBA (white glove)" found nothing and the six SKUs with brackets
+(GBA (white glove), T10 (2PCS), T20 (2PCS), XB-8161(T10), XB-8793 (T30),
+XB-8131(2PC) -- T20) could not be found by their full code. The value is now
+wrapped in double quotes with `\` and `"` escaped. Checked live through the
+real `fetchProductsServer`: each of those codes finds its product; "gba",
+"HT510-A" find what they did before; a stray `"` or `,` returns no rows
+instead of breaking the filter. Web only — the phone filters its loaded
+catalogue locally and has no bulk order import.
+
+2026-09-26 — NOT changed, owner to decide: 186 of 1,624 products are
+inactive, and the new-order search and the in-order "Import items" sheet only
+offer ACTIVE products, while the bulk import matches inactive ones too. Also
+still open from 09-19: `existingProductSkus` (scan-articles) reads SKUs in one
+capped request, and `importOrders`' duplicate check reads pending orders'
+lines in one request (can miss a duplicate past 1,000 lines; never drops a line).
+
+## 2026-09-26 — Which Supabase files are actually applied
+
+2026-09-26 — Checked the live database rather than trusting the note, and the
+note was wrong — A session memory said RUN-ME-26 and 27 were outstanding and
+said nothing about 25. Probing the schema showed the opposite: 26 and 27 were
+long since applied, and 25 was the one missing — the file the shipped
+discount-and-returns code depends on. Because the app degrades rather than
+failing when a column is absent (it asks without it), a discount taken at
+collection had been recorded as zero with nothing said. The lesson is the
+cheap one: a two-second schema probe beats a written note, and the note is
+only as fresh as the last person who edited it.
+
+2026-09-26 — RUN-ME-24 has still not taken effect, and it is the file, not
+the database — `order_items_safe` still lets an anonymous insert past the
+privilege check while `products_safe` refuses it correctly. The two are
+revoked identically in RUN-ME-24, so a run that half-worked is not possible;
+the file has not run here. Nothing is exposed by it in the meantime — the
+view has no INSTEAD OF trigger, so Postgres refuses the row on its own — but
+both views run as their owner, so the privilege must not stay.
+
+2026-09-26 — `supabase/migrations/20260921120000_grant_order_items_privileges.sql`
+is NOT the cause, checked — It grants on the base `order_items` table to
+`authenticated`, which is a different object and a different role from the
+`order_items_safe` view and `anon`. Ruled out rather than assumed, because a
+file with that name is the obvious suspect.
+
+## 2026-09-26 — The tenancy check was crying wolf, and RUN-ME-24 was fine
+
+2026-09-26 — CORRECTS the entry above: RUN-ME-24 had taken effect; the check
+was unsound — `npm run test:tenancy` reported `order_items_safe` as writable
+by an anonymous caller. It was reading Postgres code 55000, "cannot insert
+into view", as evidence that the privilege was present. Postgres raises 55000
+while REWRITING the statement, which happens before it checks anybody's
+privileges, so the code carries no permission information at all.
+   Settled by experiment rather than argument: the same insert with the
+SERVICE-ROLE key — which holds every privilege in the database — came back
+with 55000 as well, while `products_safe` answered 22P02 for the service key
+and 42501 for the public one. A view that refuses the service-role key is
+refusing everyone. The check now treats 55000 as "refused (takes no writes at
+all)" and passes for the first time, with 25 tables refusing an anonymous
+read.
+
+2026-09-26 — Consequence worth stating plainly: this check called a
+non-problem a problem for two weeks, and was quoted as an outstanding item in
+several reports and commit messages. A security check that cannot be trusted
+is worse than none, because the noise trains people to skip it. The read
+probe — the half that would catch data actually coming out — was sound
+throughout and always passed.
+
+2026-09-26 — What cannot now be known: whether RUN-ME-22 alone would have
+been enough — Its theory, that revoking from `anon` leaves a grant held by
+`PUBLIC` standing, is correct in general, and RUN-ME-24 revokes from PUBLIC
+as well. But the evidence used at the time to say 22 had failed was the same
+unsound 55000 reading. RUN-ME-24 is applied and the privileges are right, so
+this is history rather than an open question.

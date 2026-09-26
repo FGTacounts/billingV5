@@ -6,6 +6,7 @@ import { fetchOrders, fetchOrderItems } from "@/lib/queries/orders";
 import { buildInvoicePdf } from "@/lib/pdf/invoice";
 import { invoiceFileBase } from "@/lib/invoice-template";
 import { fetchProductsServer } from "@/lib/products-server";
+import { fetchAllPages } from "@/lib/paging";
 import { scanOrderImage, scanArticlesDoc, type ScannedArticle } from "@/lib/ai-scan";
 
 /**
@@ -178,11 +179,12 @@ export async function importOrders(
   type CustomerLite = { id: string; code: string; name: string };
   type UserLite = { id: string; full_name: string; username: string };
 
-  const { data: products, error: prodErr } = await admin
-    .from("products")
-    .select("id, sku, description, price, cost");
-  if (prodErr) throw new Error(prodErr.message);
-  const productRows = (products ?? []) as unknown as ProductLite[];
+  // Every product, a page at a time: one request stops at 1,000 rows without
+  // saying so (lib/paging.ts), and with 1,624 products the SKUs past that
+  // were reported as unknown and their lines left out of the order.
+  const productRows = await fetchAllPages<ProductLite>((from, to) =>
+    admin.from("products").select("id, sku, description, price, cost").order("id").range(from, to)
+  );
   const bySku = new Map(productRows.map((p) => [p.sku.trim().toLowerCase(), p] as const));
 
   const { data: customers } = await admin.from("customers").select("id, code, name").eq("is_active", true);

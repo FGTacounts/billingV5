@@ -969,3 +969,48 @@ the app did it. `scratchpad/RUN-ME-27-billing-date.sql` has been updated to
 repair this re-stamp (and any future one) — **run it now**, role selector
 set to `postgres`, and send back what it prints. After it runs, re-stamps
 can no longer move a sale.
+
+# 2026-09-26 — Excel order import dropping items
+
+- **Orders → Import** now sees every product. It was only reading the first
+  1,000 of your 1,624, so roughly 600 item codes came back as "unknown" and
+  were left off the imported orders. Re-import any sheet that lost lines
+  (the duplicate check will skip orders that already came in whole).
+- **Product search** now finds codes with brackets, e.g. `GBA (white glove)`,
+  `T10 (2PCS)`, `XB-8131(2PC) -- T20`. Typing the full code used to find nothing.
+
+Nothing to run in Supabase. Web only; the phone was not affected.
+
+# 2026-09-26 — Where the Supabase files stand
+
+Checked against the live database on 26 September, not from memory.
+
+**Applied and working:**
+
+- **RUN-ME-25** — payment discounts and goods returns at collection.
+  `payments.discount_amount` and the three columns on `grv_returns` are
+  there. Until this ran, a discount taken at collection was quietly recorded
+  as zero, because the app asks without the column when it is missing rather
+  than failing.
+- **RUN-ME-26** — which actions wait for a manager.
+- **RUN-ME-27** — the billing date, and the repair of the re-stamps.
+- **RUN-ME-28** — a manager changing an order at any stage, and
+  `orders.line_order` for the order the lines are listed in.
+
+**RUN-ME-24 — applied, and my check was wrong about it.**
+
+`npm run test:tenancy` now passes: 25 tables refuse an anonymous read, and
+nothing is writable.
+
+The check had been reporting `order_items_safe` as a problem, and that was a
+fault in the check, not in the database. It read the Postgres code 55000,
+"cannot insert into view", as proof that the write privilege was still there.
+It is not: Postgres raises that while rewriting the statement, which happens
+before it looks at anybody's privileges. Settled by asking with the
+service-role key, which holds every privilege there is — it got the same 55000.
+A view with no INSTEAD OF trigger takes no write from anyone, and that is a
+pass, not a failure. The check now says so.
+
+Nothing was ever exposed by this. The privilege is gone, confirmed by the
+`has_table_privilege` rows RUN-ME-24 prints at the end, and the view could
+not have been written through in any case.

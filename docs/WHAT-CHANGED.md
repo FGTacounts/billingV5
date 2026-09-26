@@ -1,5 +1,20 @@
 # What changed, and what you need to do
 
+## 2026-09-26 — Run RUN-ME-29: managers could not change orders
+
+Run `scratchpad/RUN-ME-29-admin-check-that-parses.sql` in Supabase →
+SQL Editor. It should end with one row showing **0**.
+
+Until you run it, a manager cannot remove a line, change a quantity or
+price, add an article, pick/unpick, rearrange or discount an order: on the
+web or the phone. The database refused all of these with an error about
+"admin", which the screen showed as "Couldn't remove that line". Setting an
+order's billing date by hand, and an admin changing which actions need
+approval, were broken the same way and are fixed by the same file. No app
+update is needed.
+
+---
+
 Two jobs, in order: the iOS app was made to agree with the web app, then the
 web app was compared against the Sheets version you are still running and
 the gaps were filled.

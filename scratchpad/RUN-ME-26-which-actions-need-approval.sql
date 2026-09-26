@@ -106,7 +106,7 @@ begin
      and (new.customer_changes_need_approval is distinct from old.customer_changes_need_approval
        or new.order_edits_need_approval      is distinct from old.order_edits_need_approval
        or new.goods_returns_need_approval    is distinct from old.goods_returns_need_approval)
-     and not public.current_role_is('admin')
+     and not public.current_user_is_admin()
   then
     raise exception 'Only an admin can change which actions need approval.'
       using errcode = '42501';

@@ -138,7 +138,7 @@ declare
   v_country     text;
   v_before      jsonb;
 begin
-  if not (public.current_role_is('manager') or public.current_role_is('admin')) then
+  if not (public.current_role_is('manager') or public.current_user_is_admin()) then
     raise exception 'Only a manager can change this order.' using errcode = '42501';
   end if;
 

@@ -132,7 +132,7 @@ begin
       raise exception 'An order must have a billing date.' using errcode = '23502';
     end if;
     if current_user <> 'service_role'
-       and not (public.current_role_is('manager') or public.current_role_is('admin'))
+       and not (public.current_role_is('manager') or public.current_user_is_admin())
     then
       raise exception 'Only a manager can change an order''s billing date.'
         using errcode = '42501';

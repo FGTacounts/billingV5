@@ -2714,3 +2714,26 @@ been enough — Its theory, that revoking from `anon` leaves a grant held by
 as well. But the evidence used at the time to say 22 had failed was the same
 unsound 55000 reading. RUN-ME-24 is applied and the privileges are right, so
 this is history rather than an open question.
+
+2026-09-26 — A manager could not remove a line (order 4480, GLT2832PNK); the
+screen said only "Couldn't remove that line". The server's own reply was
+`invalid input value for enum public.user_role: "admin"`. manager_edit_order
+(RUN-ME-28) checked `current_role_is('manager') or current_role_is('admin')`;
+the enum has no 'admin' (RUN-ME-17), and Postgres converts the literal before
+running anything, so the check failed for everyone and every manager edit
+through that function has been refused since RUN-ME-28 ran — web and phone.
+RUN-ME-26 (approval settings) and RUN-ME-27 (billing date set by hand) had
+the same words. Fixed with RUN-ME-29, which uses current_user_is_admin()
+(RUN-ME-17) instead. It rewrites whatever live functions still say
+current_role_is('admin') from their own live definitions, not from our
+files, because our files are not a reliable copy of the live database (the
+Edited stamp column is edited_by_id live, edited_by in RUN-ME-19). The enum
+is still left alone, as RUN-ME-17 decided. RUN-ME-26/27/28 were corrected
+too, so running any of them again cannot bring it back.
+
+2026-09-26 — Not fixed, noted: friendlyError hides any database message it
+does not recognise behind the caller's generic line, and that is why this
+took a live request to diagnose. Also noted: stampEdited in
+lib/orders-server.ts writes `edited_by`, which does not exist live
+(`edited_by_id` does), so edits by a salesman or the warehouse never get the
+Edited pill. Both are reported to the owner rather than changed here.

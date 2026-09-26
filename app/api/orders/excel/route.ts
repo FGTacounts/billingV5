@@ -3,6 +3,7 @@ import ExcelJS from "exceljs";
 import { getAppUser } from "@/lib/auth";
 import { supabaseCaller } from "@/lib/supabase/server";
 import { fetchOrder, fetchOrderItems } from "@/lib/queries/orders";
+import { parseLineSort } from "@/lib/lineSort";
 import { computeInvoiceLines } from "@/lib/pdf/invoice";
 import { invoiceFileBase } from "@/lib/invoice-template";
 import { FALLBACK_VAT_RATE } from "@/lib/money";
@@ -31,19 +32,10 @@ export async function GET(req: NextRequest) {
     supabase.from("app_settings").select("vat_rate").limit(1).maybeSingle(),
   ]);
   const vatRate = settings.data?.vat_rate ?? FALLBACK_VAT_RATE;
-  let lines = computeInvoiceLines(items, vatRate);
+  const lines = computeInvoiceLines(items, vatRate, parseLineSort(req.nextUrl.searchParams.get("sort")));
 
-  // Manager's Sheet View preference (§6/§7): default is plain article order
-  // (already how `lines` comes out); when set, separate picked items from
-  // unpicked ones instead — a stable partition, not a re-sort within each
-  // group, so article order is preserved inside each half.
-  if ((user.role === "manager" || user.role === "admin")) {
-    const { data: prefRow } = await supabase.from("users").select("preferences").eq("id", user.id).maybeSingle();
-    if (prefRow?.preferences?.downloadSeparateMarked) {
-      const marked = items.map((it) => it.picked_qty != null && it.picked_qty > 0);
-      lines = [...lines.filter((_, i) => marked[i]), ...lines.filter((_, i) => !marked[i])];
-    }
-  }
+  // Unpicked lines are always at the end (owner, 2026-09-26), which replaced
+  // the manager's "Sheet View: separate marked/unmarked" setting.
 
   const wb = new ExcelJS.Workbook();
   const sheet = wb.addWorksheet(t("orders.excelSheetName"));

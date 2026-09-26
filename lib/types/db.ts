@@ -44,13 +44,13 @@ export interface UserPreferences {
   averageSaleFrom?: string;
   averageSaleTo?: string;
   notificationsEnabled?: boolean;
-  // Manager-only "Sheet View" setting (Order Flow & Additions §6/§7):
-  // downloads default to article order; when true, picked/unpicked items
-  // are separated instead.
-  downloadSeparateMarked?: boolean;
   // Warehouse Picking screen's last-used sort/view (§8.4), remembered
   // per-user the same way averageSaleRangeDays already is.
   pickingSort?: "unpicked" | "article" | "rack";
+  // How an order's lines are listed on every screen, picking included
+  // (2026-09-26; replaces pickingSort, which is no longer read). Unpicked
+  // lines are at the end whatever this says. See lib/lineSort.ts.
+  lineSort?: "article" | "rack" | "arranged";
   // "Sort/adjust-view" options the user has explicitly pinned as buttons
   // on the page — nothing shows by default (§Customers/§Products).
   pinnedCustomerFilters?: string[];

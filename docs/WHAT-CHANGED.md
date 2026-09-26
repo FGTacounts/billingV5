@@ -1,5 +1,29 @@
 # What changed, and what you need to do
 
+## 2026-09-26 — Order discounts, and how order lines are sorted
+
+Nothing to run in Supabase. The web needs a deploy and the phone a new build.
+
+**Order discount.** On a new order, the manager's order % now applies to
+every product, including ones added after it was set, and it comes off on
+top of a price the manager typed. On an order already written, "Discount
+every line" takes a % off every line's current price in one go. It is an
+action, so applying 10% twice takes 10% off twice. The AED "Order discount"
+is still there as before.
+
+**Line order.** Lines are sorted by article number by default, and unpicked
+lines are always at the end: on the order page, while picking, and on the
+invoice PDF and Excel. The web order page has a sort control (Article no. /
+Rack / As arranged); the move up/down arrows now show only under "As
+arranged". The phone's picking screen now starts on article number instead
+of rack.
+
+The "Sheet View" tab in the web's Settings and the phone's "Separate picked /
+unpicked items" switch are gone, as you asked: unpicked lines are always at
+the end now, which is what they did.
+
+---
+
 ## 2026-09-26 — Run RUN-ME-29: managers could not change orders
 
 Run `scratchpad/RUN-ME-29-admin-check-that-parses.sql` in Supabase →

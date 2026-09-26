@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAppUser } from "@/lib/auth";
 import { supabaseCaller } from "@/lib/supabase/server";
 import { fetchOrder, fetchOrderItems } from "@/lib/queries/orders";
+import { parseLineSort } from "@/lib/lineSort";
 import { buildInvoicePdf } from "@/lib/pdf/invoice";
 import { invoiceFileBase } from "@/lib/invoice-template";
 import { t } from "@/lib/i18n";
@@ -33,7 +34,9 @@ export async function GET(req: NextRequest) {
     fetchOrderItems(supabase, orderId),
     supabase.from("app_settings").select("vat_rate").limit(1).maybeSingle(),
   ]);
-  const bytes = await buildInvoicePdf(order, items, kind, settings.data?.vat_rate);
+  // The order screen passes the sort it is showing, so the paper matches it.
+  const sort = parseLineSort(req.nextUrl.searchParams.get("sort"));
+  const bytes = await buildInvoicePdf(order, items, kind, settings.data?.vat_rate, sort);
   const fileName = `${invoiceFileBase(order.invoice_number, order.billed_at ?? order.updated_at ?? order.created_at)}.pdf`;
 
   return new NextResponse(Buffer.from(bytes), {

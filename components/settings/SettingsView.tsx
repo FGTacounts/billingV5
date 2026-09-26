@@ -55,18 +55,19 @@ import { t, type MessageKey } from "@/lib/i18n";
 // account management, kept alongside the four new categories rather than
 // folded into one of them (removing it would be a regression).
 const TABS = ["General", "Account", "Data"] as const;
-const MANAGER_TABS = ["General", "Sheet View", "Data", "Users", "Account"] as const;
+// "Sheet View" was removed on 2026-09-26: its one setting, separating picked
+// from unpicked lines in downloads, is now how every order is listed.
+const MANAGER_TABS = ["General", "Data", "Users", "Account"] as const;
 // Zones is Admin-only (§Global: "The admin adds zones... he can allow other
 // admins and control what the manager has access to") — a Manager sees the
 // same tab set as before, unchanged.
-const ADMIN_TABS = ["General", "Sheet View", "Zones", "Data", "Users", "Account"] as const;
+const ADMIN_TABS = ["General", "Zones", "Data", "Users", "Account"] as const;
 // The tab name is the state value as well as the label, so only the label
 // moves into the catalogue.
 const TAB_LABELS = {
   General: "settings.general",
   Account: "settings.account",
   Data: "settings.data",
-  "Sheet View": "settings.sheetView",
   Users: "settings.users",
   Zones: "settings.zones",
 } as const;
@@ -107,7 +108,6 @@ export default function SettingsView({ user }: { user: AppUser }) {
         <div className="flex-1 min-w-0 w-full">
 
       {tab === "General" && <GeneralTab isManager={(user.role === "manager" || user.role === "admin")} role={user.role} />}
-      {tab === "Sheet View" && <SheetViewTab />}
       {tab === "Zones" && isAdmin && <ZonesTab />}
       {tab === "Data" && <DataTab isManager={(user.role === "manager" || user.role === "admin")} />}
       {tab === "Users" && <UsersTab currentUser={user} />}
@@ -920,41 +920,6 @@ function ZonesTab() {
           </Button>
         </div>
       </div>
-    </div>
-  );
-}
-
-// Manager-only (§6/§7): whether downloaded sheets (order exports, bulk
-// data) list items in plain article order, or separate marked/picked items
-// from unmarked ones — useful for picking-related exports specifically.
-function SheetViewTab() {
-  const { preferences, update } = usePreferences();
-  const separateMarked = preferences.downloadSeparateMarked ?? false;
-
-  return (
-    <div>
-      <Label>{t("settings.downloadOrder")}</Label>
-      <div className="flex gap-2">
-        <button
-          onClick={() => update({ downloadSeparateMarked: false })}
-          className={`px-4 py-2.5 rounded-card text-subhead font-medium border ${
-            !separateMarked ? "bg-accent text-white border-accent" : "border-hairline text-secondary"
-          }`}
-        >
-          {t("settings.articleOrder")}
-        </button>
-        <button
-          onClick={() => update({ downloadSeparateMarked: true })}
-          className={`px-4 py-2.5 rounded-card text-subhead font-medium border ${
-            separateMarked ? "bg-accent text-white border-accent" : "border-hairline text-secondary"
-          }`}
-        >
-          {t("settings.separateMarkedUnmarked")}
-        </button>
-      </div>
-      <p className="text-caption text-secondary mt-3">
-        {t("settings.downloadOrderHint")}
-      </p>
     </div>
   );
 }

@@ -3,7 +3,7 @@
 import { toast } from "@/lib/toast";
 import { t } from "@/lib/i18n";
 import { friendlyError } from "@/lib/errors";
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Check, X, Package, Truck, FileEdit, Ban, Clock, Pencil, Search, Trash2, Undo2, RotateCcw, ChevronUp, ChevronDown } from "lucide-react";
 import { usePreferences } from "@/lib/hooks/usePreferences";
@@ -38,7 +38,8 @@ import type { Seller } from "@/lib/queries/sales";
 import { fetchCustomers } from "@/lib/queries/customers";
 import { fetchProducts } from "@/lib/queries/products";
 import type { AppUser, Product } from "@/lib/types/db";
-import { subtotal, formatAed, effectiveQty, lineDiscountPercent, billed, FALLBACK_VAT_RATE } from "@/lib/money";
+import { subtotal, formatAed, effectiveQty, lineDiscountPercent, billed, FALLBACK_VAT_RATE, toFils, toAed } from "@/lib/money";
+import { sortOrderLines, parseLineSort, isUnpicked, LINE_SORTS } from "@/lib/lineSort";
 import Sheet from "@/components/ui/Sheet";
 import Button from "@/components/ui/Button";
 import { TextInput, Label } from "@/components/ui/Field";
@@ -87,6 +88,11 @@ export default function OrderDetail({
   // The discount on the whole order (RUN-ME-28), a manager's, at any stage.
   const [editingOrderDiscount, setEditingOrderDiscount] = useState(false);
   const [orderDiscountDraft, setOrderDiscountDraft] = useState("");
+  const [editingLinePercent, setEditingLinePercent] = useState(false);
+  const [linePercentDraft, setLinePercentDraft] = useState("");
+  // Enter and the blur that follows it would otherwise both apply it, and
+  // unlike an amount a percentage applied twice is taken off twice.
+  const linePercentOpen = useRef(false);
   // A line added to or taken off an order that has already been written —
   // the phone's addArticle/remove on the picking screen. Same rule as the
   // qty/price edit above and enforced in the same place: see
@@ -102,7 +108,7 @@ export default function OrderDetail({
   // (invoice number, customer, salesman, PO number editable)".
   const [showEditFields, setShowEditFields] = useState(false);
   const { preferences, update: updatePrefs } = usePreferences();
-  const pickingSort = preferences.pickingSort ?? "unpicked";
+  const lineSort = parseLineSort(preferences.lineSort);
 
   const load = useCallback(async () => {
     const supabase = supabaseBrowser();
@@ -341,14 +347,19 @@ export default function OrderDetail({
     }
   }
 
-  // Moves a line one place up or down in the order a manager arranged, which
-  // is the order the invoice lists them in. Optimistic, rolled back on refusal.
+  // Moves a line one place up or down in the order a manager arranged
+  // ("As arranged" sort). `index` is the row as shown, where unpicked lines
+  // sit at the end, so the two lines trade places in the arrangement itself.
+  // Optimistic, rolled back on refusal.
   async function moveItem(index: number, by: -1 | 1) {
-    const target = index + by;
-    if (target < 0 || target >= items.length) return;
+    const a = sortedItems[index];
+    const b = sortedItems[index + by];
+    if (!a || !b) return;
     const previous = items;
     const next = [...items];
-    [next[index], next[target]] = [next[target], next[index]];
+    const ia = next.findIndex((x) => x.id === a.id);
+    const ib = next.findIndex((x) => x.id === b.id);
+    [next[ia], next[ib]] = [next[ib], next[ia]];
     setItems(next);
     try {
       const res = await fetch("/api/orders/manager-edit", {
@@ -386,6 +397,34 @@ export default function OrderDetail({
       onChanged();
     } catch (e) {
       setOrder(previous);
+      toast.error(friendlyError(e, t("orders.setOrderDiscountFailed")));
+    }
+  }
+
+  // A percentage off every line at once (owner, 2026-09-26), on top of each
+  // line's current price — a price a manager set included. An action rather
+  // than a setting: the field empties once it is applied, and the Disc % on
+  // each line shows the result.
+  async function applyLinePercent(value: number) {
+    if (!linePercentOpen.current) return;
+    linePercentOpen.current = false;
+    setEditingLinePercent(false);
+    if (!Number.isFinite(value) || value <= 0 || value > 100 || items.length === 0) return;
+    const previous = items;
+    setItems(items.map((it) => ({ ...it, unit_price: toAed(Math.round((toFils(it.unit_price) * (100 - value)) / 100)) })));
+    try {
+      const res = await fetch("/api/orders/manager-edit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderId, linePercent: value }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? t("orders.setOrderDiscountFailed"));
+      tapSuccess();
+      await load();
+      onChanged();
+    } catch (e) {
+      setItems(previous);
       toast.error(friendlyError(e, t("orders.setOrderDiscountFailed")));
     }
   }
@@ -481,32 +520,16 @@ export default function OrderDetail({
     }
   }
 
-  // Sort control (§8.4) — remembered per-user via preferences, same
-  // pattern as the Average Sale date-range memory. "Unpicked first" is the
-  // default so the picker always sees what's left to do at the top.
-  //
-  // Only while picking, where the control is shown. Everywhere else the lines
-  // stand in the order a manager arranged them — the order the invoice
-  // prints — or rearranging would have nothing to show.
+  // Sort control (§8.4), remembered per user. Article number by default, and
+  // unpicked lines always at the end, on every screen and at every stage
+  // including picking (owner, 2026-09-26) — this replaced a picking-only
+  // control whose default was "Unpicked first". "As arranged" is the order a
+  // manager set with the arrows. The PDF and Excel links carry the same sort,
+  // so the paper lists the lines as the screen does.
   const pickingMode =
     (user.role === "warehouse" || user.role === "manager" || user.role === "admin") &&
     ["waiting", "picking"].includes(order?.status ?? "");
-  const sortedItems = useMemo(() => {
-    const copy = [...items];
-    if (!pickingMode) return copy;
-    if (pickingSort === "article") {
-      copy.sort((a, b) => (a.sku || "").localeCompare(b.sku || ""));
-    } else if (pickingSort === "rack") {
-      copy.sort((a, b) => (a.product?.rack_location || "").localeCompare(b.product?.rack_location || ""));
-    } else {
-      copy.sort((a, b) => {
-        const aDone = a.picked_qty === a.ordered_qty ? 1 : 0;
-        const bDone = b.picked_qty === b.ordered_qty ? 1 : 0;
-        return aDone - bDone;
-      });
-    }
-    return copy;
-  }, [items, pickingSort, pickingMode]);
+  const sortedItems = useMemo(() => sortOrderLines(items, lineSort), [items, lineSort]);
 
   if (loading || !order) {
     return (
@@ -530,7 +553,7 @@ export default function OrderDetail({
   // The Picked column: a manager sees and changes what is picked at every
   // stage. While picking, the quantity box already is the pick.
   const showPickedColumn = managerEdits && !pickingMode;
-  const showArrange = managerEdits && !pickingMode && items.length > 1;
+  const showArrange = managerEdits && !pickingMode && lineSort === "arranged" && items.length > 1;
   const orderDiscountAmount = order.discount_amount ?? 0;
   // Imported invoices carry no lines, so their stored subtotal is all there is.
   const grossSubtotal = items.length ? subtotal(items) : (order.subtotal ?? 0) + orderDiscountAmount;
@@ -563,7 +586,7 @@ export default function OrderDetail({
           {order.status !== "draft" && (
             <>
               <a
-                href={`/api/invoice-pdf?orderId=${order.id}`}
+                href={`/api/invoice-pdf?orderId=${order.id}&sort=${lineSort}`}
                 target="_blank"
                 rel="noreferrer"
                 className="px-3 py-1.5 rounded-card border border-hairline text-caption font-semibold text-secondary hover:text-accent hover:border-accent/50 transition-colors"
@@ -572,7 +595,7 @@ export default function OrderDetail({
               </a>
               {isManager && (
                 <a
-                  href={`/api/orders/excel?orderId=${order.id}`}
+                  href={`/api/orders/excel?orderId=${order.id}&sort=${lineSort}`}
                   className="px-3 py-1.5 rounded-card border border-hairline text-caption font-semibold text-secondary hover:text-accent hover:border-accent/50 transition-colors"
                 >
                   {t("orders.exportExcel")}
@@ -714,25 +737,32 @@ export default function OrderDetail({
         </div>
       )}
 
-      {(isWarehouse || isManager) && ["waiting", "picking"].includes(order.status) && (
+      {items.length > 1 && (
         <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
-          <div className="flex rounded-card border border-hairline overflow-hidden">
-            {(["unpicked", "article", "rack"] as const).map((s) => (
+          <div
+            className="flex rounded-card border border-hairline overflow-hidden"
+            role="group"
+            aria-label={t("orders.sortLines")}
+          >
+            {LINE_SORTS.map((s) => (
               <button
                 key={s}
-                onClick={() => updatePrefs({ pickingSort: s })}
+                onClick={() => updatePrefs({ lineSort: s })}
+                aria-pressed={lineSort === s}
                 className={`px-2.5 py-1 text-caption font-medium ${
-                  pickingSort === s ? "bg-accent text-white" : "text-secondary"
+                  lineSort === s ? "bg-accent text-white" : "text-secondary"
                 }`}
               >
-                {s === "unpicked" ? t("orders.unpickedFirst") : s[0].toUpperCase() + s.slice(1)}
+                {t(s === "article" ? "orders.sortArticleNo" : s === "rack" ? "orders.sortRack" : "orders.sortArranged")}
               </button>
             ))}
           </div>
-          <div className="flex items-center gap-2">
-            <Button tier="tinted" onClick={selectAll}>{t("orders.selectAll")}</Button>
-            <Button tier="plain" onClick={deselectAll}>{t("orders.deselectAll")}</Button>
-          </div>
+          {(isWarehouse || isManager) && ["waiting", "picking"].includes(order.status) && (
+            <div className="flex items-center gap-2">
+              <Button tier="tinted" onClick={selectAll}>{t("orders.selectAll")}</Button>
+              <Button tier="plain" onClick={deselectAll}>{t("orders.deselectAll")}</Button>
+            </div>
+          )}
         </div>
       )}
 
@@ -782,7 +812,7 @@ export default function OrderDetail({
                       <div className="flex flex-col">
                         <button
                           className="min-w-11 min-h-[22px] flex items-center justify-center text-secondary hover:text-accent disabled:opacity-30"
-                          disabled={index === 0}
+                          disabled={index === 0 || isUnpicked(sortedItems[index - 1]) !== isUnpicked(it)}
                           aria-label={t("orders.moveUpNamed", { name: it.description ?? it.sku })}
                           onClick={() => {
                             tap();
@@ -793,7 +823,9 @@ export default function OrderDetail({
                         </button>
                         <button
                           className="min-w-11 min-h-[22px] flex items-center justify-center text-secondary hover:text-accent disabled:opacity-30"
-                          disabled={index === sortedItems.length - 1}
+                          disabled={
+                            index === sortedItems.length - 1 || isUnpicked(sortedItems[index + 1]) !== isUnpicked(it)
+                          }
                           aria-label={t("orders.moveDownNamed", { name: it.description ?? it.sku })}
                           onClick={() => {
                             tap();
@@ -1233,6 +1265,48 @@ export default function OrderDetail({
           orderDiscountAmount > 0 && (
             <Row label={t("orders.orderDiscount")} value={`−${formatAed(orderDiscountAmount)}`} />
           )
+        )}
+        {managerEdits && items.length > 0 && (
+          <div className="flex justify-between items-center text-secondary">
+            <span>{t("orders.discountEveryLine")}</span>
+            {editingLinePercent ? (
+              <span className="flex items-center gap-1">
+                <input
+                  autoFocus
+                  type="number"
+                  min={0}
+                  max={100}
+                  step="0.01"
+                  aria-label={t("orders.discountEveryLine")}
+                  className="w-16 px-2 py-1 rounded-inner border border-hairline text-right tabular-nums"
+                  value={linePercentDraft}
+                  onChange={(e) => setLinePercentDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") applyLinePercent(Number(linePercentDraft) || 0);
+                    if (e.key === "Escape") {
+                      linePercentOpen.current = false;
+                      setEditingLinePercent(false);
+                    }
+                  }}
+                  onBlur={() => applyLinePercent(Number(linePercentDraft) || 0)}
+                />
+                <span>%</span>
+              </span>
+            ) : (
+              <button
+                className="tabular-nums flex items-center gap-1 hover:text-accent"
+                title={t("orders.discountEveryLineHint")}
+                onClick={() => {
+                  setLinePercentDraft("");
+                  linePercentOpen.current = true;
+                  setEditingLinePercent(true);
+                }}
+              >
+                {t("orders.discountEveryLineAction")}
+                <Pencil size={11} />
+              </button>
+            )}
+          </div>
         )}
         <Row label={t("orders.vat")} value={formatAed(order.vat_amount || fallbackBilled.vatAmount)} />
         <Row label={t("common.total")} value={formatAed(order.total || fallbackBilled.total)} bold />

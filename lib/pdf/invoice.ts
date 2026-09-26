@@ -8,6 +8,7 @@ import { FALLBACK_VAT_RATE } from "@/lib/money";
 import { toFils, toAed } from "@/lib/money";
 import { DEFAULT_OVERDUE_DAYS } from "@/lib/queries/aging";
 import { t } from "@/lib/i18n";
+import { sortOrderLines, DEFAULT_LINE_SORT, type LineSort } from "@/lib/lineSort";
 
 // The page, the palette and the letterhead below are exported because the
 // statement of account (lib/pdf/statement.ts) is drawn from them too: a
@@ -269,8 +270,14 @@ interface LineCalc {
 // the attached reference PDF's numbers line by line rather than assumed.
 // The per-line SUBTOTAL column the template also had was removed at the
 // owner's request (2026-09-25).
-export function computeInvoiceLines(items: OrderItemRow[], vatRate: number): LineCalc[] {
-  return items.map((it, i) => {
+// Lines are listed by `sort` (article number unless asked otherwise), with
+// unpicked lines at the end — see lib/lineSort.ts. Numbered after sorting.
+export function computeInvoiceLines(
+  items: OrderItemRow[],
+  vatRate: number,
+  sort: LineSort = DEFAULT_LINE_SORT
+): LineCalc[] {
+  return sortOrderLines(items, sort).map((it, i) => {
     const qty = it.picked_qty ?? it.ordered_qty;
     // order_items.unit_price is the actually-charged price (already net of
     // any discount) — the product's current list price is the closest
@@ -337,7 +344,8 @@ export async function buildInvoicePdf(
   order: OrderRow,
   items: OrderItemRow[],
   kind: "tax" | "performa",
-  vatRate: number = FALLBACK_VAT_RATE
+  vatRate: number = FALLBACK_VAT_RATE,
+  sort: LineSort = DEFAULT_LINE_SORT
 ): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
   const font = await doc.embedFont(StandardFonts.Helvetica);
@@ -409,7 +417,7 @@ export async function buildInvoicePdf(
 
   // Line items table (paginates onto a fresh letterhead page if needed)
   y = drawTableHeader(ctx, y);
-  const lines = computeInvoiceLines(items, vatRate);
+  const lines = computeInvoiceLines(items, vatRate, sort);
   const FOOTER_RESERVE = 190;
   for (const line of lines) {
     if (y - 15 < FOOTER_RESERVE) {

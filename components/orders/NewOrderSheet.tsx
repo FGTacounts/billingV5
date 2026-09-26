@@ -12,7 +12,7 @@ import { fetchCustomers } from "@/lib/queries/customers";
 import { fetchProducts } from "@/lib/queries/products";
 import { customerCondition } from "@/lib/queries/aging";
 import type { AppUser, Customer, Product } from "@/lib/types/db";
-import { resolveLinePrice } from "@/lib/money";
+import { money, resolveLinePrice } from "@/lib/money";
 import { formatAed } from "@/lib/money";
 import Sheet from "@/components/ui/Sheet";
 import Button from "@/components/ui/Button";
@@ -25,6 +25,9 @@ import ScanOrderButton, { type ScannedOrderLine } from "./ScanOrderButton";
 interface Line {
   product: Product;
   qty: number;
+  // The line's own price before the order discount: the old price, the list
+  // price, or what a manager typed. The order discount is never written in
+  // here — it is taken off on top, in `charged` (owner, 2026-09-26).
   price: number;
   recommendedReason: "sticky_price" | "discount" | null;
 }
@@ -66,7 +69,11 @@ export default function NewOrderSheet({
   // convention the spec asks for in the UI. It belongs to THIS order: it is
   // no longer remembered against the customer and brought back on their next
   // one (owner, 2026-09-21 — a discount exists only where a manager gives it).
+  // The field holds what is being typed; `appliedPct` is what the order is
+  // priced at, set on blur so a half-typed "9" on the way to "90" never
+  // reprices the cart.
   const [orderDiscountPct, setOrderDiscountPct] = useState(100);
+  const [appliedPct, setAppliedPct] = useState(100);
   const isManager = (user.role === "manager" || user.role === "admin");
 
   const [holdWarning, setHoldWarning] = useState<{ condition: string; oldestDays: number } | null>(null);
@@ -114,20 +121,20 @@ export default function NewOrderSheet({
     }
   }, []);
 
-  // Manager-only (§3A): re-derives every current line's price from its
-  // catalog price × pct/100 — a fresh recompute, not a compounding
-  // multiply, so re-entering the same pct twice is idempotent. Applies to
-  // this order and is not remembered for the customer's next one.
+  // Manager-only (§3A). The order discount applies to the whole order: every
+  // line, including ones added after it was set, by hand, import or scan, and
+  // on top of a price the manager typed (owner, 2026-09-26: "the price is
+  // changed then the discount is effected on top of the changed price").
+  // It used to be written into the lines present at the moment it was set,
+  // from the catalogue price, so a line added afterwards went out at full
+  // price and a typed price wiped it. Applies to this order and is not
+  // remembered for the customer's next one.
   function applyOrderDiscount(pct: number) {
     setOrderDiscountPct(pct);
-    setLines((prev) =>
-      prev.map((l) => ({
-        ...l,
-        price: l.product.price * (pct / 100),
-        recommendedReason: pct === 100 ? l.recommendedReason : "discount",
-      }))
-    );
+    setAppliedPct(pct);
   }
+  const discounted = appliedPct < 100;
+  const charged = (l: Line) => (discounted ? money(l.price * (appliedPct / 100)) : l.price);
 
   // "Use [Customer]'s last prices" (§3B) — re-applies remembered per-item
   // sticky prices (customer_prices), falling back to the remembered
@@ -325,7 +332,7 @@ export default function NewOrderSheet({
     }
   }
 
-  const subtotal = lines.reduce((s, l) => s + l.price * l.qty, 0);
+  const subtotal = lines.reduce((s, l) => s + charged(l) * l.qty, 0);
   const vat = subtotal * 0.05;
   const total = subtotal + vat;
   // The mockup's totals block shows Subtotal *before* discount and then the
@@ -338,7 +345,7 @@ export default function NewOrderSheet({
     `${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} AED`;
   // GP needs unit_cost, which is null on a non-Manager session (masked at
   // the query layer) — only computable/shown for a Manager.
-  const gp = isManager ? lines.reduce((s, l) => s + (l.price - (l.product.cost ?? 0)) * l.qty, 0) : null;
+  const gp = isManager ? lines.reduce((s, l) => s + (charged(l) - (l.product.cost ?? 0)) * l.qty, 0) : null;
   const gpPct = gp !== null && subtotal > 0 ? Math.round((gp / subtotal) * 100) : null;
   const canSave = (customer || (useNewCustomer && newCustomerNote.trim())) && lines.length > 0;
 
@@ -361,7 +368,7 @@ export default function NewOrderSheet({
             product_id: line.product.id,
             sku: line.product.sku,
             description: line.product.name,
-            unit_price: line.price,
+            unit_price: charged(line),
             ordered_qty: line.qty,
           })),
         }),
@@ -614,7 +621,7 @@ export default function NewOrderSheet({
                       {l.recommendedReason === "sticky_price" && (
                         <Recommended>{t("orders.sameAsLastTime")}</Recommended>
                       )}
-                      {l.recommendedReason === "discount" && (
+                      {discounted && (
                         <span className="text-caption text-accent">{t("orders.discountApplied")}</span>
                       )}
                     </td>
@@ -635,7 +642,14 @@ export default function NewOrderSheet({
                           className="w-20 text-right tabular-nums px-1.5 py-1 rounded-inner border border-hairline bg-canvas"
                         />
                       ) : (
-                        l.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                        charged(l).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                      )}
+                      {/* A manager edits the price before the order discount;
+                          what the line charges after it is shown beneath. */}
+                      {isManager && discounted && (
+                        <div className="text-caption text-accent tabular-nums mt-0.5">
+                          {charged(l).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </div>
                       )}
                     </td>
                     <td className="px-2.5 py-2.5">
@@ -671,7 +685,7 @@ export default function NewOrderSheet({
                     {/* Plain number, no currency prefix — the mockup's table reads
                         "120", with the currency only in the totals block. */}
                     <td className="px-2.5 py-2.5 text-right tabular-nums font-medium whitespace-nowrap">
-                      {(l.price * l.qty).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      {(charged(l) * l.qty).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </td>
                     <td className="px-2.5 py-2.5">
                       <button onClick={() => removeLine(l.product.id)} className="text-secondary hover:text-[--status-danger]">

@@ -2737,3 +2737,133 @@ took a live request to diagnose. Also noted: stampEdited in
 lib/orders-server.ts writes `edited_by`, which does not exist live
 (`edited_by_id` does), so edits by a salesman or the warehouse never get the
 Edited pill. Both are reported to the owner rather than changed here.
+
+## 2026-09-26 — The order discount applies to the whole order
+
+2026-09-26 — Owner: "full order discount. applies generally to all products
+when done." Asked which of the two order-wide discounts was meant, the owner
+answered "Both", so this is done in three steps: the web's new-order screen
+(this entry), the phone's new-order screen, and a % on an order already
+written. The AED lump sum on an existing order stays.
+
+2026-09-26 — On the web's new-order screen the manager's order % is applied
+on top of each line's own price, every time the cart is priced, instead of
+being written into the lines once — It used to reset the lines present at the
+moment it was set to catalogue price × %, so a product added afterwards (by
+hand, import or scan) went out at full price, and "Use last prices" or a
+typed price silently removed it. Asked what a typed price should do, the
+owner: "the price is changed then the discount is effected on top of the
+changed price". The line keeps the pre-discount price in its price field;
+the price it charges is shown beneath it and is what is sent to
+/api/orders/create. The "100% = no discount" convention is kept. The % takes
+effect on blur, as before, so a half-typed figure never reprices the cart.
+
+2026-09-26 — Consequence: an order % now also comes off a customer's old
+price, where before it replaced it with catalogue × %. That is what the
+phone's slider already did (2026-09-18 note), so the two apps now agree on
+this screen.
+
+2026-09-26 — Step 2, the phone's new-order screen (`NewOrderView`) — It
+already discounted a product added after the % was set, but re-applying the
+% repriced every line from its old or list price, throwing away a price the
+manager had typed, and a price typed after the % (or an Excel-imported line,
+or "Use last prices") went out undiscounted. Now each line's pre-discount
+price is kept by line id (`basePrices`) and the % comes off it on every path:
+added, imported, typed, Disc % per line, last prices, and changing the %
+itself. The price field shows the pre-discount price; what the line charges
+is shown beneath it while a discount is set. The phone's "% off" field and
+the web's "100% = no discount" field are left as each app had them.
+
+2026-09-26 — The phone's local `Order.discountAmount` (shown as "Original
+subtotal / Discount" on its screens and PDF, never written to the database)
+is now the sum of each line's pre-discount price less what it charges,
+instead of the discounted subtotal divided back up by the % — which, once a
+typed price was involved, no longer described anything. It is still not
+written to `orders.discount_amount`: the lines already carry the discount,
+and writing it there too would take it off twice.
+
+2026-09-26 — Noted, not changed: a draft reopened on the phone starts at "no
+order discount", and its lines at the prices they were saved with, because
+the % is not stored on the order. Re-entering a % on a reopened draft takes
+it off those saved (already discounted) prices. Same on the web, which has
+no draft reopening of this screen. Storing the % would need a column.
+
+2026-09-26 — Step 3, a percentage off every line of an order already written
+— "Discount every line" on the order (web: OrderDetail's totals; phone:
+ManagerOrderEditorView's totals card), manager/admin only. It takes N% off
+each line's CURRENT price, which already includes any price a manager set,
+per the owner's "on top of the changed price". The AED "Order discount" lump
+sum is kept beside it, unchanged — the owner chose "Both".
+
+2026-09-26 — It is an action, not a stored setting — Nothing records the
+percentage; the result lives in each line's unit_price, and the Disc % on
+every line reads it back as the gap from list price, as the 2026-09-18 per-
+product discount already does. Applying 10% twice takes 10% off twice; the
+web field empties after it is applied so it is not re-applied by accident,
+and a ref stops Enter plus the blur that follows from applying it twice.
+Rejected: a `discount_pct` column on orders, which would give an order a
+second answer to "what does this line charge" (the same reason the 2026-09-18
+decision gave for not storing a per-line percent), and needs a RUN-ME.
+
+2026-09-26 — No database change: the web route (/api/orders/manager-edit,
+new `linePercent`) reads the lines' prices and sends one `set` per line in a
+single manager_edit_order call (RUN-ME-28), so all lines, stock and totals
+move in one transaction or not at all. Prices are cut in whole fils. The
+phone reprices its editor's lines on screen and they are saved with Save,
+like any other price the manager changes there.
+
+## 2026-09-26 — Order lines: article number by default, unpicked at the end
+
+2026-09-26 — Owner: "Unpicked items should always be at the end of the
+sheet. Also sort option such as sort by article no. By default it should be
+in this format." Asked where, the owner chose all of: the printed invoice
+and Excel, the order screens, and the picking screen. Asked about the
+manager's arrangement, the owner chose "Article no. by default", with the
+arrangement kept as one of the sorts. One rule, lib/lineSort.ts on the web
+and Billing/LineSort.swift on the phone.
+
+2026-09-26 — Unpicked means not ticked (web: picked_qty null or 0, the test
+the Excel's "separate marked" already used; phone: no entry in `picks`). A
+short pick is picked. An order nobody has started picking is all unpicked,
+so it is simply sorted.
+
+2026-09-26 — Web: the order page shows a sort control (Article no. / Rack /
+As arranged) on every order with more than one line, at every stage, for
+every role; it was a picking-only control whose default was "Unpicked
+first", which this REPLACES. Remembered per user as `preferences.lineSort`;
+`pickingSort` is no longer read. The move up/down arrows show only under "As
+arranged", and a line cannot be moved across the picked/unpicked boundary
+(the move would not show). The PDF and Excel links on the order page carry
+the sort shown, so the paper matches the screen; every other route to an
+invoice (Invoices page, Orders list, delivery upload, bulk export) prints
+article number. Rack sort puts lines with no rack after those with one.
+
+2026-09-26 — REPLACES the 2026-09-25 "the lines stand in the order a
+manager arranged them — the order the invoice prints": the arrangement is
+still stored and still one sort, but it is no longer the default on screen
+or on paper. Owner's choice.
+
+2026-09-26 — Phone: the picking screen defaults to article number (it was
+rack, and forgot the choice on leaving the screen) and remembers it
+(`orders.lineSort`, mirrored by PreferencesSync, shared with the order
+editor). The manager's order editor gains an Article number / Rack number
+control; rows are numbered as shown. The salesman's order view follows the
+remembered sort. The phone's PDF and Excel always print article number,
+unpicked last: the exporters have no rack to sort by. The phone has no "As
+arranged" — it never read `orders.line_order`.
+
+2026-09-26 — Consequence, NOT removed: the "Sheet View: separate marked /
+unmarked" setting (web: downloadSeparateMarked; phone: settings.separateMarked)
+did, when on, exactly what now always happens, so it no longer changes
+anything. The web Excel code that applied it was removed because it
+partitioned the lines by their position before sorting and would have
+shuffled them. The toggle itself is still in Settings on both apps; removing
+it is the owner's call (rule 1).
+
+2026-09-26 — The owner said yes: the "Sheet View" setting is removed on both
+apps — Web: the Settings tab "Sheet View" (its only setting), the
+`downloadSeparateMarked` preference type and its strings. Phone: the "Order
+Download" section's switch, `settings.separateMarked` (AppStorage, and its
+PreferencesSync mirror), and the Excel exporter's `separateMarked`
+parameter. A value already saved in a user's preferences is left in place and
+simply never read.

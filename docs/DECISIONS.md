@@ -2931,3 +2931,19 @@ Confirming delivery used to build the Tax Invoice and save a copy to the
 private uploads folder. Moving that to approval is a new behaviour on a
 different step (and approval can be undone and redone), so it is asked, not
 assumed. The PDF is still built on demand from every invoice.
+
+2026-09-27 — Approval reads the order's lines and writes any shelf cut with
+the server key — The unit_cost fix above shipped and approval still failed
+the same way on order 4480, which has seven lines asking for more than the
+shelf holds. None of the seven had been cut, so the refusal was at reading
+the lines or saving the first cut: the two steps that touch order_items as
+the signed-in manager. Staff reach that table only partly (RUN-ME-4); picking
+already writes it through the server (/api/orders/update-picked-qty). The
+route checks the caller is a manager first, and the cut is its own figure.
+Rejected: manager_edit_order's `pick`, which would stamp the order Edited for
+a cut nobody made. The stock and the order status stay on the caller's
+session, as undo-approval (which checks both) shows they work. Every checked
+failure is now also written to the server log with the step that failed,
+because the screen shows only "You don't have permission to do that".
+Checked before the change: no product's stock moved during the failed
+attempts, and no line was cut.

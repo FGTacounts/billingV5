@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAppUser } from "@/lib/auth";
 import { supabaseCaller } from "@/lib/supabase/server";
+import { supabaseAdmin } from "@/lib/supabase/admin";
 import { resolveVatRate } from "@/lib/queries/zones";
 import { toFils, toAed, billed } from "@/lib/money";
 import { orderDiscount } from "@/lib/orders-server";
@@ -15,6 +16,14 @@ export const runtime = "nodejs";
 // read-then-write calls under the caller's own RLS session — acceptable at
 // this app's concurrency (a Manager approves serially), not perfectly
 // race-proof under simultaneous approvals of the same SKU.
+// The screen turns a database refusal into "You don't have permission to do
+// that", which hides which step refused and why. The real reply goes to the
+// server log (Vercel → Logs), so the next failure names itself.
+function failed(step: string, error: { message: string; code?: string }) {
+  console.error(`approve: ${step} failed`, error.code ?? "", error.message);
+  return NextResponse.json({ error: error.message }, { status: 500 });
+}
+
 export async function POST(req: NextRequest) {
   const user = await getAppUser();
   if (!user || (user.role !== "manager" && user.role !== "admin")) {
@@ -46,15 +55,22 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // No unit_cost here: staff logins, managers included, are not granted that
-  // column (RUN-ME-4), and asking for it makes the database refuse the whole
-  // read — which was every approval failing with "no permission".
-  const { data: items, error: itemsErr } = await supabase
+  // The lines are read, and any cut below is written, with the server key.
+  // Staff logins, managers included, reach order_items only partly (RUN-ME-4
+  // hides unit_cost; lines are otherwise changed through manager_edit_order
+  // or the server, as picking is), and approval failed with "You don't have
+  // permission to do that" on an order with lines to cut (2026-09-27). The
+  // caller has been checked as a manager above, and the cut is this route's
+  // own figure — the same terms /api/orders/update-picked-qty writes on.
+  // Not manager_edit_order: it would stamp the order Edited for a cut nobody
+  // made by hand.
+  const admin = supabaseAdmin();
+  const { data: items, error: itemsErr } = await admin
     .from("order_items")
     .select("id, product_id, unit_price, ordered_qty, picked_qty")
     .eq("order_id", orderId)
     .order("id");
-  if (itemsErr) return NextResponse.json({ error: itemsErr.message }, { status: 500 });
+  if (itemsErr) return failed("reading the lines", itemsErr);
 
   // Nothing is sold from an empty shelf. Each line is cut to what is on
   // hand, the cut is saved as the line's picked quantity so the invoice and
@@ -77,7 +93,7 @@ export async function POST(req: NextRequest) {
     if (res.error && res.error.message.includes("stock_group_id")) {
       res = await supabase.from("products").select("id, sku, stock_on_hand").in("id", productIds);
     }
-    if (res.error) return NextResponse.json({ error: res.error.message }, { status: 500 });
+    if (res.error) return failed("reading the shelf", res.error);
     stockRows = (res.data ?? []) as StockRow[];
   }
   const productById = new Map(stockRows.map((r) => [r.id, r]));
@@ -112,8 +128,12 @@ export async function POST(req: NextRequest) {
   // The cuts go on the lines before anything else is written, so an order
   // can never be approved with an invoice that says more than was deducted.
   for (const cut of lineCuts) {
-    const { error } = await supabase.from("order_items").update({ picked_qty: cut.picked_qty }).eq("id", cut.id);
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    const { error } = await admin
+      .from("order_items")
+      .update({ picked_qty: cut.picked_qty })
+      .eq("id", cut.id)
+      .eq("order_id", orderId);
+    if (error) return failed("cutting a line to the shelf", error);
   }
 
   // One write per shelf. For a shared shelf the database copies the figure
@@ -171,7 +191,7 @@ export async function POST(req: NextRequest) {
     .from("orders")
     .update({ status: "approved", subtotal, vat_amount: vatAmount, total })
     .eq("id", orderId);
-  if (approveErr) return NextResponse.json({ error: approveErr.message }, { status: 500 });
+  if (approveErr) return failed("marking it approved", approveErr);
 
   await supabase
     .from("order_status_log")

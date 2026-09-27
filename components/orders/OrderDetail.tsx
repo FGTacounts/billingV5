@@ -326,7 +326,8 @@ export default function OrderDetail({
   // Optimistic with a real rollback; once an order is approved the server
   // moves the stock and totals with the pick, so the reload brings those in.
   async function togglePick(item: OrderItemRow) {
-    const next = item.picked_qty == null ? item.ordered_qty : null;
+    // 0 reads as unpicked (lib/lineSort.ts), so it ticks back to the whole line.
+    const next = isUnpicked(item) ? item.ordered_qty : null;
     const previous = items;
     setItems((prev) => prev.map((x) => (x.id === item.id ? { ...x, picked_qty: next } : x)));
     try {
@@ -550,8 +551,11 @@ export default function OrderDetail({
   const canEditItems =
     managerEdits || (["draft", "pending"].includes(order.status) && order.salesman_id === user.id);
   // The Picked column: a manager sees and changes what is picked at every
-  // stage. While picking, the quantity box already is the pick.
-  const showPickedColumn = managerEdits && !pickingMode;
+  // stage, and the warehouse while it picks. The tick picks the whole line;
+  // the quantity box beside it, while picking, is for a short pick. Without
+  // the tick a full line could not be marked picked on the web at all — the
+  // box does nothing when left at the ordered quantity (owner, 2026-09-27).
+  const showPickedColumn = managerEdits || (isWarehouse && pickingMode);
   const showArrange = managerEdits && !pickingMode && lineSort === "arranged" && items.length > 1;
   const orderDiscountAmount = order.discount_amount ?? 0;
   // Imported invoices carry no lines, so their stored subtotal is all there is.
@@ -974,20 +978,26 @@ export default function OrderDetail({
                     <td className="px-3 py-2.5 text-right tabular-nums">
                       <button
                         className={`min-h-11 inline-flex items-center gap-1 ms-auto hover:text-accent ${
-                          it.picked_qty == null ? "text-secondary" : "text-accent"
+                          isUnpicked(it) ? "text-secondary" : "text-accent"
                         }`}
                         aria-label={
-                          it.picked_qty == null
+                          isUnpicked(it)
                             ? t("orders.pickNamed", { name: it.description ?? it.sku })
                             : t("orders.unpickNamed", { name: it.description ?? it.sku })
                         }
-                        aria-pressed={it.picked_qty != null}
+                        aria-pressed={!isUnpicked(it)}
                         onClick={() => {
                           tap();
-                          togglePick(it);
+                          // While picking, the tick is the same pick as Select
+                          // all / Deselect all: the whole line, or 0 (which
+                          // reads as unpicked), queued if the floor is
+                          // offline. After picking, a manager's tick goes
+                          // through manager_edit_order.
+                          if (pickingMode) changeQty(it, isUnpicked(it) ? it.ordered_qty : 0);
+                          else togglePick(it);
                         }}
                       >
-                        {it.picked_qty == null ? (
+                        {isUnpicked(it) ? (
                           t("orders.notPicked")
                         ) : (
                           <>

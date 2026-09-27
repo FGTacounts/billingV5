@@ -2964,3 +2964,18 @@ shelf this way. Rejected: a RUN-ME granting the column, which needs the owner
 to run SQL and leaves the unchecked write in place. The phone reads the same
 column but falls back to reading without it on any error, so its approval is
 not blocked (shared shelves are then not pooled there).
+
+2026-09-27 — The web order page has a pick tick on every line while picking
+— Owner: "there is no select option for each row of the order (the
+picking...)". In Waiting/Picking the web showed only a quantity box, which
+does nothing when left at the ordered quantity, so a full line could not be
+marked picked; the Picked column (the manager's ✓) was hidden while picking.
+It now shows while picking, for the warehouse as well as managers. While
+picking the tick is the same write as Select all / Deselect all — the whole
+line, or 0 — through the queued pick mutation, so it works offline like a
+typed quantity. The quantity box stays for short picks. After picking, a
+manager's tick still goes through manager_edit_order. "Not picked" now means
+null or 0, the one rule lib/lineSort.ts already uses, and ticking a 0 line
+picks the whole line — Rejected: letting the warehouse clear a pick to null
+through /api/orders/update-picked-qty, which needed a new server rule when
+Deselect all already writes 0.

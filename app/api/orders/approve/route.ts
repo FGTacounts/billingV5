@@ -84,14 +84,21 @@ export async function POST(req: NextRequest) {
   const productIds = [...new Set((items ?? []).map((it) => it.product_id).filter(Boolean))];
   let stockRows: StockRow[] = [];
   if (productIds.length) {
-    let res: { data: unknown[] | null; error: { message: string } | null } = await supabase
+    // Read with the server key. Staff are granted products column by column
+    // (RUN-ME-4), and stock_group_id arrived later (RUN-ME-18) without a
+    // grant, so asking for it as the manager was refused outright —
+    // "permission denied for table products", which names no column and so
+    // never reached the fallback below. That was every approval failing with
+    // "You don't have permission to do that" (2026-09-27). lib/products-server
+    // reads the column the same way.
+    let res: { data: unknown[] | null; error: { message: string } | null } = await admin
       .from("products")
       .select("id, sku, stock_on_hand, stock_group_id")
       .in("id", productIds);
     // Before RUN-ME-18 has been run there is no group column: every product
     // is its own shelf.
     if (res.error && res.error.message.includes("stock_group_id")) {
-      res = await supabase.from("products").select("id, sku, stock_on_hand").in("id", productIds);
+      res = await admin.from("products").select("id, sku, stock_on_hand").in("id", productIds);
     }
     if (res.error) return failed("reading the shelf", res.error);
     stockRows = (res.data ?? []) as StockRow[];
@@ -138,10 +145,16 @@ export async function POST(req: NextRequest) {
 
   // One write per shelf. For a shared shelf the database copies the figure
   // to the other products in the group, so writing any one member is enough.
+  //
+  // With the server key, as /api/products/stock writes the shelf, and
+  // checked: this used to be a caller write whose result was ignored, and a
+  // write the database quietly declines reports no error — the order would
+  // have been billed with its stock still on the shelf.
   for (const [pool, left] of remainingByPool) {
     const productId = anyProductInPool.get(pool);
     if (!productId) continue;
-    await supabase.from("products").update({ stock_on_hand: left }).eq("id", productId);
+    const { error } = await admin.from("products").update({ stock_on_hand: left }).eq("id", productId);
+    if (error) return failed("taking the stock off the shelf", error);
   }
 
   // §Orders: "the customer's last-billed price for that item should be the

@@ -2947,3 +2947,20 @@ failure is now also written to the server log with the step that failed,
 because the screen shows only "You don't have permission to do that".
 Checked before the change: no product's stock moved during the failed
 attempts, and no line was cut.
+
+2026-09-27 — The real cause of approval failing: `products.stock_group_id`
+is not granted to staff — RUN-ME-4 grants `products` column by column;
+RUN-ME-18 added `stock_group_id` without a grant. Approval read it as the
+manager and got "permission denied for table products", which names no
+column, so the "before RUN-ME-18" fallback (which looks for the column name)
+never ran. Every approval on the web failed there, before any line was cut —
+confirmed after the previous fix shipped: order 4480's seven short lines were
+still uncut. The shelf is now read with the server key, as
+lib/products-server.ts reads it. The stock deduction is also written with the
+server key and its result checked — it was a caller write whose error was
+ignored, and a write RLS quietly declines reports no error, so an approval
+could have billed without deducting. /api/products/stock already writes the
+shelf this way. Rejected: a RUN-ME granting the column, which needs the owner
+to run SQL and leaves the unchecked write in place. The phone reads the same
+column but falls back to reading without it on any error, so its approval is
+not blocked (shared shelves are then not pooled there).

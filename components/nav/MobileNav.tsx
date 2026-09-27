@@ -42,7 +42,7 @@ export default function MobileNav({
   secondary: NavItem[];
 }) {
   const pathname = usePathname();
-  // Delivery pins a query on the Orders path, so path alone can no longer
+  // A destination may pin a query on a path, so path alone cannot always
   // decide which item is the one you are on.
   const searchParams = useSearchParams();
   const [moreOpen, setMoreOpen] = useState(false);

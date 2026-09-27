@@ -10,7 +10,7 @@ import {
 } from "@/lib/queries/dashboard";
 import { fetchMonthlyTargets, FALLBACK_MONTHLY_TARGET } from "@/lib/queries/targets";
 import { fetchOrders, type OrderRow } from "@/lib/queries/orders";
-import { fetchCountedStatuses } from "@/lib/reportStage";
+import { BILLED_STATUSES } from "@/lib/billedStatuses";
 import { type LeaderboardEntry } from "@/lib/queries/sales";
 import { presetToRange, SALE_RANGE_PRESETS } from "@/components/ui/DateRangePicker";
 import { formatAed, formatCompact } from "@/lib/money";
@@ -85,7 +85,7 @@ export function SalesmanDrilldown({
       const rangeMs = to.getTime() - from.getTime();
       const prevTo = new Date(from.getTime() - 1);
       const prevFrom = new Date(prevTo.getTime() - rangeMs);
-      const counted = await fetchCountedStatuses(supabase);
+      const counted = BILLED_STATUSES;
       const [tr, ptr, ords, gp] = await Promise.all([
         fetchSaleTrend(supabase, { salesmanId: entry.salesmanId, from: new Date(from), to }),
         fetchSaleTrend(supabase, { salesmanId: entry.salesmanId, from: prevFrom, to: prevTo }),

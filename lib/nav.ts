@@ -12,7 +12,6 @@ export type NavIconKey =
   | "customers"
   | "products"
   | "orders"
-  | "delivery"
   | "sales"
   | "expense"
   | "payments"
@@ -32,11 +31,6 @@ const ALL = {
   customers: { href: "/customers", label: t("nav.customers"), icon: "customers" },
   products: { href: "/products", label: t("nav.products"), icon: "products" },
   orders: { href: "/orders", label: t("nav.orders"), icon: "orders" },
-  // Delivery is a stage of Orders, not a screen of its own — this is a way to
-  // reach it directly, the way the phone's warehouse has a Delivery section
-  // (AppNavigation.WarehouseSection.delivery). The Orders page reads `stage`
-  // and opens on that stage; nothing about the stage itself changes.
-  delivery: { href: "/orders?stage=delivering", label: t("nav.delivery"), icon: "delivery" },
   sales: { href: "/sales", label: t("nav.sales"), icon: "sales" },
   expense: { href: "/expense", label: t("nav.expense"), icon: "expense" },
   payments: { href: "/payments", label: t("nav.payments"), icon: "payments" },
@@ -53,29 +47,18 @@ const ALL = {
 // this in for Salesman/Manager/Admin when a key is configured.
 export const PLANNING_NAV_ITEM: NavItem = ALL.planning;
 
-// Likewise dynamic: whether the business tracks a delivery step at all lives
-// in `app_settings.delivery_enabled` (see lib/deliveryStep.ts). Where it is
-// off, the Orders page has no Delivery stage, so the destination is dropped
-// from the nav rather than pointing at a stage that is not there.
-export const DELIVERY_NAV_ITEM: NavItem = ALL.delivery;
-
-export function withoutDelivery(items: NavItem[]): NavItem[] {
-  return items.filter((item) => item.href !== ALL.delivery.href);
-}
-
 const BY_ROLE: Record<UserRole, NavItem[]> = {
   // Customers, Payments, Invoices are accessible to every role (view/log-only
   // where the permission matrix says so) — Salesman/Warehouse just reach
   // them one tap deeper via the mobile "More" sheet / desktop sidebar rather
   // than the 4 primary tabs (see primaryNavFor/secondaryNavFor below).
   salesman: [ALL.dashboard, ALL.orders, ALL.sales, ALL.products, ALL.customers, ALL.payments, ALL.invoices, ALL.settings],
-  warehouse: [ALL.dashboard, ALL.orders, ALL.products, ALL.delivery, ALL.customers, ALL.payments, ALL.invoices, ALL.settings],
+  warehouse: [ALL.dashboard, ALL.orders, ALL.products, ALL.customers, ALL.payments, ALL.invoices, ALL.settings],
   manager: [
     ALL.dashboard,
     ALL.customers,
     ALL.products,
     ALL.orders,
-    ALL.delivery,
     ALL.sales,
     ALL.expense,
     ALL.payments,
@@ -91,7 +74,6 @@ const BY_ROLE: Record<UserRole, NavItem[]> = {
     ALL.customers,
     ALL.products,
     ALL.orders,
-    ALL.delivery,
     ALL.sales,
     ALL.expense,
     ALL.payments,
@@ -116,9 +98,9 @@ function matchesQuery(query: string, current: URLSearchParams): boolean {
 /**
  * Whether this destination is the one currently open.
  *
- * A destination can pin a query (`/orders?stage=delivering`), so the path
- * alone is no longer the whole answer: Delivery is open only when that
- * parameter is set, and plain Orders yields to it when it is, so the two
+ * A destination can pin a query (`/orders?stage=packed`, say), so the path
+ * alone is not the whole answer: such a destination is open only when that
+ * parameter is set, and the plain path yields to it when it is, so the two
  * never light up together. `items` is the list being drawn, which is where
  * those siblings are looked for.
  */

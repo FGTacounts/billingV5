@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { billingDateColumn, billedAtSelect } from "@/lib/billingDate";
 import { fetchApprovedGrvCreditByCustomer } from "@/lib/queries/grv";
-import { fetchCountedStatuses } from "@/lib/reportStage";
+import { BILLED_STATUSES } from "@/lib/billedStatuses";
 import { fetchAllForIds, fetchAllPages } from "@/lib/paging";
 
 // Reconstructs each customer's outstanding balance and aging. `orders`
@@ -57,7 +57,7 @@ export const AGING_BUCKETS = [
   { label: "365+ days", min: 366, max: Infinity },
 ] as const;
 
-// Same burst problem as fetchReportStage — cached with in-flight dedup so
+// A dashboard load asks for this from several places at once — cached with in-flight dedup so
 // several concurrent callers share one request instead of each firing their
 // own.
 let thresholdCache: { days: number; at: number } | null = null;
@@ -135,7 +135,7 @@ async function buildOutstandingInvoices(
   // falls out of every balance in the app.
   //
   // Age runs from the billing date (lib/billingDate.ts).
-  const statuses = await fetchCountedStatuses(supabase);
+  const statuses = BILLED_STATUSES;
   type OrderRow = {
     id: string;
     customer_id: string | null;
@@ -212,8 +212,8 @@ async function buildOutstandingInvoices(
   // A per-order due-date extension (§Next Updates: "the manager can extend
   // the payment threshold for a specific order too") shifts the order's
   // effective "day zero" for aging purposes — still in the future = not
-  // outstanding yet; past it, days count from there instead of from
-  // delivery.
+  // outstanding yet; past it, days count from there instead of from the
+  // billing date.
   const now = Date.now();
   const invoices = orderRows.map((o) => {
     const total = o.total ?? 0;
@@ -285,7 +285,7 @@ export interface CustomerAgingSummary {
 }
 
 // Pass includeSettled invoices (fetchOutstandingInvoices(..., true)) to get
-// totalSale/totalPaid across every delivered order, not just what's still
+// totalSale/totalPaid across every approved order, not just what's still
 // outstanding — needed for the Customers list's Sale/Payment columns (§1.6).
 export function summarizeByCustomer(
   invoices: InvoiceAging[]

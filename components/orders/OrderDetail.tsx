@@ -5,7 +5,7 @@ import { t } from "@/lib/i18n";
 import { friendlyError } from "@/lib/errors";
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Check, X, Package, Truck, FileEdit, Ban, Clock, Pencil, Search, Trash2, Undo2, RotateCcw, ChevronUp, ChevronDown } from "lucide-react";
+import { Check, X, Package, FileEdit, Ban, Clock, Pencil, Search, Trash2, Undo2, RotateCcw, ChevronUp, ChevronDown } from "lucide-react";
 import { usePreferences } from "@/lib/hooks/usePreferences";
 import { useApprovalSettings } from "@/lib/hooks/useApprovalSettings";
 import { supabaseBrowser } from "@/lib/supabase/client";
@@ -22,7 +22,6 @@ import {
   requestEdit,
   reopenOrderWithoutApproval,
   denyEditRequest,
-  startDelivering,
   cancelOrder,
   daysUntilPurge,
   type OrderRow,
@@ -1924,14 +1923,6 @@ function OrderActions({
             <FileEdit size={15} /> {approvals.orderEdits ? t("orders.requestEdit") : t("orders.reopenForEdit")}
           </Button>
         )}
-        <Button
-          tier="primary"
-          disabled={busy}
-          onClick={() => run(() => startDelivering(supabase, order.id, user.id))}
-          className="flex items-center gap-1.5"
-        >
-          <Truck size={15} /> {t("orders.sendForDelivery")}
-        </Button>
       </>
     );
   }
@@ -1964,32 +1955,6 @@ function OrderActions({
           {t("orders.grantEdit")}
         </Button>
       </>
-    );
-  }
-
-  if (order.status === "delivering" && (isWarehouse || isManager)) {
-    return (
-      <label className="px-4 py-2.5 rounded-card text-subhead transition-all bg-accent text-white font-semibold hover:bg-accent-strong active:scale-[0.97] cursor-pointer flex items-center gap-1.5">
-        <Truck size={15} /> {busy ? t("orders.confirming") : t("orders.confirmDelivered")}
-        <input
-          type="file"
-          accept="image/*"
-          capture="environment"
-          className="hidden"
-          disabled={busy}
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            run(async () => {
-              const form = new FormData();
-              form.set("orderId", order.id);
-              if (file) form.set("photo", file);
-              const res = await fetch("/api/orders/finalize-delivery", { method: "POST", body: form });
-              const data = await res.json();
-              if (!res.ok) throw new Error(data.error ?? t("orders.confirmDeliveryFailed"));
-            });
-          }}
-        />
-      </label>
     );
   }
 

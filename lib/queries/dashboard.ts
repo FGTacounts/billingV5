@@ -2,7 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { billingDateColumn, billedAtSelect } from "@/lib/billingDate";
 import type { OrderStatus } from "@/lib/types/db";
 import { fetchOutstandingInvoices, getOverdueThresholdDays } from "@/lib/queries/aging";
-import { fetchCountedStatuses } from "@/lib/reportStage";
+import { BILLED_STATUSES } from "@/lib/billedStatuses";
 import { t } from "@/lib/i18n";
 import { fetchAllForIds, fetchAllPages } from "@/lib/paging";
 
@@ -68,7 +68,7 @@ async function revenueOrders(supabase: SupabaseClient): Promise<RevenueOrder[]> 
   if (revenueInFlight) return revenueInFlight;
 
   revenueInFlight = (async () => {
-    const statuses = await fetchCountedStatuses(supabase);
+    const statuses = BILLED_STATUSES;
     const since = revenueWindowIso();
     const billed = await billingDateColumn(supabase);
     const rows = await fetchAllPages<RevenueOrder>(
@@ -111,11 +111,9 @@ function startOfMonthIso(): string {
   return new Date(d.getFullYear(), d.getMonth(), 1).toISOString();
 }
 
-// Sales figure = value of DELIVERED orders this month. `orders.total` is
+// Sales figure = value of approved (billed) orders this month. `orders.total` is
 // stored directly in this schema revision, so no item-level aggregation
-// needed. There's no delivered_at column anymore, so this uses updated_at
-// as a proxy for "when it was last moved" — imprecise if an order is
-// touched again after delivery, but there's nowhere else to read it from.
+// needed. It is dated by the billing date (lib/billingDate.ts).
 // Revenue is the SALE value, before VAT — `orders.subtotal`, not
 // `orders.total`. total includes VAT, so summing it overstated every sales
 // figure in the app by the VAT rate and understated GP% correspondingly
@@ -191,7 +189,7 @@ function fetchSafeItems(supabase: SupabaseClient, orderIds: string[]): Promise<S
   );
 }
 
-// Manager-only figure (needs unit_cost). Sums grossProfit across delivered
+// Manager-only figure (needs unit_cost). Sums grossProfit across approved
 // orders' items this month, same convention as fetchBalanceSheet in
 // reports.ts (order_items_safe exposes real cost to a Manager session).
 export async function monthToDateGrossProfit(
@@ -265,7 +263,7 @@ export interface DailyPoint {
   value: number;
 }
 
-// Daily delivered-order sale total for the trailing `days` days, oldest
+// Daily approved-order sale total for the trailing `days` days, oldest
 // first — feeds the dashboard's trend sparkline.
 export async function fetchSaleTrend(
   supabase: SupabaseClient,
@@ -308,7 +306,7 @@ export async function fetchSaleTrend(
   return points;
 }
 
-// Delivered-order sale total for a single calendar day — feeds the Sales
+// Approved-order sale total for a single calendar day — feeds the Sales
 // trend widget's day-level comparisons (§Next Updates: "% comparison vs the
 // same day last month AND same day last year", distinct from the existing
 // MoM/YoY badges which compare whole-month totals).
@@ -405,7 +403,7 @@ export async function fetchPaymentsByMonthSegmented(
 }
 
 // Trailing-12-months bucketing (optionally shifted back a further N years),
-// for delivered-order sale totals — feeds the salesman year-over-year bar
+// for approved-order sale totals — feeds the salesman year-over-year bar
 // chart and the Sales monthly detail table's "Past Year" column.
 export async function fetchSalesByMonth(
   supabase: SupabaseClient,
@@ -446,12 +444,12 @@ export interface TopCustomer {
   total: number;
 }
 
-// Top customers by delivered-order value this month.
+// Top customers by approved-order value this month.
 export async function fetchTopCustomers(
   supabase: SupabaseClient,
   opts: { salesmanId?: string; limit?: number } = {}
 ): Promise<TopCustomer[]> {
-  const statuses = await fetchCountedStatuses(supabase);
+  const statuses = BILLED_STATUSES;
   const billed = await billingDateColumn(supabase);
   type Row = { id: string; customer_id: string; subtotal: number | null; total: number | null };
   const data = await fetchAllPages<Row>(
@@ -512,7 +510,7 @@ export async function fetchPaymentsSummary(
   // One reading of what a customer owes, shared with the Customers page and
   // the statements: confirmed payments and approved returns already taken
   // off, and an order whose due date has been extended aged from the new
-  // date rather than from delivery.
+  // date rather than from the billing date.
   const [invoices, defaultDays] = await Promise.all([
     fetchOutstandingInvoices(supabase, undefined, false, opts.salesmanId),
     getOverdueThresholdDays(supabase),
@@ -546,7 +544,7 @@ export async function fetchPaymentsSummary(
   return { pendingCount, received, overdue, remaining };
 }
 
-// Delivered-order count and confirmed-payments total for an arbitrary
+// Approved-order count and confirmed-payments total for an arbitrary
 // [from, to] date range — feeds Sales' adjustable-date orders/payments
 // widgets (§Sales: "widgets of orders and payments received, adjustable
 // with date").
@@ -613,7 +611,7 @@ export interface CategorySale {
 }
 
 // §Dashboard: "add a category/product-wise sales report widget (hidden by
-// default, optional)". Revenue and units for this month's delivered orders,
+// default, optional)". Revenue and units for this month's approved orders,
 // grouped either by product category or by individual product. Uses the
 // picked qty when there is one, matching how invoices and every other sales
 // figure in the app are computed.
@@ -621,7 +619,7 @@ export async function fetchSalesByCategory(
   supabase: SupabaseClient,
   opts: { groupBy?: "category" | "product"; salesmanId?: string; limit?: number } = {}
 ): Promise<CategorySale[]> {
-  const statuses = await fetchCountedStatuses(supabase);
+  const statuses = BILLED_STATUSES;
   const billed = await billingDateColumn(supabase);
   const orders = await fetchAllPages<{ id: string }>(
     (from, to) => {

@@ -1,7 +1,6 @@
 "use client";
 
 import { toast } from "@/lib/toast";
-import { DELIVERY_STEP_DEFAULT, setDeliveryEnabled } from "@/lib/deliveryStep";
 import {
   APPROVALS_DEFAULT,
   approvalSettingsSupported,
@@ -23,12 +22,6 @@ import { useAvatar, refreshAvatar, initialsOf } from "@/lib/hooks/useAvatar";
 import { useDisplayCurrency } from "@/lib/hooks/useDisplayCurrency";
 import { SUPPORTED_CURRENCIES, type CurrencyCode } from "@/lib/currency";
 import { DEFAULT_NAV_KEYS } from "@/lib/hooks/useNavShortcuts";
-import {
-  REPORT_STAGE_OPTIONS,
-  DEFAULT_REPORT_STAGE,
-  invalidateReportStageCache,
-  type ReportStage,
-} from "@/lib/reportStage";
 import { ACCENT_THEMES, findAccentTheme, applyAccentTheme } from "@/lib/accentThemes";
 import {
   fetchZones,
@@ -234,8 +227,6 @@ function GeneralTab({ isManager, role }: { isManager: boolean; role: AppUser["ro
         </p>
       </div>
 
-      {isManager && <ReportStageSection />}
-      {isManager && <DeliveryStepSection />}
       {role === "admin" && <ApprovalsSection />}
       <BottomBarSection role={role} />
       {isManager && <OverdueThresholdSection />}
@@ -360,89 +351,6 @@ function OverdueThresholdSection() {
       </div>
       <p className="text-caption text-secondary mt-2">
         {t("settings.overdueThresholdHint")}
-      </p>
-    </div>
-  );
-}
-
-// §Global: "Admin can adjust at what point of the order/payment flow orders
-// affect reports." Applies app-wide (dashboard totals, sales, aging,
-// statements, product insights) — they all read the same threshold.
-function ReportStageSection() {
-  const [stage, setStage] = useState<ReportStage | null>(null);
-  const [unsupported, setUnsupported] = useState(false);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    supabaseBrowser()
-      .from("app_settings")
-      .select("reports_from_status")
-      .limit(1)
-      .maybeSingle()
-      .then(({ data, error }) => {
-        if (error) { setUnsupported(true); return; }
-        setStage((data?.reports_from_status as ReportStage) ?? DEFAULT_REPORT_STAGE);
-      });
-  }, []);
-
-  async function save(next: ReportStage) {
-    setSaving(true);
-    const prev = stage;
-    setStage(next);
-    const supabase = supabaseBrowser();
-    const { data: row } = await supabase.from("app_settings").select("id").limit(1).maybeSingle();
-    const { error } = await supabase
-      .from("app_settings")
-      .update({ reports_from_status: next })
-      .eq("id", row?.id ?? 1);
-    if (error) {
-      setStage(prev);
-      toast.error(t("settings.reportStageUnavailable"));
-    } else {
-      invalidateReportStageCache();
-    }
-    setSaving(false);
-  }
-
-  if (unsupported) {
-    return (
-      <div>
-        <Label>{t("settings.reportStage")}</Label>
-        <p className="text-caption text-secondary">
-          {t("settings.reportStageUnsupported")}
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <div>
-      <Label>{t("settings.reportStage")}</Label>
-      <div className="flex flex-col gap-2">
-        {REPORT_STAGE_OPTIONS.map((opt) => (
-          <label
-            key={opt.value}
-            className={`flex items-start gap-2.5 px-3.5 py-2.5 rounded-card border cursor-pointer transition-colors ${
-              stage === opt.value ? "border-accent bg-accent/[0.06]" : "border-hairline"
-            }`}
-          >
-            <input
-              type="radio"
-              name="report-stage"
-              className="mt-1"
-              checked={stage === opt.value}
-              disabled={saving || stage === null}
-              onChange={() => save(opt.value)}
-            />
-            <span>
-              <span className="text-subhead font-medium block">{opt.label}</span>
-              <span className="text-caption text-secondary">{opt.hint}</span>
-            </span>
-          </label>
-        ))}
-      </div>
-      <p className="text-caption text-secondary mt-2">
-        {t("settings.reportStageHint")}
       </p>
     </div>
   );
@@ -1662,77 +1570,6 @@ function AccountTab({ user }: { user: AppUser }) {
         <Label>{t("settings.session")}</Label>
         <Button tier="danger" onClick={logout}>{t("settings.logOut")}</Button>
       </div>
-    </div>
-  );
-}
-
-// Whether the business uses a delivery step at all.
-//
-// Some operations hand goods over when the invoice is raised and never track a
-// separate delivery; for them the warehouse's Delivery tab is dead weight and
-// its proof photos are ceremony. One answer, set by the manager, followed
-// everywhere.
-function DeliveryStepSection() {
-  const [enabled, setEnabled] = useState(DELIVERY_STEP_DEFAULT);
-  const [unsupported, setUnsupported] = useState(false);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    const supabase = supabaseBrowser();
-    supabase
-      .from("app_settings")
-      .select("delivery_enabled")
-      .limit(1)
-      .maybeSingle()
-      .then(({ data, error }) => {
-        if (error) { setUnsupported(true); return; }
-        setEnabled((data?.delivery_enabled as boolean | null) ?? DELIVERY_STEP_DEFAULT);
-      });
-  }, []);
-
-  async function save(next: boolean) {
-    setSaving(true);
-    const prev = enabled;
-    setEnabled(next); // Optimistic, rolled back below if it does not take.
-    const result = await setDeliveryEnabled(supabaseBrowser(), next);
-    if (!result.ok) {
-      setEnabled(prev);
-      toast.error(result.error ?? t("settings.couldntSaveThat"));
-    } else {
-      toast.success(next ? t("settings.deliveryStepOn") : t("settings.deliveryStepOff"));
-    }
-    setSaving(false);
-  }
-
-  if (unsupported) {
-    return (
-      <div>
-        <Label>{t("nav.delivery")}</Label>
-        <p className="text-caption text-secondary">
-          {t("settings.deliveryUnsupported")}
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <div>
-      <Label>{t("nav.delivery")}</Label>
-      <label className="flex items-start gap-3 cursor-pointer">
-        <input
-          type="checkbox"
-          checked={enabled}
-          disabled={saving}
-          onChange={(e) => save(e.target.checked)}
-          className="mt-0.5"
-        />
-        <span>
-          <span className="block text-subhead font-semibold">{t("settings.trackDeliveries")}</span>
-          <span className="block text-caption text-secondary mt-1">
-            {t("settings.trackDeliveriesHint")}
-          </span>
-        </span>
-      </label>
     </div>
   );
 }

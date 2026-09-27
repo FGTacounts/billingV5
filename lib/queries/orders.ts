@@ -197,7 +197,7 @@ export interface OrderPage {
 
 // Real keyset pagination (§0.4/§0.7 — the v1 Sheets bug was exactly "load
 // everything, get slow under load"), used for the unbounded historical
-// buckets (Manager's Delivered list, Salesman/Warehouse's Past Orders) —
+// buckets (Manager's Approved list, Salesman/Warehouse's Past Orders) —
 // the live pipeline buckets (Pending/Waiting/Picking/…) stay on the
 // full-fetch fetchOrders() above since WIP is naturally small and those
 // views need cross-bucket counts, not a single page.
@@ -696,32 +696,6 @@ export async function reopenOrderWithoutApproval(supabase: SupabaseClient, order
 export async function denyEditRequest(supabase: SupabaseClient, orderId: string, actorId: string) {
   await updateOrderStatus(supabase, orderId, "approved");
   await logStatus(supabase, orderId, actorId);
-}
-
-export async function startDelivering(supabase: SupabaseClient, orderId: string, actorId: string) {
-  await updateOrderStatus(supabase, orderId, "delivering");
-  await logStatus(supabase, orderId, actorId);
-  await notifySalesman(
-    supabase,
-    orderId,
-    actorId,
-    "order_delivering",
-    (r) => t("orders.notifOutForDelivery", { invoice: r.invoice }),
-    (r) => (r.customerName ? t("orders.notifOnItsWayTo", { name: r.customerName }) : "")
-  );
-}
-
-export async function confirmDelivery(supabase: SupabaseClient, orderId: string, actorId: string) {
-  await updateOrderStatus(supabase, orderId, "delivered");
-  await logStatus(supabase, orderId, actorId);
-  await notifySalesman(
-    supabase,
-    orderId,
-    actorId,
-    "order_delivered",
-    (r) => t("orders.notifDelivered", { invoice: r.invoice }),
-    (r) => (r.customerName ? t("orders.notifCustomerReceived", { name: r.customerName }) : "")
-  );
 }
 
 export async function cancelOrder(supabase: SupabaseClient, orderId: string, actorId: string) {

@@ -7,6 +7,7 @@ import { buildInvoicePdf } from "@/lib/pdf/invoice";
 import { invoiceFileBase } from "@/lib/invoice-template";
 import { fetchProductsServer } from "@/lib/products-server";
 import { fetchAllPages } from "@/lib/paging";
+import { BILLED_STATUSES } from "@/lib/billedStatuses";
 import { scanOrderImage, scanArticlesDoc, type ScannedArticle } from "@/lib/ai-scan";
 
 /**
@@ -37,11 +38,11 @@ export function roleAllowsJob(kind: JobKind, user: AppUser): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// invoices.zip — every delivered order's Tax Invoice
+// invoices.zip — every approved order's Tax Invoice
 // ---------------------------------------------------------------------------
 
 // Unchanged from the handler this replaces: the export is the most recent 200
-// delivered orders.
+// approved orders.
 export const MAX_INVOICE_ORDERS = 200;
 
 // How many PDFs one worker request builds before handing the job back to the
@@ -60,13 +61,13 @@ export interface InvoiceFile {
  * The orders this export covers, resolved once and then held on the job.
  *
  * Fixing the list up front is what makes the slices add up: an order
- * delivered while the export is halfway through does not shuffle the ones
+ * approved while the export is halfway through does not shuffle the ones
  * behind it into being built twice or not at all.
  */
 export async function planInvoiceExport(db: SupabaseClient): Promise<string[]> {
-  const orders = await fetchOrders(db, { status: ["delivered"], limit: MAX_INVOICE_ORDERS });
+  const orders = await fetchOrders(db, { status: BILLED_STATUSES, limit: MAX_INVOICE_ORDERS });
   if (orders.length === 0) {
-    throw new JobInputError("No delivered invoices to export.", 404);
+    throw new JobInputError("No approved invoices to export.", 404);
   }
   return orders.map((o) => o.id);
 }
@@ -90,7 +91,7 @@ export async function buildInvoiceSlice(
 
   // fetchOrders is one query and gives the customer and salesman joins the
   // invoice layout needs; the ids decide which of them this slice is for.
-  const all = await fetchOrders(db, { status: ["delivered"], limit: MAX_INVOICE_ORDERS });
+  const all = await fetchOrders(db, { status: BILLED_STATUSES, limit: MAX_INVOICE_ORDERS });
   const byId = new Map(all.map((o) => [o.id, o]));
 
   const taken = new Set(usedNames);
@@ -98,7 +99,7 @@ export async function buildInvoiceSlice(
 
   for (const id of orderIds) {
     const order = byId.get(id);
-    // An order that has left `delivered` since the export was planned is no
+    // An order that is no longer approved since the export was planned is no
     // longer an invoice to hand over. Skipped, not failed.
     if (!order) continue;
 

@@ -7,6 +7,7 @@ import { useEffect, useState, useMemo } from "react";
 import { FileBadge, Download, Search } from "lucide-react";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { fetchOrders, type OrderRow } from "@/lib/queries/orders";
+import { BILLED_STATUSES } from "@/lib/billedStatuses";
 import { EmptyState, SkeletonList } from "@/components/ui/Empty";
 import { runQueuedJob, type JobProgress } from "@/lib/jobs-client";
 import Sheet from "@/components/ui/Sheet";
@@ -25,7 +26,7 @@ export default function InvoicesView({ isManager }: { isManager: boolean }) {
   const [sortKey, setSortKey] = useState<SortKey>("newest");
 
   useEffect(() => {
-    fetchOrders(supabaseBrowser(), { status: ["delivered"], limit: 500 }).then((rows) => {
+    fetchOrders(supabaseBrowser(), { status: BILLED_STATUSES, limit: 500 }).then((rows) => {
       setOrders(rows);
       setLoading(false);
     });
@@ -198,7 +199,7 @@ export default function InvoicesView({ isManager }: { isManager: boolean }) {
                   })}
                 </div>
                 <div className="text-caption text-secondary">
-                  {t("invoices.deliveredOn", { date: new Date(o.billed_at ?? o.updated_at).toLocaleDateString() })}
+                  {t("invoices.billedOn", { date: new Date(o.billed_at ?? o.updated_at).toLocaleDateString() })}
                 </div>
               </div>
               <a
@@ -235,89 +236,9 @@ export default function InvoicesView({ isManager }: { isManager: boolean }) {
             >
               {t("invoices.viewTaxInvoicePdf")}
             </a>
-
-            <DeliveryProof invoiceNumber={viewing.invoice_number ?? null} />
           </div>
         </Sheet>
       )}
-    </div>
-  );
-}
-
-
-/**
- * Photos taken when the order was handed over.
- *
- * Fetched only when asked for rather than on opening the invoice: it is a
- * round trip to Drive, and most of the time somebody opening an invoice wants
- * the PDF.
- */
-function DeliveryProof({ invoiceNumber }: { invoiceNumber: string | null }) {
-  const [state, setState] = useState<"idle" | "loading" | "done">("idle");
-  const [files, setFiles] = useState<
-    { id: string; name: string; webViewLink: string; thumbnailLink: string | null }[]
-  >([]);
-
-  if (!invoiceNumber) return null;
-
-  async function look() {
-    setState("loading");
-    try {
-      const res = await fetch(`/api/orders/delivery-proof?invoiceNumber=${encodeURIComponent(invoiceNumber!)}`);
-      const data = await res.json();
-      setFiles(data.files ?? []);
-    } catch {
-      setFiles([]);
-    }
-    setState("done");
-  }
-
-  if (state === "idle") {
-    return (
-      <button onClick={look} className="text-subhead font-semibold text-secondary hover:text-accent">
-        {t("invoices.checkDeliveryProof")}
-      </button>
-    );
-  }
-
-  if (state === "loading") {
-    return <span className="text-subhead text-secondary">{t("invoices.looking")}</span>;
-  }
-
-  if (files.length === 0) {
-    return (
-      <span className="text-caption text-secondary text-center max-w-[36ch]">
-        {t("invoices.noProofPhotos")}
-      </span>
-    );
-  }
-
-  return (
-    <div className="w-full">
-      <div className="text-caption text-secondary mb-2 text-center">
-        {files.length === 1 ? t("invoices.onePhoto") : t("invoices.nPhotos", { n: files.length })} {t("invoices.fromThisDelivery")}
-      </div>
-      <div className="flex flex-wrap gap-3 justify-center">
-        {files.map((f) => (
-          <a
-            key={f.id}
-            href={f.webViewLink}
-            target="_blank"
-            rel="noreferrer"
-            className="block rounded-card overflow-hidden border border-hairline hover:border-accent/50 transition-colors"
-            title={f.name}
-          >
-            {f.thumbnailLink ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={f.thumbnailLink} alt={f.name} className="w-28 h-28 object-cover" />
-            ) : (
-              <span className="w-28 h-28 grid place-items-center text-caption text-secondary px-2 text-center">
-                {f.name}
-              </span>
-            )}
-          </a>
-        ))}
-      </div>
     </div>
   );
 }

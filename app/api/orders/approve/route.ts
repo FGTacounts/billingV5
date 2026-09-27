@@ -46,9 +46,12 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // No unit_cost here: staff logins, managers included, are not granted that
+  // column (RUN-ME-4), and asking for it makes the database refuse the whole
+  // read — which was every approval failing with "no permission".
   const { data: items, error: itemsErr } = await supabase
     .from("order_items")
-    .select("id, product_id, unit_price, unit_cost, ordered_qty, picked_qty")
+    .select("id, product_id, unit_price, ordered_qty, picked_qty")
     .eq("order_id", orderId)
     .order("id");
   if (itemsErr) return NextResponse.json({ error: itemsErr.message }, { status: 500 });

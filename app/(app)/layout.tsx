@@ -1,8 +1,6 @@
 import { redirect } from "next/navigation";
 import { getAppUser } from "@/lib/auth";
-import { navFor, primaryNavFor, secondaryNavFor, withoutDelivery, PLANNING_NAV_ITEM } from "@/lib/nav";
-import { fetchDeliveryEnabled } from "@/lib/deliveryStep";
-import { supabaseServer } from "@/lib/supabase/server";
+import { navFor, primaryNavFor, secondaryNavFor, PLANNING_NAV_ITEM } from "@/lib/nav";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { appleMapsConfigured } from "@/lib/apple-maps";
 import Sidebar from "@/components/nav/Sidebar";
@@ -38,15 +36,9 @@ export default async function AppLayout({
   // Spread into new arrays — navFor()/secondaryNavFor() return references
   // into the module-level BY_ROLE map, and mutating those would leak across
   // every subsequent request in this process.
-  // Where the business hands the goods over at approval, Orders has no
-  // Delivery stage, so the destination that opens it is dropped rather than
-  // left pointing at a stage that is not there.
-  const deliveryEnabled = await fetchDeliveryEnabled(supabaseServer());
-  const items = deliveryEnabled ? [...navFor(user.role)] : withoutDelivery(navFor(user.role));
+  const items = [...navFor(user.role)];
   const primary = primaryNavFor(user.role);
-  const secondary = deliveryEnabled
-    ? [...secondaryNavFor(user.role)]
-    : withoutDelivery(secondaryNavFor(user.role));
+  const secondary = [...secondaryNavFor(user.role)];
   if (mapsConfigured) {
     items.push(PLANNING_NAV_ITEM);
     secondary.push(PLANNING_NAV_ITEM);

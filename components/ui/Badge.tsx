@@ -57,7 +57,9 @@ const ORDER_STATUS_TONE: Record<OrderStatus, Tone> = {
   packed: "info",
   approved: "accent",
   edit_requested: "info",
-  delivering: "info",
+  // There is no delivery step any more (2026-09-27). Orders from before it
+  // was removed still carry these two, and read as what they are now: approved.
+  delivering: "accent",
   delivered: "accent",
   cancelled: "neutral",
 };
@@ -72,8 +74,8 @@ const ORDER_STATUS_LABEL: Record<OrderStatus, string> = {
   packed: t("ui.orderStatusPacked"),
   approved: t("ui.orderStatusApproved"),
   edit_requested: t("ui.orderStatusEditRequested"),
-  delivering: t("ui.orderStatusDelivering"),
-  delivered: t("ui.orderStatusDelivered"),
+  delivering: t("ui.orderStatusApproved"),
+  delivered: t("ui.orderStatusApproved"),
   cancelled: t("ui.orderStatusCancelled"),
 };
 

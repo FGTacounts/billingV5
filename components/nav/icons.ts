@@ -12,7 +12,6 @@ import {
   PieChart,
   Settings,
   Route,
-  Truck,
   type LucideIcon,
 } from "lucide-react";
 import type { NavIconKey } from "@/lib/nav";
@@ -22,7 +21,6 @@ export const NAV_ICONS: Record<NavIconKey, LucideIcon> = {
   customers: Users,
   products: Package,
   orders: FileText,
-  delivery: Truck,
   sales: BarChart3,
   expense: CreditCard,
   payments: Banknote,

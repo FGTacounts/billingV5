@@ -17,8 +17,8 @@ const STORAGE_KEY = "fgt-sidebar-collapsed";
 
 export default function Sidebar({ items }: { items: NavItem[] }) {
   const pathname = usePathname();
-  // One destination pins a query (Delivery is Orders on its delivering
-  // stage), so the highlight is decided from the path and the query together.
+  // A destination may pin a query, so the highlight is decided from the path
+  // and the query together.
   const searchParams = useSearchParams();
   // Opt-in "g then <key>" navigation shortcuts (§Global). Lives here because
   // the sidebar already receives this user's role-filtered nav list, so a

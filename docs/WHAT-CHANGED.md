@@ -1,5 +1,39 @@
 # What changed, and what you need to do
 
+## 2026-09-27 — Approving works again, and there is no delivery step
+
+Nothing to run in Supabase. The web needs a deploy and the phone a new build.
+
+**Approving.** On the web, no manager or admin could approve an order. They
+got "You don't have permission to do that." The approve step asked the
+database for the order lines' cost price, which staff logins are not allowed
+to see, so the database refused the whole request. It no longer asks. The
+failed attempts changed nothing: no stock moved and no invoice number was
+used. The phone was not affected.
+
+**No more delivery.** Approved is now the last stage of an order. Gone, on
+the web and the phone: the Delivery tab and screen, "Send for delivery",
+"Confirm delivered", delivery proof photos, and the Settings switch that
+turned delivery on and off.
+
+What that changes:
+- Every sales figure (dashboard, sales, aging, statements, product history)
+  counts an order from the moment it is approved. The Settings choice
+  "Reports count an order from…" is gone, because approved is the only
+  stage left. If it was set to "When delivered", approved orders that were
+  never marked delivered now count too.
+- Invoices, the bulk invoice download and customer statements list approved
+  orders. Before, they listed only delivered ones.
+- Orders: the warehouse stages are Waiting / Picking / Packed. Approved
+  orders move out of the working list into the "Approved" list (it used to
+  be called "Delivered").
+- Old orders marked delivering or delivered are left as they are in the
+  database, and are shown and counted as Approved.
+- Delivery photos already in Google Drive stay there. The app no longer
+  shows them.
+
+---
+
 ## 2026-09-26 — Order discounts, and how order lines are sorted
 
 Nothing to run in Supabase. The web needs a deploy and the phone a new build.

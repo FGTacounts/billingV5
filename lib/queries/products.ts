@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Product } from "@/lib/types/db";
-import { fetchCountedStatuses } from "@/lib/reportStage";
+import { BILLED_STATUSES } from "@/lib/billedStatuses";
 import { t } from "@/lib/i18n";
 
 // Routed through /api/products (service-role) rather than a direct client
@@ -111,12 +111,12 @@ export interface ProductInsight {
   vacChina: number | null; // china cost (¥), pre-landing, most recent purchase
   sad: number | null; // days since that most recent GRN
   avgMonthlySold: number; // avg units sold/month over the lookback window
-  sold90d: number; // raw units sold in the lookback window (delivered orders) — field name kept for the 90d default, actual window is whatever `days` was passed
+  sold90d: number; // raw units sold in the lookback window (approved orders) — field name kept for the 90d default, actual window is whatever `days` was passed
   sale90d: number; // revenue in the lookback window (sum of unit_price * qty)
 }
 
 // Manager-only expanded-row figures (§1.7). Real underlying data (purchases,
-// delivered order_items), not fabricated — SAD/VAC come from the most
+// approved order_items), not fabricated — SAD/VAC come from the most
 // recent GRN per product; SHD (stock ÷ avg monthly sale) is left for the
 // caller to compute once it also has stock_on_hand. `days` is the Sale/Sold
 // lookback window (§Products: "Adjust View columns need date/time range
@@ -146,7 +146,7 @@ export async function fetchProductInsights(
   const { data: recentOrders } = await supabase
     .from("orders")
     .select("id")
-    .in("status", await fetchCountedStatuses(supabase))
+    .in("status", BILLED_STATUSES)
     .gte("updated_at", windowStart.toISOString());
   const orderIds = (recentOrders ?? []).map((o) => o.id);
 
@@ -193,7 +193,7 @@ export interface LastSoldPrice {
 
 // §Products: "the product clicked should show what was the last time's
 // price" — the most recent price this product was actually billed at,
-// across any customer's approved/delivered order (distinct from the
+// across any customer's approved order (distinct from the
 // per-customer sticky price in customer_prices, which NewOrderSheet uses).
 export async function fetchLastSoldPrice(
   supabase: SupabaseClient,
@@ -212,7 +212,7 @@ export async function fetchLastSoldPrice(
     .from("orders")
     .select("id, customer_id, updated_at, status")
     .in("id", orderIds)
-    .in("status", ["approved", "delivered"])
+    .in("status", BILLED_STATUSES)
     .order("updated_at", { ascending: false })
     .limit(1);
   const latest = orders?.[0];

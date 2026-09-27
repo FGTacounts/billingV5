@@ -30,7 +30,7 @@ import PageFooterActions from "@/components/ui/PageFooterActions";
 import { Card } from "@/components/ui/Card";
 import { RingProgress } from "@/components/ui/charts";
 import ScrollAwayTabs from "@/components/ui/ScrollAwayTabs";
-import { fetchDeliveryEnabled } from "@/lib/deliveryStep";
+import { BILLED_STATUSES } from "@/lib/billedStatuses";
 import { EmptyState, SkeletonList } from "@/components/ui/Empty";
 import { StaggerList } from "@/components/ui/StaggerList";
 import { OrderStatusPill, Pill } from "@/components/ui/Badge";
@@ -152,21 +152,18 @@ const PIPELINE: OrderStatus[] = [
   "waiting",
   "picking",
   "packed",
-  "approved",
   "edit_requested",
-  "delivering",
 ];
 
-// §Orders summary mockup: Warehouse is a single block whose four stages sit
-// inline as pills inside it (Waiting / Picking / Packed / Delivering) —
-// picking a stage IS the navigation, so there's no separate "Delivery"
-// button on this page and no second sub-nav row underneath. The nav's
-// Delivery destination adds nothing here either — it is a link that opens
-// this page on the stage below.
-const WAREHOUSE_STAGES = ["waiting", "picking", "packed", "delivering"] as const;
+// §Orders summary mockup: Warehouse is a single block whose stages sit
+// inline as pills inside it (Waiting / Picking / Packed) — picking a stage IS
+// the navigation, so there's no second sub-nav row underneath. The
+// warehouse's part ends at Packed: approval makes the order an invoice, and
+// there is no delivery step after it (owner, 2026-09-27).
+const WAREHOUSE_STAGES = ["waiting", "picking", "packed"] as const;
 type WarehouseStage = (typeof WAREHOUSE_STAGES)[number];
 
-// The stage a link can ask this page to open on (`?stage=delivering`).
+// The stage a link can ask this page to open on (`?stage=packed`).
 // Anything the parameter holds that is not a stage is ignored.
 function stageFromParam(value: string | null): WarehouseStage | null {
   return WAREHOUSE_STAGES.includes(value as WarehouseStage) ? (value as WarehouseStage) : null;
@@ -175,10 +172,6 @@ const WAREHOUSE_STAGE_LABEL: Record<WarehouseStage, string> = {
   waiting: t("orders.stageWaiting"),
   picking: t("orders.stagePicking"),
   packed: t("orders.stagePacked"),
-  // Everything the manager has approved sits here until it is confirmed
-  // delivered, so this is the warehouse's round for the day rather than only
-  // the orders already out.
-  delivering: t("nav.delivery"),
 };
 
 export default function OrdersView({ user }: { user: AppUser }) {
@@ -199,7 +192,7 @@ export default function OrdersView({ user }: { user: AppUser }) {
   const activeOrderColumns = (preferences.ordersColumns as OrderColumnKey[] | undefined) ?? [];
   // Manager's Orders/New Orders/Warehouse switcher (§1.3) — the other roles
   // keep their existing bucketed views untouched.
-  // A stage asked for in the URL (the nav's Delivery destination) opens on it.
+  // A stage asked for in the URL opens on it.
   const searchParams = useSearchParams();
   const requestedStage = stageFromParam(searchParams.get("stage"));
   const [managerView, setManagerView] = useState<"new" | "warehouse" | "all">(
@@ -238,14 +231,14 @@ export default function OrdersView({ user }: { user: AppUser }) {
   }
 
   // WIP pipeline is naturally small/bounded (this is the fetch), unlike the
-  // Delivered / Past-Orders archives which grow forever — those go through
+  // Approved / Past-Orders archives which grow forever — those go through
   // <PaginatedOrderSection> (real cursor pagination, §0.4/§0.7) below
   // instead of being pulled into this array.
   const load = useCallback(async () => {
     const supabase = supabaseBrowser();
     const salesmanId = user.role === "salesman" ? user.id : undefined;
     const [rows, count, mCount] = await Promise.all([
-      fetchOrders(supabase, { salesmanId, excludeStatus: ["delivered"], limit: 300 }),
+      fetchOrders(supabase, { salesmanId, excludeStatus: BILLED_STATUSES, limit: 300 }),
       countOrders(supabase, { salesmanId }),
       countOrdersThisMonth(supabase, salesmanId),
     ]);
@@ -292,7 +285,7 @@ export default function OrdersView({ user }: { user: AppUser }) {
   interface Sections {
     drafts?: OrderRow[];
     pending?: OrderRow[];
-    past?: OrderRow[]; // WIP-only ("past" minus delivered — delivered is paginated separately below)
+    past?: OrderRow[]; // WIP-only — approved orders are paginated separately below
     rejected?: OrderRow[];
     queue?: OrderRow[];
     pipeline?: OrderRow[];
@@ -332,9 +325,7 @@ export default function OrdersView({ user }: { user: AppUser }) {
     }
     if (user.role === "warehouse") {
       return {
-        queue: searchedOrders.filter(
-          (o) => PIPELINE.includes(o.status) || o.status === "delivering"
-        ),
+        queue: searchedOrders.filter((o) => PIPELINE.includes(o.status)),
       };
     }
     // manager, "all" sub-tab
@@ -345,7 +336,7 @@ export default function OrdersView({ user }: { user: AppUser }) {
       rejected: filtered.filter((o) => o.status === "rejected"),
       other: filtered.filter(
         (o) =>
-          !["pending", "rejected", "delivered", "draft"].includes(o.status) &&
+          !["pending", "rejected", "draft", ...BILLED_STATUSES].includes(o.status) &&
           !PIPELINE.includes(o.status)
       ),
     };
@@ -360,7 +351,6 @@ export default function OrdersView({ user }: { user: AppUser }) {
       waiting: orders.filter((o) => ["waiting", "accepted"].includes(o.status)).length,
       picking: count("picking"),
       packed: count("packed"),
-      delivering: count("delivering"),
     } satisfies Record<WarehouseStage, number>;
     return {
       newOrders: count("pending"),
@@ -378,32 +368,11 @@ export default function OrdersView({ user }: { user: AppUser }) {
   const isWarehouse = user.role === "warehouse";
   const showsWarehouseStages = isWarehouse;
 
-  // Whether this business tracks deliveries at all. Starts true so the tab is
-  // not missing on first paint for the businesses that do use it.
-  const [deliveryEnabled, setDeliveryEnabled] = useState(true);
-  useEffect(() => {
-    fetchDeliveryEnabled(supabaseBrowser()).then(setDeliveryEnabled).catch(() => {});
-  }, []);
-  const stages = useMemo(
-    () => (deliveryEnabled ? WAREHOUSE_STAGES : WAREHOUSE_STAGES.filter((st) => st !== "delivering")),
-    [deliveryEnabled]
-  );
-
-  // If delivery is switched off while that tab is open, fall back rather than
-  // showing an empty tab that no longer has a button.
-  useEffect(() => {
-    if (!deliveryEnabled && warehouseStage === "delivering") setWarehouseStage("packed");
-  }, [deliveryEnabled, warehouseStage]);
   const warehouseRows = useMemo(() => {
     if (!isManager && !showsWarehouseStages) return [];
     // "Accepted" is an order that has reached the warehouse but nobody has
     // picked yet, so it belongs under Waiting rather than in a stage of its own.
     if (warehouseStage === "waiting") return searchedOrders.filter((o) => ["waiting", "accepted"].includes(o.status));
-    // An approved order has not left yet but is the warehouse's to take out,
-    // so Delivery holds both it and anything already on the road.
-    if (warehouseStage === "delivering") {
-      return searchedOrders.filter((o) => ["approved", "delivering"].includes(o.status));
-    }
     return searchedOrders.filter((o) => o.status === warehouseStage);
   }, [searchedOrders, isManager, showsWarehouseStages, warehouseStage]);
 
@@ -413,9 +382,6 @@ export default function OrdersView({ user }: { user: AppUser }) {
     const count = (stage: WarehouseStage) => {
       if (stage === "waiting") {
         return searchedOrders.filter((o) => ["waiting", "accepted"].includes(o.status)).length;
-      }
-      if (stage === "delivering") {
-        return searchedOrders.filter((o) => ["approved", "delivering"].includes(o.status)).length;
       }
       return searchedOrders.filter((o) => o.status === stage).length;
     };
@@ -546,7 +512,7 @@ export default function OrdersView({ user }: { user: AppUser }) {
                     <span className="text-caption text-secondary tabular-nums">{switcherStats.warehouseCount}</span>
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
-                    {stages.map((stage) => {
+                    {WAREHOUSE_STAGES.map((stage) => {
                       const isActive = managerView === "warehouse" && warehouseStage === stage;
                       return (
                         <button
@@ -590,7 +556,7 @@ export default function OrdersView({ user }: { user: AppUser }) {
       {showsWarehouseStages && (
         <>
           <div className="flex items-center gap-2 flex-wrap mb-4">
-            {stages.map((stage) => {
+            {WAREHOUSE_STAGES.map((stage) => {
               const isActive = warehouseStage === stage;
               return (
                 <button
@@ -641,7 +607,7 @@ export default function OrdersView({ user }: { user: AppUser }) {
                 onChange={(e) => setStatusFilter(e.target.value)}
               >
                 <option value="">{t("orders.allStatuses")}</option>
-                {["pending", "waiting", "picking", "packed", "approved", "edit_requested", "delivering", "delivered", "rejected", "cancelled"].map(
+                {["pending", "waiting", "picking", "packed", "approved", "edit_requested", "rejected", "cancelled"].map(
                   (s) => (
                     <option key={s} value={s}>{s}</option>
                   )
@@ -687,7 +653,7 @@ export default function OrdersView({ user }: { user: AppUser }) {
           {user.role === "salesman" && (
             <PaginatedOrderSection
               title={sections.past && sections.past.length > 0 ? undefined : t("orders.past")}
-              statusOnly={["delivered"]}
+              statusOnly={BILLED_STATUSES}
               salesmanId={user.id}
               onOpen={setOpenId}
               refreshKey={refreshKey}
@@ -695,10 +661,10 @@ export default function OrdersView({ user }: { user: AppUser }) {
               sort={sort}
             />
           )}
-          {isManager && (!statusFilter || statusFilter === "delivered") && (
+          {isManager && (!statusFilter || statusFilter === "approved") && (
             <PaginatedOrderSection
-              title={t("orders.delivered")}
-              statusOnly={["delivered"]}
+              title={t("orders.approved")}
+              statusOnly={BILLED_STATUSES}
               onOpen={setOpenId}
               refreshKey={refreshKey}
               search={search}
@@ -963,7 +929,7 @@ function Section({
 }
 
 // Real cursor pagination (§0.4/§0.7) for the unbounded historical buckets —
-// Manager's Delivered list and Salesman's Past-Orders archive — instead of
+// Manager's Approved list and Salesman's Past-Orders archive — instead of
 // pulling them into the same bounded fetch as the live WIP pipeline.
 function PaginatedOrderSection({
   title,

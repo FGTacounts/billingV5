@@ -2867,3 +2867,67 @@ Download" section's switch, `settings.separateMarked` (AppStorage, and its
 PreferencesSync mirror), and the Excel exporter's `separateMarked`
 parameter. A value already saved in a user's preferences is left in place and
 simply never read.
+
+## 2026-09-26 — Approving an order was refused for everyone
+
+2026-09-26 — /api/orders/approve no longer asks for `order_items.unit_cost`
+— Owner: "admins nor managers can approve orders after being packed", toast
+"You don't have permission to do that." The route read the order's lines
+with `unit_cost` in the column list, directly from `order_items`. Staff logins
+are not granted that column (RUN-ME-4), and Postgres refuses the whole select
+("permission denied for table order_items") rather than leaving the column
+out — the same trap as the phone's picking writes (2026-09-21). The route never
+used the figure; cost is snapshotted at order creation. The refusal came
+before any write, so failed attempts moved no stock and issued no number. The
+phone approves through its own code, which reads `order_items_safe`, and was
+not affected — Rejected: granting `unit_cost` back, which would undo the reason
+cost is hidden (docs/why-cost-prices-are-hidden.md).
+
+## 2026-09-27 — The delivery step is removed
+
+2026-09-27 — Approved is the last stage of an order; there is no delivery
+— Owner: "remove the whole idea of 'delivery'", then chose "delete it from
+both apps" over switching off the existing `app_settings.delivery_enabled`
+and over also rewriting old orders. Removed from the web: the Delivery nav
+destination, the Delivering warehouse stage, "Send for delivery" / "Confirm
+delivered", /api/orders/finalize-delivery, /api/orders/delivery-proof, the
+Invoices screen's delivery-proof lookup, lib/deliveryStep.ts and its Settings
+section. The phone mirrors it.
+
+2026-09-27 — The database is not changed — `delivering` and `delivered` stay
+in the order status enum and on the orders that carry them; the
+`delivery_enabled`, `reports_from_status` and `invoice_proof_drive_folder_id`
+columns stay and are simply no longer read. Rejected: a RUN-ME moving old
+orders to `approved`, which the owner declined and which is a bulk update of
+orders (the billing-date re-stamp has happened three times that way).
+
+2026-09-27 — One set means "a sale": `BILLED_STATUSES` = approved, delivering,
+delivered (lib/billedStatuses.ts) — Old orders keep their status and count as
+the approved orders they now are. Every place that used `delivered` alone as
+"an invoice" now uses the set: the Invoices archive, the bulk invoice export,
+customer statements (which were delivered-only while aging already followed
+the report stage — they now agree), the Tax/Performa choice for non-managers
+on /api/invoice-pdf, and the product last-sold lookup. `edit_requested` is
+left out, as it was from every report before.
+
+2026-09-27 — The "Reports count an order from" setting (lib/reportStage.ts) is
+removed — Its choices were approved, delivering and delivered; with two of
+the three gone it has one answer. Consequence: where it was set to
+"delivered", approved-but-never-delivered orders now count in every report.
+That is what "approved is the last stage" means.
+
+2026-09-27 — A `delivering` or `delivered` order is shown as "Approved" —
+Showing "Delivered" on old orders would keep the idea the owner asked to
+remove.
+
+2026-09-27 — Approved orders leave the Orders working list — The working list
+is one request capped at 300 and used to exclude only `delivered`. With
+nothing moving approved orders on, they would have filled it for good. They
+go to the paginated archive (the manager's former "Delivered" list, now
+"Approved"; the salesman's Past), which lists the billed set.
+
+2026-09-27 — Not moved to approval: the Drive copy of the Tax Invoice PDF —
+Confirming delivery used to build the Tax Invoice and save a copy to the
+private uploads folder. Moving that to approval is a new behaviour on a
+different step (and approval can be undone and redone), so it is asked, not
+assumed. The PDF is still built on demand from every invoice.

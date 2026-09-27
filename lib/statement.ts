@@ -4,6 +4,7 @@ import { t } from "@/lib/i18n";
 import { money } from "@/lib/money";
 import { fetchOutstandingInvoices } from "@/lib/queries/aging";
 import { fetchAllForIds, fetchAllPages } from "@/lib/paging";
+import { BILLED_STATUSES } from "@/lib/billedStatuses";
 
 // Which invoices a statement carries (owner, 2026-09-18).
 //   outstanding — only what still has a balance. This is THE statement: what a
@@ -83,7 +84,7 @@ export async function buildStatement(
       .from("orders")
       .select(select)
       .in("customer_id", chunk)
-      .eq("status", "delivered")
+      .in("status", BILLED_STATUSES)
       .order("id")
       .range(from, to) as never
   );

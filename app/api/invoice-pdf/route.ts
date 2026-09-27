@@ -6,6 +6,7 @@ import { parseLineSort } from "@/lib/lineSort";
 import { buildInvoicePdf } from "@/lib/pdf/invoice";
 import { invoiceFileBase } from "@/lib/invoice-template";
 import { t } from "@/lib/i18n";
+import { BILLED_STATUSES } from "@/lib/billedStatuses";
 
 export const runtime = "nodejs";
 
@@ -22,13 +23,13 @@ export async function GET(req: NextRequest) {
 
   // Salesman/Warehouse exporting an in-progress order always get Performa,
   // never the official Tax Invoice wording (§4a/§11). But the Invoices
-  // archive only ever lists delivered orders, and per §4 "anyone downloading
+  // archive only ever lists approved orders, and per §4 "anyone downloading
   // from this screen gets the Tax Invoice regardless of role" — the
   // Performa/Tax split is an in-progress-export distinction only, not an
   // archive-access one.
   const requestedKind = req.nextUrl.searchParams.get("kind") === "performa" ? "performa" : "tax";
   const kind =
-    (user.role === "manager" || user.role === "admin") ? requestedKind : order.status === "delivered" ? "tax" : "performa";
+    (user.role === "manager" || user.role === "admin") ? requestedKind : BILLED_STATUSES.includes(order.status) ? "tax" : "performa";
 
   const [items, settings] = await Promise.all([
     fetchOrderItems(supabase, orderId),

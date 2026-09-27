@@ -1652,25 +1652,27 @@ function OrderActions({
   const [confirmUnapprove, setConfirmUnapprove] = useState(false);
   const approvals = useApprovalSettings();
 
-  // One approval call for every Approve button below. The server cuts any
-  // line to what the shelf holds; when it has, the approver is told which
-  // SKUs and by how much, because the invoice now says less than the
-  // customer asked for and somebody has to know that.
+  // One approval call for every Approve button below. The order is billed
+  // for what was packed. When the shelf count is lower than that, the server
+  // writes nothing and names the short lines; approving anyway takes the
+  // shelf to zero (owner, 2026-09-27).
   async function approve() {
-    const res = await fetch("/api/orders/approve", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ orderId: order.id }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error ?? t("orders.approvalFailed"));
-    const capped = (data.capped ?? []) as { sku: string; from: number; to: number }[];
-    if (capped.length > 0) {
-      toast.info(
-        t("orders.approvedCutToShelf") +
-          capped.map((c) => `${c.sku} ${c.from} → ${c.to}`).join(", ")
-      );
+    const post = (allowShort: boolean) =>
+      fetch("/api/orders/approve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderId: order.id, allowShort }),
+      });
+    let res = await post(false);
+    let data = await res.json();
+    if (res.status === 409 && Array.isArray(data.short)) {
+      const short = data.short as { sku: string; need: number; have: number }[];
+      const lines = short.map((s) => t("orders.shortLine", { sku: s.sku, need: s.need, have: s.have })).join("\n");
+      if (!confirm(t("orders.approveShortConfirm", { lines }))) return;
+      res = await post(true);
+      data = await res.json();
     }
+    if (!res.ok) throw new Error(data.error ?? t("orders.approvalFailed"));
   }
 
   // Takes an approved order back to packed: the stock goes back on the shelf

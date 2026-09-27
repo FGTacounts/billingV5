@@ -30,7 +30,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Manager access required" }, { status: 403 });
   }
 
-  const { orderId } = await req.json();
+  // `allowShort`: the manager has seen which lines the shelf cannot cover and
+  // chosen to approve anyway (see below).
+  const { orderId, allowShort } = await req.json();
   if (!orderId) return NextResponse.json({ error: "orderId is required" }, { status: 400 });
 
   const supabase = supabaseCaller();
@@ -72,14 +74,19 @@ export async function POST(req: NextRequest) {
     .order("id");
   if (itemsErr) return failed("reading the lines", itemsErr);
 
-  // Nothing is sold from an empty shelf. Each line is cut to what is on
-  // hand, the cut is saved as the line's picked quantity so the invoice and
-  // the stock agree, and the approver is told what was cut. Products that
-  // share a shelf (RUN-ME-18) draw from one pool, so two linked SKUs on the
-  // same order cannot together take more than the one figure.
+  // The order is billed for what was packed, whatever the shelf count says
+  // (owner, 2026-09-27: "I want the order to hold the original … 6>6 and not
+  // 3"). Lines are never cut here; only a manager's own edit changes a
+  // quantity after packing. When the shelf count is lower than the order
+  // takes, nothing is written and the manager is shown the short lines
+  // first; approving anyway (`allowShort`) takes the shelf to zero, never
+  // below. Products that share a shelf (RUN-ME-18) draw from one pool.
   //
-  // A product with no count kept (stock_on_hand null) is not capped and not
-  // written: there is no figure to cut against or to deduct from.
+  // This replaces cutting each line to the shelf (2026-09-12), which rewrote
+  // invoice 4480's lines the first time approval worked.
+  //
+  // A product with no count kept (stock_on_hand null) is not checked and not
+  // written: there is no figure to check against or to deduct from.
   type StockRow = { id: string; sku: string; stock_on_hand: number | null; stock_group_id?: string | null };
   const productIds = [...new Set((items ?? []).map((it) => it.product_id).filter(Boolean))];
   let stockRows: StockRow[] = [];
@@ -107,41 +114,28 @@ export async function POST(req: NextRequest) {
 
   const remainingByPool = new Map<string, number>();
   const anyProductInPool = new Map<string, string>();
-  const capped: { sku: string; from: number; to: number }[] = [];
-  const lineCuts: { id: string; picked_qty: number }[] = [];
+  const needByPool = new Map<string, { sku: string; need: number; have: number }>();
   // Counted in fils, so the billed figures cannot carry a float artefact
   // into the invoice. See lib/money.ts.
   let subtotalFils = 0;
   for (const it of items ?? []) {
-    let qty = it.picked_qty ?? it.ordered_qty ?? 0;
+    const qty = it.picked_qty ?? it.ordered_qty ?? 0;
     const product = productById.get(it.product_id);
     if (product && product.stock_on_hand != null) {
       const pool = product.stock_group_id ?? product.id;
-      if (!remainingByPool.has(pool)) {
-        remainingByPool.set(pool, Math.max(0, product.stock_on_hand));
+      if (!needByPool.has(pool)) {
+        needByPool.set(pool, { sku: product.sku, need: 0, have: Math.max(0, product.stock_on_hand) });
         anyProductInPool.set(pool, product.id);
       }
-      const left = remainingByPool.get(pool) ?? 0;
-      if (qty > left) {
-        capped.push({ sku: product.sku, from: qty, to: left });
-        qty = left;
-        lineCuts.push({ id: it.id, picked_qty: qty });
-      }
-      remainingByPool.set(pool, left - qty);
+      needByPool.get(pool)!.need += qty;
     }
     subtotalFils += Math.round(toFils(it.unit_price) * qty);
   }
-
-  // The cuts go on the lines before anything else is written, so an order
-  // can never be approved with an invoice that says more than was deducted.
-  for (const cut of lineCuts) {
-    const { error } = await admin
-      .from("order_items")
-      .update({ picked_qty: cut.picked_qty })
-      .eq("id", cut.id)
-      .eq("order_id", orderId);
-    if (error) return failed("cutting a line to the shelf", error);
+  const short = [...needByPool.values()].filter((p) => p.need > p.have);
+  if (short.length > 0 && allowShort !== true) {
+    return NextResponse.json({ short }, { status: 409 });
   }
+  for (const [pool, p] of needByPool) remainingByPool.set(pool, Math.max(0, p.have - p.need));
 
   // One write per shelf. For a shared shelf the database copies the figure
   // to the other products in the group, so writing any one member is enough.
@@ -282,5 +276,5 @@ export async function POST(req: NextRequest) {
       .then(undefined, () => {});
   }
 
-  return NextResponse.json({ ok: true, invoiceNumber, capped });
+  return NextResponse.json({ ok: true, invoiceNumber });
 }

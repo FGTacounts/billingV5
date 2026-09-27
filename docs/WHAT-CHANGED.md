@@ -1,5 +1,23 @@
 # What changed, and what you need to do
 
+## 2026-09-27 — Approving keeps the packed quantities
+
+Nothing to run in Supabase. The web needs a deploy and the phone a new build.
+
+Approving no longer cuts an order down to what is on the shelf. The invoice
+keeps what was packed. If the shelf count is lower, you are shown which
+lines are short and asked "Approve anyway?"; yes approves the full order and
+those shelves go to zero. Only a manager's own edit changes a quantity after
+packing.
+
+Invoice 4480, which the old rule had cut, has been put back to its packed
+quantities; its total is now AED 8,311.28.
+
+Each line of an order now has a Picked tick while it is being picked, on the
+web as well as the phone.
+
+---
+
 ## 2026-09-27 — Approving works again, and there is no delivery step
 
 Nothing to run in Supabase. The web needs a deploy and the phone a new build.

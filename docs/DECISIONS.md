@@ -2979,3 +2979,32 @@ null or 0, the one rule lib/lineSort.ts already uses, and ticking a 0 line
 picks the whole line — Rejected: letting the warehouse clear a pick to null
 through /api/orders/update-picked-qty, which needed a new server rule when
 Deselect all already writes 0.
+
+## 2026-09-27 — Approval bills what was packed; a short shelf is a warning
+
+2026-09-27 — Approval never cuts a line to the shelf — Owner: "when an order
+is approved the order is taken of what the qty of the order was and not the
+stock … there will be an error showing that not enough stock is there, should
+we proceed … i want the order to hold the original … 6>6 and not 3. it
+doesn't change after being packed unless manager adjusts the quantity … + the
+stock is zero." This REPLACES the 2026-09-12 rule (each line cut to what is
+on hand and saved as its picked quantity). Now: the server works out, per
+shelf (shared shelves pooled), what the order takes against the count. If
+any shelf is short it writes nothing and answers 409 with the short lines;
+the manager is asked "Approve anyway?" and, on yes, the order is billed for
+its full packed quantities and each short shelf goes to zero, never below.
+Shelves with no count kept are neither checked nor written. The phone
+follows the same rule. Not changed: manager_edit_order still refuses a
+raise the shelf cannot cover (it was not part of the request).
+
+2026-09-27 — Invoice 4480 repaired by hand with the server key — The first
+approval that worked (09:25 UTC) cut seven lines under the old rule:
+HBG386, HBG422, TTS709, TTS711, GLT3072, HBG433 to 0 and TTS37 to 8. They
+were put back to the quantities they were packed at, recorded read-only the
+day before (12, 12, 24, 24, 12, 12, 12), and subtotal/VAT/total recomputed
+the way approval computes them (checked first by reproducing the stored
+figures exactly): 7,188.50 / 359.43 / 7,547.93 became 7,915.50 / 395.78 /
+8,311.28. Status and billing date unchanged. No stock was written: all seven
+shelves already read 0, which is where the new rule leaves them. TTS710
+(12 of 24) and PRO-500-3 (13 of 16) were short picks by the warehouse, not
+cuts, and were left alone. No other order was approved under the cutting rule.

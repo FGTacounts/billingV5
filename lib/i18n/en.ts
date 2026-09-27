@@ -435,7 +435,9 @@ export const en = {
   "orders.approve": "Approve",
   "orders.approveNowSkipPicking": "Approve now (skip picking)",
   "orders.approvalFailed": "Approval failed",
-  "orders.approvedCutToShelf": "Approved. Cut to what is on the shelf: ",
+  "orders.approveShortConfirm":
+    "Not enough stock on the shelf for:\n{lines}\n\nApprove anyway? The order keeps its full quantities and these shelves go to zero.",
+  "orders.shortLine": "{sku}: order takes {need}, shelf has {have}",
   "orders.reopenForRepacking": "Reopen for repacking",
   "orders.reopenFailed": "Couldn't reopen the order",
   "orders.undoApproval": "Undo approval",

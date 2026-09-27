@@ -3048,3 +3048,15 @@ it. Rejected: numbering by position in the list shown, which renumbers on
 every tick. A line added later takes its article-number place, which can
 move the numbers after it; nothing stores a number, and storing one needs a
 database change that was not asked for.
+
+2026-09-27 — Phone side of the above — fulfilledItems(of:) bills every line
+(picked qty, or ordered when unpicked) and feeds the short-shelf check,
+approval, Disapprove and Grant edit alike. The manager's order editor has a
+leading 44pt tick and row numbers; the tick is disabled after approval (the
+phone has no re-bill path for a changed line). The warehouse picking list,
+which shaded PICKED rows yellow, now shades UNPICKED rows, and its numbers
+follow article number instead of database order. On the phone "unpicked" is
+no pick at all; a 0 pick is not flagged there (the web flags it). Open:
+the phone's sales/profit reports (Order.fulfilledSubtotal, Analytics) still
+count picked lines only, so a partly picked order reports less than its
+invoice — left for the owner.

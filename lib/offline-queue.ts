@@ -9,7 +9,7 @@ const QUEUE_KEY = "fgt-offline-pick-queue";
 
 export interface QueuedPick {
   itemId: string;
-  pickedQty: number;
+  pickedQty: number | null;
   queuedAt: string;
 }
 
@@ -27,7 +27,7 @@ function writeQueue(queue: QueuedPick[]) {
 
 // Later queued update for the same item supersedes the earlier one — only
 // the final picked_qty for each item matters once it syncs.
-export function queuePickUpdate(itemId: string, pickedQty: number) {
+export function queuePickUpdate(itemId: string, pickedQty: number | null) {
   const queue = readQueue().filter((q) => q.itemId !== itemId);
   queue.push({ itemId, pickedQty, queuedAt: new Date().toISOString() });
   writeQueue(queue);

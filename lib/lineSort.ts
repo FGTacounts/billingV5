@@ -51,3 +51,15 @@ export function sortOrderLines<T extends Sortable>(lines: T[], sort: LineSort = 
   // Stable, so each half keeps the order chosen above.
   return [...copy.filter((l) => !isUnpicked(l)), ...copy.filter(isUnpicked)];
 }
+
+/**
+ * Each line's row number (owner, 2026-09-27): its place by article number,
+ * whatever the sort shown and whether or not it is picked. Ticking a line
+ * moves it up among the picked ones; its number goes with it, so the numbers
+ * the picker is working from never shift. A line added later takes its
+ * place by article number like the rest.
+ */
+export function lineNumbers<T extends Sortable & { id: string }>(lines: T[]): Map<string, number> {
+  const ordered = [...lines].sort((a, b) => bySku(a, b) || a.id.localeCompare(b.id));
+  return new Map(ordered.map((l, i) => [l.id, i + 1]));
+}

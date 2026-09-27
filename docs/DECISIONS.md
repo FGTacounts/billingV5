@@ -3008,3 +3008,43 @@ figures exactly): 7,188.50 / 359.43 / 7,547.93 became 7,915.50 / 395.78 /
 shelves already read 0, which is where the new rule leaves them. TTS710
 (12 of 24) and PRO-500-3 (13 of 16) were short picks by the warehouse, not
 cuts, and were left alone. No other order was approved under the cutting rule.
+
+## 2026-09-27 — Unpicked lines: billed, flagged, confirmed; a tick and a number on every row
+
+2026-09-27 — An unpicked line is billed at what was ordered, on both apps —
+Owner: "both bills the unpicked ones. the manager is supposed to remove the
+unpicked ones (so that is why he needs the picking and unpicking option)."
+The web already billed picked_qty ?? ordered_qty; the phone billed only the
+picked lines once any were picked, and now matches. A pick of 0 still bills
+nothing — that is what 0 has meant on every invoice so far, and changing it
+would change past invoices.
+
+2026-09-27 — Unticking clears the pick (null), not 0 — So an unticked line is
+"not picked" and billed at what was ordered, as asked, rather than a pick of
+nothing billed at 0. Deselect all does the same. The warehouse may clear a
+pick while the order is accepted/waiting/picking (/api/orders/update-picked-
+qty, which also clears picked_by/picked_at); after that it is a manager's
+change through manager_edit_order. The offline pick queue carries null.
+This replaces the tick written earlier today that unticked to 0.
+
+2026-09-27 — Approving an order in picking or packed with unpicked lines asks
+first — "He gets a confirmation alert before he approves an order that some
+of the items are unpicked." Before the short-shelf question. Approving from
+accepted/waiting ("skip picking") does not ask: not picking is the choice.
+
+2026-09-27 — Unpicked rows are yellow once picking has begun (not in
+draft/pending/accepted/waiting, where every line is unpicked and the colour
+would say nothing) — `bg-warning/10`, the existing warning token.
+
+2026-09-27 — The pick tick is a checkbox at the start of every row — It
+replaces the trailing "Picked" column (✓ qty), which it duplicated. Shown to
+managers at every stage but the trash and to the warehouse while picking.
+
+2026-09-27 — Every row has a number: its place by article number
+(lib/lineSort.ts `lineNumbers`), whatever sort is shown and whether or not it
+is picked — "after the order is starting picking the items don't shift
+numbers". Ticking moves a line among the picked ones; the number goes with
+it. Rejected: numbering by position in the list shown, which renumbers on
+every tick. A line added later takes its article-number place, which can
+move the numbers after it; nothing stores a number, and storing one needs a
+database change that was not asked for.

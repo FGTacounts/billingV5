@@ -26,7 +26,10 @@ export async function POST(req: NextRequest) {
 
   const { itemId, pickedQty } = await req.json();
   const isManager = caller.role === "manager" || caller.role === "admin";
-  const unpick = pickedQty === null && isManager;
+  // Unticking clears the pick (null), which bills the line at what was
+  // ordered. The warehouse may do that while the order is still being
+  // picked; that is checked against the order below.
+  const unpick = pickedQty === null;
   if (!itemId || (!unpick && (typeof pickedQty !== "number" || pickedQty < 0))) {
     return NextResponse.json({ error: t("orders.itemIdAndPickedQtyRequired") }, { status: 400 });
   }
@@ -43,12 +46,22 @@ export async function POST(req: NextRequest) {
   }
 
   const admin = supabaseAdmin();
+  if (unpick) {
+    // Before approval nothing has been billed or deducted, so clearing a pick
+    // is only a tick coming off. After it, it moves stock and totals, which
+    // is manager_edit_order's job and a manager's.
+    const { data: line } = await admin.from("order_items").select("orders(status)").eq("id", itemId).maybeSingle();
+    const status = (line?.orders as { status?: string } | null)?.status;
+    if (!status || !["accepted", "waiting", "picking"].includes(status)) {
+      return NextResponse.json({ error: t("common.warehouseOrManagerAccessRequired") }, { status: 403 });
+    }
+  }
   const { error } = await admin
     .from("order_items")
     .update({
       picked_qty: pickedQty,
-      picked_by_id: caller.id,
-      picked_at: new Date().toISOString(),
+      picked_by_id: unpick ? null : caller.id,
+      picked_at: unpick ? null : new Date().toISOString(),
     })
     .eq("id", itemId);
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });

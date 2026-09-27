@@ -285,8 +285,10 @@ export const en = {
   "orders.headerItem": "Item",
   "orders.headerQty": "Qty",
   "orders.headerPicked": "Picked",
+  "orders.headerRowNumber": "#",
+  "orders.approveUnpickedConfirm":
+    "{n} of the lines on this order are not picked (marked yellow). They will be billed at the ordered quantity. Remove them first if they are not going.\n\nApprove anyway?",
   "orders.headerArrange": "Arrange",
-  "orders.notPicked": "Not picked",
   "orders.pickNamed": "Mark {name} picked",
   "orders.unpickNamed": "Unpick {name}",
   "orders.moveUpNamed": "Move {name} up",

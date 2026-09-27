@@ -38,7 +38,7 @@ import { fetchCustomers } from "@/lib/queries/customers";
 import { fetchProducts } from "@/lib/queries/products";
 import type { AppUser, Product } from "@/lib/types/db";
 import { subtotal, formatAed, effectiveQty, lineDiscountPercent, billed, FALLBACK_VAT_RATE, toFils, toAed } from "@/lib/money";
-import { sortOrderLines, parseLineSort, isUnpicked, LINE_SORTS } from "@/lib/lineSort";
+import { sortOrderLines, parseLineSort, isUnpicked, lineNumbers, LINE_SORTS } from "@/lib/lineSort";
 import Sheet from "@/components/ui/Sheet";
 import Button from "@/components/ui/Button";
 import { TextInput, Label } from "@/components/ui/Field";
@@ -168,7 +168,7 @@ export default function OrderDetail({
   // differently from a real server error: it queues the pick for automatic
   // replay instead of rolling back a tap the picker visibly just made.
   const pickMutation = useMutation({
-    mutationFn: async ({ itemId, pickedQty }: { itemId: string; pickedQty: number }) => {
+    mutationFn: async ({ itemId, pickedQty }: { itemId: string; pickedQty: number | null }) => {
       if (!navigator.onLine) {
         queuePickUpdate(itemId, pickedQty);
         return { queued: true };
@@ -217,7 +217,7 @@ export default function OrderDetail({
     },
   });
 
-  function changeQty(item: OrderItemRow, pickedQty: number) {
+  function changeQty(item: OrderItemRow, pickedQty: number | null) {
     pickMutation.mutate({ itemId: item.id, pickedQty });
   }
 
@@ -229,9 +229,11 @@ export default function OrderDetail({
       if (it.picked_qty !== it.ordered_qty) changeQty(it, it.ordered_qty);
     }
   }
+  // Clears the pick (null) rather than writing 0: a line nobody picked is
+  // billed at what was ordered, while 0 is a pick of nothing and bills nothing.
   function deselectAll() {
     for (const it of items) {
-      if ((it.picked_qty ?? 0) !== 0) changeQty(it, 0);
+      if (it.picked_qty != null) changeQty(it, null);
     }
   }
 
@@ -530,6 +532,7 @@ export default function OrderDetail({
     (user.role === "warehouse" || user.role === "manager" || user.role === "admin") &&
     ["waiting", "picking"].includes(order?.status ?? "");
   const sortedItems = useMemo(() => sortOrderLines(items, lineSort), [items, lineSort]);
+  const rowNumbers = useMemo(() => lineNumbers(items), [items]);
 
   if (loading || !order) {
     return (
@@ -556,6 +559,9 @@ export default function OrderDetail({
   // the tick a full line could not be marked picked on the web at all — the
   // box does nothing when left at the ordered quantity (owner, 2026-09-27).
   const showPickedColumn = managerEdits || (isWarehouse && pickingMode);
+  // Unpicked lines are marked once picking has begun (owner, 2026-09-27):
+  // they are billed at what was ordered unless a manager removes them.
+  const flagUnpicked = !["draft", "pending", "rejected", "accepted", "waiting", "cancelled"].includes(order.status);
   const showArrange = managerEdits && !pickingMode && lineSort === "arranged" && items.length > 1;
   const orderDiscountAmount = order.discount_amount ?? 0;
   // Imported invoices carry no lines, so their stored subtotal is all there is.
@@ -656,6 +662,7 @@ export default function OrderDetail({
           confirmReject={confirmReject}
           setConfirmReject={setConfirmReject}
           run={run}
+          unpickedCount={items.filter(isUnpicked).length}
         />
       }
     >
@@ -773,6 +780,10 @@ export default function OrderDetail({
         <table className="w-full text-subhead">
           <thead>
             <tr className="text-caption text-secondary uppercase text-left border-b border-hairline">
+              {showPickedColumn && (
+                <th className="ps-2 py-2.5 font-medium"><span className="sr-only">{t("orders.headerPicked")}</span></th>
+              )}
+              <th className="ps-2 py-2.5 font-medium text-right tabular-nums">{t("orders.headerRowNumber")}</th>
               {showArrange && <th className="ps-1 py-2.5 font-medium"><span className="sr-only">{t("orders.headerArrange")}</span></th>}
               <th className="px-3 py-2.5 font-medium">{t("orders.headerItem")}</th>
               {(items.some((it) => it.product?.rack_location) ||
@@ -783,9 +794,6 @@ export default function OrderDetail({
                 <th className="px-3 py-2.5 font-medium text-right">{t("orders.headerSoh")}</th>
               )}
               <th className="px-3 py-2.5 font-medium text-right">{t("orders.headerQty")}</th>
-              {showPickedColumn && (
-                <th className="px-3 py-2.5 font-medium text-right">{t("orders.headerPicked")}</th>
-              )}
               <th className="px-3 py-2.5 font-medium text-right tabular-nums">{t("orders.headerPrice")}</th>
               {isManager && (
                 <th className="px-3 py-2.5 font-medium text-right tabular-nums">{t("orders.headerDiscount")}</th>
@@ -809,7 +817,40 @@ export default function OrderDetail({
               const lineGp = lineTotal - lineCost;
               const lineGpPct = lineTotal > 0 ? (lineGp / lineTotal) * 100 : 0;
               return (
-                <tr key={it.id} className="border-b border-hairline last:border-0">
+                <tr
+                  key={it.id}
+                  className={`border-b border-hairline last:border-0 ${
+                    flagUnpicked && isUnpicked(it) ? "bg-warning/10" : ""
+                  }`}
+                >
+                  {showPickedColumn && (
+                    <td className="ps-2 py-1 align-middle">
+                      {/* The pick tick. While picking it is the same write as
+                          Select all / Deselect all, queued if the floor is
+                          offline; after picking a manager's tick goes through
+                          manager_edit_order. Unticking clears the pick, so the
+                          line is billed at what was ordered unless the
+                          manager removes it. */}
+                      <label className="min-w-11 min-h-11 flex items-center justify-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="w-4 h-4"
+                          checked={!isUnpicked(it)}
+                          aria-label={
+                            isUnpicked(it)
+                              ? t("orders.pickNamed", { name: it.description ?? it.sku })
+                              : t("orders.unpickNamed", { name: it.description ?? it.sku })
+                          }
+                          onChange={() => {
+                            tap();
+                            if (pickingMode) changeQty(it, isUnpicked(it) ? it.ordered_qty : null);
+                            else togglePick(it);
+                          }}
+                        />
+                      </label>
+                    </td>
+                  )}
+                  <td className="ps-2 py-2.5 text-right tabular-nums text-secondary">{rowNumbers.get(it.id)}</td>
                   {showArrange && (
                     <td className="ps-1 py-1 align-middle">
                       <div className="flex flex-col">
@@ -974,39 +1015,6 @@ export default function OrderDetail({
                       effectiveQty(it)
                     )}
                   </td>
-                  {showPickedColumn && (
-                    <td className="px-3 py-2.5 text-right tabular-nums">
-                      <button
-                        className={`min-h-11 inline-flex items-center gap-1 ms-auto hover:text-accent ${
-                          isUnpicked(it) ? "text-secondary" : "text-accent"
-                        }`}
-                        aria-label={
-                          isUnpicked(it)
-                            ? t("orders.pickNamed", { name: it.description ?? it.sku })
-                            : t("orders.unpickNamed", { name: it.description ?? it.sku })
-                        }
-                        aria-pressed={!isUnpicked(it)}
-                        onClick={() => {
-                          tap();
-                          // While picking, the tick is the same pick as Select
-                          // all / Deselect all: the whole line, or 0 (which
-                          // reads as unpicked), queued if the floor is
-                          // offline. After picking, a manager's tick goes
-                          // through manager_edit_order.
-                          if (pickingMode) changeQty(it, isUnpicked(it) ? it.ordered_qty : 0);
-                          else togglePick(it);
-                        }}
-                      >
-                        {isUnpicked(it) ? (
-                          t("orders.notPicked")
-                        ) : (
-                          <>
-                            <Check size={13} /> {it.picked_qty}
-                          </>
-                        )}
-                      </button>
-                    </td>
-                  )}
                   <td className="px-3 py-2.5 text-right tabular-nums">
                     {/* A price is the manager's to change (2026-09-21); the
                         route refuses anyone else. */}
@@ -1635,6 +1643,7 @@ function OrderActions({
   confirmReject,
   setConfirmReject,
   run,
+  unpickedCount,
 }: {
   order: OrderRow;
   user: AppUser;
@@ -1642,6 +1651,7 @@ function OrderActions({
   confirmReject: boolean;
   setConfirmReject: (v: boolean) => void;
   run: (fn: () => Promise<void>) => Promise<void>;
+  unpickedCount: number;
 }) {
   const supabase = supabaseBrowser();
   const isManager = (user.role === "manager" || user.role === "admin");
@@ -1657,6 +1667,14 @@ function OrderActions({
   // writes nothing and names the short lines; approving anyway takes the
   // shelf to zero (owner, 2026-09-27).
   async function approve() {
+    // Once picking has begun, an unpicked line is one the warehouse did not
+    // find or did not get to. It is billed at what was ordered unless the
+    // manager removes it, so the manager is asked first (owner, 2026-09-27).
+    // Approving before picking ("skip picking") is the choice not to pick,
+    // so it does not ask.
+    if (["picking", "packed"].includes(order.status) && unpickedCount > 0) {
+      if (!confirm(t("orders.approveUnpickedConfirm", { n: unpickedCount }))) return;
+    }
     const post = (allowShort: boolean) =>
       fetch("/api/orders/approve", {
         method: "POST",

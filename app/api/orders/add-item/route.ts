@@ -121,7 +121,9 @@ export async function POST(req: NextRequest) {
     // before that the tick comes off, as it does for the warehouse.
     const changes: ManagerChange[] = [];
     if (!existing) {
-      changes.push({ op: "set", product_id: productId, qty: quantity, unit_price: unitPrice });
+      // The old price or the list price is the price, not a discount
+      // (owner, 2026-09-29), so it is also the price before discount.
+      changes.push({ op: "set", product_id: productId, qty: quantity, unit_price: unitPrice, price_before_discount: unitPrice });
     } else if (existing.picked_qty != null && PAST_PICKING.includes(order.status)) {
       changes.push({ op: "set", id: existing.id, qty: existing.picked_qty + quantity });
     } else {
@@ -155,20 +157,26 @@ export async function POST(req: NextRequest) {
     if (mergeErr) return NextResponse.json({ error: mergeErr.message }, { status: 400 });
     itemId = existing.id as string;
   } else {
-    const { data: inserted, error: insertErr } = await admin
+    // Its price before discount is its own price (RUN-ME-31); before that is
+    // run the column is not there and the line goes in without it.
+    const row = {
+      order_id: orderId,
+      product_id: productId,
+      sku: product.sku,
+      description: product.description,
+      unit_price: unitPrice,
+      unit_cost: product.cost ?? null,
+      ordered_qty: quantity,
+    };
+    let { data: inserted, error: insertErr } = await admin
       .from("order_items")
-      .insert({
-        order_id: orderId,
-        product_id: productId,
-        sku: product.sku,
-        description: product.description,
-        unit_price: unitPrice,
-        unit_cost: product.cost ?? null,
-        ordered_qty: quantity,
-      })
+      .insert({ ...row, price_before_discount: unitPrice })
       .select("id")
       .single();
-    if (insertErr) return NextResponse.json({ error: insertErr.message }, { status: 400 });
+    if (insertErr && /price_before_discount/.test(insertErr.message ?? "")) {
+      ({ data: inserted, error: insertErr } = await admin.from("order_items").insert(row).select("id").single());
+    }
+    if (insertErr || !inserted) return NextResponse.json({ error: insertErr?.message ?? t("orders.saveOrderFailed") }, { status: 400 });
     itemId = inserted.id as string;
   }
 

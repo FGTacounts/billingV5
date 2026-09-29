@@ -369,9 +369,9 @@ export default function NewOrderSheet({
             sku: line.product.sku,
             description: line.product.name,
             unit_price: charged(line),
-            // Kept beside what it charges only when the order % took
-            // something off (RUN-ME-31), so the order page shows the price
-            // and the discount apart. Otherwise it reads as it always has.
+            // Sent only when the order % took something off (RUN-ME-31);
+            // without it the server keeps what the line charges as its
+            // price before discount, so no discount shows.
             price_before_discount: isManager && charged(line) < line.price ? line.price : null,
             ordered_qty: line.qty,
           })),

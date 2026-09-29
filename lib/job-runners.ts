@@ -326,17 +326,26 @@ export async function importOrders(
       .single();
     if (orderErr) throw new JobInputError(orderErr.message);
 
-    const { error: itemsErr } = await admin.from("order_items").insert(
-      [...lines.values()].map((l) => ({
-        order_id: order.id,
-        product_id: l.productId,
-        sku: l.sku,
-        description: l.description,
-        unit_price: l.price,
-        unit_cost: l.cost,
-        ordered_qty: l.qty,
-      }))
-    );
+    // The line's price before discount is its own price (RUN-ME-31): a price
+    // in the file is the price agreed, not a discount off the catalogue
+    // (owner, 2026-09-29). Before RUN-ME-31 the column is not there and the
+    // insert is refused; the lines go in without it, as they always did.
+    const itemRows = [...lines.values()].map((l) => ({
+      order_id: order.id,
+      product_id: l.productId,
+      sku: l.sku,
+      description: l.description,
+      unit_price: l.price,
+      unit_cost: l.cost,
+      ordered_qty: l.qty,
+      price_before_discount: l.price,
+    }));
+    let { error: itemsErr } = await admin.from("order_items").insert(itemRows);
+    if (itemsErr && /price_before_discount/.test(itemsErr.message ?? "")) {
+      ({ error: itemsErr } = await admin
+        .from("order_items")
+        .insert(itemRows.map(({ price_before_discount: _drop, ...rest }) => rest)));
+    }
     if (itemsErr) throw new JobInputError(itemsErr.message);
 
     existingFingerprints.add(fingerprint);

@@ -1,5 +1,18 @@
 # What changed, and what you need to do
 
+## 2026-09-29 — An uploaded price is not shown as a discount
+
+Nothing new to run in Supabase (it needs RUN-ME-31 from the entry below). The
+web needs a deploy and the phone a new build.
+
+An order uploaded or scanned with a price on it lower than the catalogue
+price now shows that price with no Disc %. 4.00 on the paper reads Price 4.00,
+Disc % —, not 4.50 and 11.11%. The same goes for a customer's old price and
+for an article added to an order afterwards. A discount shows only where a
+manager gives one. Orders uploaded before today are left as they were.
+
+---
+
 ## 2026-09-29 — An order line's price and discount are kept apart
 
 **Run in Supabase:** `scratchpad/RUN-ME-31-price-and-discount-apart.sql`.

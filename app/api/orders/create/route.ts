@@ -107,23 +107,30 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // A manager's order % (NewOrderSheet) comes off each line's own price; the
-  // line keeps that price beside what it charges (RUN-ME-31), so the order
-  // page shows the price and the discount apart. Only a manager's, only a
-  // real figure, and only above what the line charges.
+  // Every line keeps its price before discount (RUN-ME-31), so the order
+  // page shows the price and the discount apart. A manager's order %
+  // (NewOrderSheet) comes off each line's own price, which arrives beside
+  // what the line charges — only a manager's, only a real figure, and only
+  // above what the line charges. Any other line's price before discount is
+  // what it charges: a price written on the document or the customer's old
+  // price is the price, not a discount off list (owner, 2026-09-29).
+  const unitPriceFor = (l: (typeof lines)[number]) =>
+    callerSetsPrices ? l.unit_price : priceFor.get(l.product_id) ?? l.unit_price;
   const baseFor = (l: (typeof lines)[number]) => {
     const b = Number(l.price_before_discount);
-    return callerSetsPrices && l.price_before_discount != null && Number.isFinite(b) && b > l.unit_price ? b : null;
+    return callerSetsPrices && l.price_before_discount != null && Number.isFinite(b) && b > l.unit_price
+      ? b
+      : unitPriceFor(l);
   };
   const rows = lines.map((l) => ({
     order_id: order.id,
     product_id: l.product_id,
     sku: l.sku,
     description: l.description,
-    unit_price: callerSetsPrices ? l.unit_price : priceFor.get(l.product_id) ?? l.unit_price,
+    unit_price: unitPriceFor(l),
     unit_cost: costById.get(l.product_id) ?? null,
     ordered_qty: l.ordered_qty,
-    ...(baseFor(l) != null ? { price_before_discount: baseFor(l) } : {}),
+    price_before_discount: baseFor(l),
   }));
   let { error: itemsErr } = await admin.from("order_items").insert(rows);
   // Before RUN-ME-31 the column is not there and the whole insert is refused;

@@ -3156,3 +3156,38 @@ discount and the gap. Making them match is a separate request. Nor the
 "edit a sent order" path in NewOrderView: its price is still what the line
 charges and a price typed there leaves the stored price before discount
 alone, so the gap shows as discount.
+
+## 2026-09-29 — A price on the document, or a customer's old price, is not a discount
+
+2026-09-29 — Owner, with a screenshot of an uploaded order reading Price 4.50,
+Disc 11.11%, total 24.00 for 6: "When the order is uploaded the discount
+appeared by itself". The document said 4.00 and the line charged 4.00; with no
+price before discount stored, the line read the list price (4.50) as its
+price and the gap as a discount. Asked, the owner chose: a price written on
+the document is the price, no discount; a customer's old price is also just
+the price; orders already written are left as they are.
+
+2026-09-29 — REPLACES the two lines of this morning's entry that said "Without
+one nothing is stored, so a customer's old price below list still shows as a
+discount off list" and "Adding an article to an existing order — nothing
+stored, as before": every line written from now on stores a price before
+discount. It is what the line charges, unless a manager's order % took
+something off it, in which case it is the price before that % (unchanged).
+Since 2026-09-21 there is no automatic discount, so every other price a new
+line can get — the document's, the old price, the list price — is the price.
+Written in: /api/orders/create (all callers, salesmen included),
+importOrders in lib/job-runners.ts (spreadsheet import, queued and fallback),
+/api/orders/add-item (both the manager_edit_order path and the direct
+insert), and on the phone AppDataManager's new-order and new-line inserts.
+Each still retries without the column before RUN-ME-31.
+
+2026-09-29 — Existing lines are NOT backfilled (owner: "Only new uploads").
+A line with nothing stored still reads as before — the list price when it
+charges less — so orders uploaded before this change keep showing a Disc %
+until a manager changes them. That also avoids the bulk order_items update
+that has re-dated sales before.
+
+2026-09-29 — Known edge: a manager changing only the unit_price of such an old
+line (margin, round subtotal) still freezes the list price as its price before
+discount, as RUN-ME-31's manager_edit_order does. Not changed: it only affects
+lines written before today.

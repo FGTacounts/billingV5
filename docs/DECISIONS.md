@@ -3131,3 +3131,28 @@ order_items column by column (RUN-ME-4).
 2026-09-29 — Before RUN-ME-31 is run both apps behave exactly as before: the
 read is dropped, a typed price is what the line charges, a discount comes off
 the list price, and order creation retries its insert without the column.
+
+2026-09-29 — Phone side (Money.swift `priceBeforeDiscount`, ManagerOrderEditorView,
+NewOrderView, AppDataManager) — The manager's order editor shows and edits
+the price before discount; a typed price keeps the line's Disc %, Disc % and
+"Discount every line" move only what the line charges. A new order with an
+order % sends each discounted line's pre-discount price. The phone writes
+`price_before_discount` straight to order_items, as it has always written
+lines, not through manager_edit_order, so it records the price before
+discount itself when a Disc % or "Discount every line" changes a line.
+Before RUN-ME-31 it behaves as before: it only uses the column once a read
+of it succeeds, and retries any refused read or write without it.
+
+2026-09-29 — The phone saves a price on every keystroke, so a price passing
+through "" or "0" while typed would wipe the line's discount. The editor
+holds each line's Disc % while its price is being typed and lets go of it
+when Disc % or "Discount every line" is used. The web saves on blur and
+needs no such hold.
+
+2026-09-29 — NOT changed on the phone: its invoice PDF and Excel have never
+worked out a per-line discount (PRICE is what the line charges, DISCOUNT
+0.00), so they still differ from the web's, which prints the price before
+discount and the gap. Making them match is a separate request. Nor the
+"edit a sent order" path in NewOrderView: its price is still what the line
+charges and a price typed there leaves the stored price before discount
+alone, so the gap shows as discount.

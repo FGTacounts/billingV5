@@ -13,7 +13,9 @@ price to 12.00 and the 10% stays: the line charges 10.80. Totals, invoices
 and statements still add up what each line charges, so no figure on an
 existing order moves.
 
-The invoice PDF and Excel print the same Price and Discount.
+The web invoice PDF and Excel print the same Price and Discount. The phone's
+order editor works the same way; its PDF and Excel print what each line
+charges, as they always have.
 
 ---
 

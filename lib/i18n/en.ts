@@ -301,7 +301,7 @@ export const en = {
   "orders.discountEveryLineHint": "Take a percentage off every line's current price, including prices you set",
   "orders.needsDatabaseUpdate": "This needs the latest database update (RUN-ME-28). Ask whoever looks after the database to run it.",
   "orders.headerDiscount": "Disc %",
-  "orders.setLineDiscount": "Discount off the list price of {price}",
+  "orders.setLineDiscount": "Discount off the price of {price}",
   "orders.discountForNamed": "Discount percent for {name}",
   "orders.invalidDiscount": "A discount is a percentage between 0 and 100.",
   "orders.noListPriceForDiscount": "This product has no list price to discount from — set the line's price instead.",

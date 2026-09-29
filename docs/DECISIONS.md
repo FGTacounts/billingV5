@@ -3060,3 +3060,74 @@ no pick at all; a 0 pick is not flagged there (the web flags it). Open:
 the phone's sales/profit reports (Order.fulfilledSubtotal, Analytics) still
 count picked lines only, so a partly picked order reports less than its
 invoice — left for the owner.
+
+2026-09-28 — Phone photo grid showed OUT OF STOCK for stocked items
+(HBG430: 774 on the shelf, badge on the phone). The database, products_safe
+and the phone's paged product fetch were all correct; the fault was in
+PhotoBrowserView's SKU→article map. It rebuilt on `onReceive($articles)` but
+re-read the property instead of the value handed in, and an `@Published`
+publisher fires before the property changes — so the map was always one
+refresh behind, and a product restocked after the grid last rebuilt kept its
+badge until the grid was closed and reopened. Fixed by building from the
+value the publisher sends. iOS only: the web has no photo grid with stock
+badges. Not changed (not asked for): pull-to-refresh on the photo grid
+reloads the Drive photos, not stock.
+
+## 2026-09-29 — An order line keeps its price and its discount apart
+
+2026-09-29 — Owner: "when editing the price. it shows the discount. The
+discount is separate from the price." On the order page a manager's Price
+column showed what the line charges, which already had its Disc % taken off,
+so 10% off a 10.00 article showed 9.00 and 9.00 came up to edit. Typing a
+new price made that the charged price and the discount disappeared. Told this
+needed a stored price before discount, reversing the 2026-09-04 and
+2026-09-18 "no discount column on order_items" decisions, the owner chose
+"Yes, store it", on both apps.
+
+2026-09-29 — REPLACES the 2026-09-18 "stored as the price it produces; there
+is still no discount column": `order_items.price_before_discount`
+(RUN-ME-31) — It stores a price, not a percentage, so there is still only one
+answer to "what does this line charge": unit_price. That is the objection the
+2026-09-18 entry raised against a `discount_percent` column, and it does not
+apply to this. Every total, statement, report and the database's own
+recompute still add up unit_price alone. The Disc % is the gap between the
+two, read with lib/money.ts `priceBeforeDiscount` / Money.swift.
+
+2026-09-29 — Null means "as before", and nothing is backfilled — A line with
+none stored reads the way it always has: the list price when it charges
+less, else what it charges (the invoice's own rule since §Orders PDF). No
+existing order's figures, invoice or Disc % move when RUN-ME-31 is run, and
+no bulk update of order_items is needed, which avoids the billed_at
+re-stamping that bulk updates have caused before.
+
+2026-09-29 — What each edit does once the column exists:
+- Price (the manager's Price column) — becomes the price before discount, and
+  the line's Disc % comes off it again. 10% off 10.00, price changed to 12.00:
+  charges 10.80, still reads 10%. Owner's words from 2026-09-26 apply: "the
+  discount is effected on top of the changed price".
+- Disc % — comes off the line's price before discount, no longer always the
+  list price. For a line whose price a manager raised above list, 10% now
+  comes off that price; before, it came off the list price.
+- Margin (GP %), a round subtotal, "Discount every line" — they set what the
+  line charges and keep the price before discount (manager_edit_order freezes
+  it when a unit_price change does not name one), so the change shows as
+  discount. A trigger lifts the price before discount to unit_price whenever
+  a line charges more than it, so a raise never shows as a negative discount.
+- New order with an order % — the line is written with its pre-discount price
+  beside what it charges. Without one nothing is stored, so a customer's old
+  price below list still shows as a discount off list, as it did.
+- Adding an article to an existing order — nothing stored, as before.
+
+2026-09-29 — Only a manager sees the price before discount — Non-managers have
+no Disc % column, so their Price column keeps showing what the line charges.
+
+2026-09-29 — The web reads the column from `order_items` directly in a second,
+best-effort query, not through `order_items_safe`: that view's definition
+lives only in the database, and adding a column means rewriting a view that
+hides cost prices sight unseen (the same reason RUN-ME-28 put line_order on
+orders). The column is granted to `authenticated` by name, because staff read
+order_items column by column (RUN-ME-4).
+
+2026-09-29 — Before RUN-ME-31 is run both apps behave exactly as before: the
+read is dropped, a typed price is what the line charges, a discount comes off
+the list price, and order creation retries its insert without the column.

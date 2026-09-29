@@ -25,7 +25,14 @@ export async function POST(req: NextRequest) {
     warehouse_note?: string | null;
     salesman_note?: string | null;
     manager_note?: string | null;
-    lines: { product_id: string; sku: string; description: string | null; unit_price: number; ordered_qty: number }[];
+    lines: {
+      product_id: string;
+      sku: string;
+      description: string | null;
+      unit_price: number;
+      price_before_discount?: number | null;
+      ordered_qty: number;
+    }[];
   };
 
   if (!Array.isArray(lines) || lines.length === 0) {
@@ -100,17 +107,32 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const { error: itemsErr } = await admin.from("order_items").insert(
-    lines.map((l) => ({
-      order_id: order.id,
-      product_id: l.product_id,
-      sku: l.sku,
-      description: l.description,
-      unit_price: callerSetsPrices ? l.unit_price : priceFor.get(l.product_id) ?? l.unit_price,
-      unit_cost: costById.get(l.product_id) ?? null,
-      ordered_qty: l.ordered_qty,
-    }))
-  );
+  // A manager's order % (NewOrderSheet) comes off each line's own price; the
+  // line keeps that price beside what it charges (RUN-ME-31), so the order
+  // page shows the price and the discount apart. Only a manager's, only a
+  // real figure, and only above what the line charges.
+  const baseFor = (l: (typeof lines)[number]) => {
+    const b = Number(l.price_before_discount);
+    return callerSetsPrices && l.price_before_discount != null && Number.isFinite(b) && b > l.unit_price ? b : null;
+  };
+  const rows = lines.map((l) => ({
+    order_id: order.id,
+    product_id: l.product_id,
+    sku: l.sku,
+    description: l.description,
+    unit_price: callerSetsPrices ? l.unit_price : priceFor.get(l.product_id) ?? l.unit_price,
+    unit_cost: costById.get(l.product_id) ?? null,
+    ordered_qty: l.ordered_qty,
+    ...(baseFor(l) != null ? { price_before_discount: baseFor(l) } : {}),
+  }));
+  let { error: itemsErr } = await admin.from("order_items").insert(rows);
+  // Before RUN-ME-31 the column is not there and the whole insert is refused;
+  // the lines go in without it, as they always did.
+  if (itemsErr && /price_before_discount/.test(itemsErr.message ?? "")) {
+    ({ error: itemsErr } = await admin
+      .from("order_items")
+      .insert(rows.map(({ price_before_discount: _drop, ...rest }) => rest as typeof rest)));
+  }
   if (itemsErr) return NextResponse.json({ error: itemsErr.message }, { status: 400 });
 
   if (hold_reason) {

@@ -37,7 +37,7 @@ import type { Seller } from "@/lib/queries/sales";
 import { fetchCustomers } from "@/lib/queries/customers";
 import { fetchProducts } from "@/lib/queries/products";
 import type { AppUser, Product } from "@/lib/types/db";
-import { subtotal, formatAed, effectiveQty, lineDiscountPercent, billed, FALLBACK_VAT_RATE, toFils, toAed } from "@/lib/money";
+import { subtotal, formatAed, effectiveQty, lineDiscountPercent, priceBeforeDiscount, billed, FALLBACK_VAT_RATE, toFils, toAed } from "@/lib/money";
 import { sortOrderLines, parseLineSort, isUnpicked, lineNumbers, LINE_SORTS } from "@/lib/lineSort";
 import Sheet from "@/components/ui/Sheet";
 import Button from "@/components/ui/Button";
@@ -267,7 +267,7 @@ export default function OrderDetail({
 
   async function saveItemField(
     itemId: string,
-    patch: { orderedQty?: number } | { unitPrice?: number } | { discountPercent?: number }
+    patch: { orderedQty?: number } | { unitPrice?: number } | { priceBeforeDiscount?: number } | { discountPercent?: number }
   ) {
     setEditingQtyId(null);
     setEditingPriceId(null);
@@ -813,6 +813,9 @@ export default function OrderDetail({
                 it.picked_qty != null && it.picked_qty !== it.ordered_qty;
               const qty = effectiveQty(it);
               const lineTotal = it.unit_price * qty;
+              // What the Price column shows a manager; the Disc % is the gap
+              // between it and what the line charges (lib/money.ts).
+              const basePrice = priceBeforeDiscount(it.unit_price, it.product?.price, it.price_before_discount);
               const lineCost = (it.unit_cost ?? 0) * qty;
               const lineGp = lineTotal - lineCost;
               const lineGpPct = lineTotal > 0 ? (lineGp / lineTotal) * 100 : 0;
@@ -1017,31 +1020,40 @@ export default function OrderDetail({
                   </td>
                   <td className="px-3 py-2.5 text-right tabular-nums">
                     {/* A price is the manager's to change (2026-09-21); the
-                        route refuses anyone else. */}
-                    {canEditItems && isManager ? (
-                      editingPriceId === it.id ? (
-                        <input
-                          autoFocus
-                          type="number"
-                          min={0}
-                          step="0.01"
-                          className="w-20 px-2 py-1 rounded-inner border border-hairline text-right tabular-nums"
-                          value={priceDraft}
-                          onChange={(e) => setPriceDraft(e.target.value)}
-                          onKeyDown={(e) => e.key === "Enter" && saveItemField(it.id, { unitPrice: Math.max(0, Number(priceDraft)) })}
-                          onBlur={() => saveItemField(it.id, { unitPrice: Math.max(0, Number(priceDraft)) })}
-                        />
+                        route refuses anyone else. A manager sees and edits
+                        the price before the line's discount, which sits in
+                        its own column (owner, 2026-09-29); everyone else
+                        has no Disc % column and reads what the line charges. */}
+                    {isManager ? (
+                      canEditItems ? (
+                        editingPriceId === it.id ? (
+                          <input
+                            autoFocus
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            className="w-20 px-2 py-1 rounded-inner border border-hairline text-right tabular-nums"
+                            value={priceDraft}
+                            onChange={(e) => setPriceDraft(e.target.value)}
+                            onKeyDown={(e) =>
+                              e.key === "Enter" && saveItemField(it.id, { priceBeforeDiscount: Math.max(0, Number(priceDraft)) })
+                            }
+                            onBlur={() => saveItemField(it.id, { priceBeforeDiscount: Math.max(0, Number(priceDraft)) })}
+                          />
+                        ) : (
+                          <button
+                            className="flex items-center gap-1 hover:text-accent ms-auto"
+                            onClick={() => {
+                              setPriceDraft(String(basePrice));
+                              setEditingPriceId(it.id);
+                            }}
+                          >
+                            {formatAed(basePrice)}
+                            <Pencil size={11} />
+                          </button>
+                        )
                       ) : (
-                        <button
-                          className="flex items-center gap-1 hover:text-accent ms-auto"
-                          onClick={() => {
-                            setPriceDraft(String(it.unit_price));
-                            setEditingPriceId(it.id);
-                          }}
-                        >
-                          {formatAed(it.unit_price)}
-                          <Pencil size={11} />
-                        </button>
+                        formatAed(basePrice)
                       )
                     ) : (
                       formatAed(it.unit_price)
@@ -1050,10 +1062,9 @@ export default function OrderDetail({
                   {isManager && (
                     <td className="px-3 py-2.5 text-right tabular-nums">
                       {(() => {
-                        const listPrice = it.product?.price ?? 0;
-                        const pct = lineDiscountPercent(listPrice, it.unit_price);
+                        const pct = lineDiscountPercent(basePrice, it.unit_price);
                         const label = pct > 0 ? `${pct}%` : t("common.notSet");
-                        if (!canEditItems || listPrice <= 0) return <span className={pct > 0 ? "" : "text-secondary"}>{label}</span>;
+                        if (!canEditItems || basePrice <= 0) return <span className={pct > 0 ? "" : "text-secondary"}>{label}</span>;
                         const commit = () =>
                           saveItemField(it.id, { discountPercent: Math.min(100, Math.max(0, Number(discountDraft) || 0)) });
                         return editingDiscountId === it.id ? (
@@ -1073,7 +1084,7 @@ export default function OrderDetail({
                         ) : (
                           <button
                             className="flex items-center gap-1 hover:text-accent ms-auto"
-                            title={t("orders.setLineDiscount", { price: formatAed(listPrice) })}
+                            title={t("orders.setLineDiscount", { price: formatAed(basePrice) })}
                             onClick={() => {
                               setDiscountDraft(pct > 0 ? String(pct) : "");
                               setEditingDiscountId(it.id);

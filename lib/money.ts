@@ -173,11 +173,23 @@ export function resolveLinePrice(input: {
   return { price: money(input.listPrice), reason: null };
 }
 
-// A manager's per-product discount on an order line. order_items has no
-// discount column: a line charges its unit_price, and the invoice's Discount
-// column is the gap between the product's list price and that. So the
-// discount is stored as the price it produces, and read back as the gap.
-// Money.swift has the same two functions; change both.
+// A manager's per-product discount on an order line. A line charges its
+// unit_price; since RUN-ME-31 it also keeps its price before discount
+// (order_items.price_before_discount), and the discount is the gap between
+// the two. A line with none stored reads as it always did: the list price
+// when it charges less, else what it charges (owner, 2026-09-29: "The
+// discount is separate from the price"). Money.swift has the same three
+// functions; change both.
+
+/** The price a line shows and edits: what it charges before its discount. */
+export function priceBeforeDiscount(
+  unitPrice: number,
+  listPrice: number | null | undefined,
+  stored?: number | null
+): number {
+  if (stored != null && Number.isFinite(Number(stored))) return Math.max(Number(stored), unitPrice);
+  return Math.max(listPrice ?? unitPrice, unitPrice);
+}
 
 /** List price less N percent — the unit_price to store. */
 export function lineDiscountPrice(listPrice: number, percent: number): number {
@@ -186,9 +198,10 @@ export function lineDiscountPrice(listPrice: number, percent: number): number {
 }
 
 /**
- * The discount a line is carrying, as a percentage of the list price. Zero
- * when the line charges the list price or more — a price raised since the
- * order was written is never shown as a discount.
+ * The discount a line is carrying, as a percentage of its price before
+ * discount (pass priceBeforeDiscount(), or the list price). Zero when the
+ * line charges that or more — a price raised since the order was written is
+ * never shown as a discount.
  */
 export function lineDiscountPercent(listPrice: number, unitPrice: number): number {
   const list = toFils(listPrice);

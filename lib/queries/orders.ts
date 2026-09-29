@@ -369,6 +369,25 @@ export async function fetchOrderItems(
   const rows = (items as OrderItem[]) ?? [];
   if (rows.length === 0) return [];
 
+  // The price before discount (RUN-ME-31) is read from order_items itself,
+  // not order_items_safe: that view's definition lives only in the database,
+  // and adding a column to it means rewriting a view that hides cost prices.
+  // Before RUN-ME-31 the column is not there and every line reads as it did.
+  try {
+    const { data: bases, error: bErr } = await supabase
+      .from("order_items")
+      .select("id, price_before_discount")
+      .in("id", rows.map((r) => r.id));
+    if (bErr) throw bErr;
+    const baseById = new Map((bases ?? []).map((b) => [b.id as string, b.price_before_discount as number | null]));
+    for (const r of rows) {
+      const b = baseById.get(r.id);
+      r.price_before_discount = b == null ? null : Number(b);
+    }
+  } catch {
+    // Not run yet, or unreadable: the list price stands in, as before.
+  }
+
   const productIds = [...new Set(rows.map((r) => r.product_id))];
   const byId = new Map<string, Pick<Product, "id" | "rack_location" | "price" | "stock_on_hand">>();
   try {

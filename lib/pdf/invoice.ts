@@ -5,7 +5,7 @@ import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf
 import { InvoiceTemplate, invoiceDate, amountInWordsInvoice, dueDate } from "@/lib/invoice-template";
 import type { OrderRow, OrderItemRow } from "@/lib/queries/orders";
 import { FALLBACK_VAT_RATE } from "@/lib/money";
-import { toFils, toAed } from "@/lib/money";
+import { toFils, toAed, priceBeforeDiscount } from "@/lib/money";
 import { DEFAULT_OVERDUE_DAYS } from "@/lib/queries/aging";
 import { t } from "@/lib/i18n";
 import { sortOrderLines, DEFAULT_LINE_SORT, type LineSort } from "@/lib/lineSort";
@@ -280,11 +280,11 @@ export function computeInvoiceLines(
   return sortOrderLines(items, sort).map((it, i) => {
     const qty = it.picked_qty ?? it.ordered_qty;
     // order_items.unit_price is the actually-charged price (already net of
-    // any discount) — the product's current list price is the closest
-    // "should be" reference to derive a per-line discount from, when it's
-    // higher than what was actually charged. A negative gap (price raised
-    // since the order) is never shown as a "discount".
-    const listPrice = Math.max(it.product?.price ?? it.unit_price, it.unit_price);
+    // any discount). PRICE is the line's price before its discount — stored
+    // since RUN-ME-31, else the product's current list price when that is
+    // higher than what was charged. A negative gap (price raised since the
+    // order) is never shown as a "discount".
+    const listPrice = priceBeforeDiscount(it.unit_price, it.product?.price, it.price_before_discount);
     const price = listPrice;
     // Every figure printed on a line is computed in fils and rounded once,
     // so the column adds up by hand and matches what was stored on the

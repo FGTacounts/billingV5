@@ -244,6 +244,9 @@ export interface OrderItem {
   sku: string; // required (NOT NULL) — snapshot at order time
   description: string | null; // snapshot at order time
   unit_price: number;
+  // The line's price before its discount (RUN-ME-31); unit_price is what it
+  // charges. Null or absent: read it with priceBeforeDiscount() in lib/money.
+  price_before_discount?: number | null;
   unit_cost: number | null; // null for non-Manager sessions (order_items_safe)
   ordered_qty: number;
   picked_qty: number | null;

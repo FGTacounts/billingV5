@@ -1,5 +1,22 @@
 # What changed, and what you need to do
 
+## 2026-09-29 — An order line's price and discount are kept apart
+
+**Run in Supabase:** `scratchpad/RUN-ME-31-price-and-discount-apart.sql`.
+It should end with three rows saying OK. The web needs a deploy and the phone a
+new build. Until the SQL is run, both apps work exactly as before.
+
+On an order, a manager's Price column now shows the price before the line's
+discount, and Disc % sits beside it. Take 10% off a 10.00 article: Price
+still reads 10.00, Disc % reads 10%, and the line charges 9.00. Change the
+price to 12.00 and the 10% stays: the line charges 10.80. Totals, invoices
+and statements still add up what each line charges, so no figure on an
+existing order moves.
+
+The invoice PDF and Excel print the same Price and Discount.
+
+---
+
 ## 2026-09-27 — Approving keeps the packed quantities
 
 Nothing to run in Supabase. The web needs a deploy and the phone a new build.

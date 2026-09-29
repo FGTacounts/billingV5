@@ -146,6 +146,21 @@ console.log("\nPer-product discount on an order line");
   check("the discounted price is storable", isCleanMoney(m.lineDiscountPrice(19.99, 7.5)));
 }
 
+// ── Price and discount kept apart (RUN-ME-31) ───────────────────────────
+console.log("\nPrice before discount on an order line");
+{
+  const p = m.priceBeforeDiscount;
+  check("a stored price is the price shown", p(9, 10, 12) === 12);
+  check("nothing stored, charged below list: the list price", p(9, 10, null) === 10);
+  check("nothing stored, charged above list: what it charges", p(12, 10, undefined) === 12);
+  check("no list price: what it charges", p(9, null, null) === 9);
+  check("never below what the line charges", p(11, 10, 10) === 11);
+  // A new price keeps the discount: 10% of 12.00 is 10.80, and 10% reads back.
+  const pct = m.lineDiscountPercent(p(9, 10, null), 9);
+  const charged = m.lineDiscountPrice(12, pct);
+  check("typing a new price keeps the discount", pct === 10 && charged === 10.8 && m.lineDiscountPercent(p(charged, 10, 12), charged) === 10);
+}
+
 // ── Collecting a payment ────────────────────────────────────────────────
 // Cash AND discount come off the ticked invoices, oldest first, then the
 // customer's other invoices. Payments.allocate in the iPhone app must give

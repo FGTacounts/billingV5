@@ -92,8 +92,10 @@ export async function orderDiscount(supabase: SupabaseClient, orderId: string): 
  * scratchpad/RUN-ME-28-manager-edits-any-order.sql for what each does.
  */
 export type ManagerChange =
-  | { op: "set"; id: string; qty?: number; unit_price?: number }
-  | { op: "set"; product_id: string; qty: number; unit_price?: number }
+  // price_before_discount: RUN-ME-31. Left out, a unit_price change keeps
+  // the line's price before discount; a database before RUN-ME-31 ignores it.
+  | { op: "set"; id: string; qty?: number; unit_price?: number; price_before_discount?: number }
+  | { op: "set"; product_id: string; qty: number; unit_price?: number; price_before_discount?: number }
   | { op: "remove"; id: string }
   | { op: "pick"; id: string; qty: number | null }
   | { op: "arrange"; ids: string[] };

@@ -11,6 +11,18 @@ export interface MonthlyTargets {
   byUser: Map<string, number>;
   /** Company-wide goal, used for anyone not in `byUser`. */
   fallback: number;
+  /**
+   * The whole team's monthly target, set by a manager. Null where none is
+   * set, and then the team is measured against the salesmen's goals added
+   * up — see `teamTarget`. Kept apart from `fallback`: that one is what each
+   * salesman without a goal of their own is given, not the team's total.
+   */
+  team: number | null;
+  /**
+   * False until scratchpad/RUN-ME-32-team-target.sql has been run. The team
+   * target field hides itself on that rather than refusing every save.
+   */
+  teamSupported: boolean;
   /** Resolve the goal for one salesman. */
   forUser: (userId: string | undefined) => number;
   /**
@@ -42,11 +54,15 @@ function build(
   fallback: number,
   bonusByUser: Map<string, number> = new Map(),
   noteByUser: Map<string, string> = new Map(),
-  bonusSupported = false
+  bonusSupported = false,
+  team: number | null = null,
+  teamSupported = false
 ): MonthlyTargets {
   return {
     byUser,
     fallback,
+    team,
+    teamSupported,
     forUser: (userId) => (userId && byUser.get(userId)) || fallback,
     bonusByUser,
     noteByUser,
@@ -75,6 +91,8 @@ let columnsMissing = false;
 // `columnsMissing` because the two absences are independent — a database can
 // have the goal columns and not these.
 let bonusColumnsMissing = false;
+// And once more for `team_monthly_target`, which arrives with RUN-ME-32.
+let teamColumnMissing = false;
 
 // The Dashboard, the Sales page, the drill-down and two widgets all ask for
 // goals as they mount, within the same tick. `columnsMissing` is set from the
@@ -96,19 +114,38 @@ async function load(supabase: SupabaseClient): Promise<MonthlyTargets> {
   const byUser = new Map<string, number>();
   if (columnsMissing) return build(byUser, FALLBACK_MONTHLY_TARGET);
 
-  const { data: settings, error: settingsErr } = await supabase
-    .from("app_settings")
-    .select("default_monthly_target")
-    .limit(1)
-    .maybeSingle();
-  if (settingsErr) {
-    columnsMissing = true;
-    return build(byUser, FALLBACK_MONTHLY_TARGET);
+  // The team target is asked for alongside the default, and if RUN-ME-32
+  // hasn't been run, asked for again without it.
+  type SettingsRow = { default_monthly_target?: number | string | null; team_monthly_target?: number | string | null };
+  let teamSupported = !teamColumnMissing;
+  let settings: SettingsRow | null = null;
+  if (teamSupported) {
+    const attempt = await supabase
+      .from("app_settings")
+      .select("default_monthly_target, team_monthly_target")
+      .limit(1)
+      .maybeSingle();
+    if (attempt.error) teamSupported = false;
+    else settings = (attempt.data ?? {}) as SettingsRow;
+  }
+  if (!settings) {
+    const { data, error: settingsErr } = await supabase
+      .from("app_settings")
+      .select("default_monthly_target")
+      .limit(1)
+      .maybeSingle();
+    if (settingsErr) {
+      columnsMissing = true;
+      return build(byUser, FALLBACK_MONTHLY_TARGET);
+    }
+    if (!teamSupported) teamColumnMissing = true;
+    settings = (data ?? {}) as SettingsRow;
   }
   const fallback =
-    settings?.default_monthly_target != null
+    settings.default_monthly_target != null
       ? Number(settings.default_monthly_target)
       : FALLBACK_MONTHLY_TARGET;
+  const team = settings.team_monthly_target != null ? Number(settings.team_monthly_target) : null;
 
   // Ask for all three, and if the two newer columns aren't there yet, ask
   // again without them — the same retry-without-the-new-columns shape
@@ -140,7 +177,7 @@ async function load(supabase: SupabaseClient): Promise<MonthlyTargets> {
     if (error) {
       // Neither column set is there — the goals migration itself hasn't run.
       columnsMissing = true;
-      return build(byUser, fallback);
+      return build(byUser, fallback, undefined, undefined, false, team, teamSupported);
     }
     // The base columns read fine, so what failed above was the new pair.
     if (!bonusSupported) bonusColumnsMissing = true;
@@ -155,13 +192,14 @@ async function load(supabase: SupabaseClient): Promise<MonthlyTargets> {
     const note = (u.incentive_note ?? "").trim();
     if (note) noteByUser.set(u.id, note);
   }
-  return build(byUser, fallback, bonusByUser, noteByUser, bonusSupported);
+  return build(byUser, fallback, bonusByUser, noteByUser, bonusSupported, team, teamSupported);
 }
 
 /** Called after the migration is run so the app stops assuming it is absent. */
 export function resetTargetsProbe() {
   columnsMissing = false;
   bonusColumnsMissing = false;
+  teamColumnMissing = false;
   inFlight = null;
 }
 
@@ -195,7 +233,32 @@ export async function saveIncentive(
   return applied;
 }
 
-/** Sum of every listed salesman's individual goal — the team target. */
+/**
+ * The team's target: the figure a manager set for the whole team, or where
+ * none is set, every listed salesman's own goal added up.
+ */
 export function teamTarget(targets: MonthlyTargets, salesmanIds: string[]): number {
+  if (targets.team !== null) return targets.team;
   return salesmanIds.reduce((sum, id) => sum + targets.forUser(id), 0);
+}
+
+/**
+ * Write the team's monthly target, or clear it (null) to go back to the
+ * salesmen's goals added up. Same contract as `saveIncentive`: false when
+ * the database quietly declined the write, throws on a real error.
+ *
+ * Its own column, not `default_monthly_target` — that is each salesman's
+ * default goal, and writing the team's total into it is what used to hand
+ * every salesman the whole team's target.
+ */
+export async function saveTeamTarget(supabase: SupabaseClient, target: number | null): Promise<boolean> {
+  const { data, error } = await supabase
+    .from("app_settings")
+    .update({ team_monthly_target: target })
+    .eq("id", 1)
+    .select("id");
+  if (error) throw error;
+  const applied = !!data && data.length > 0;
+  if (applied) resetTargetsProbe();
+  return applied;
 }

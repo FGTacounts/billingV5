@@ -1,5 +1,33 @@
 # What changed, and what you need to do
 
+## 2026-09-30 — One team target, set by you
+
+**Run in Supabase:** `scratchpad/RUN-ME-32-team-target.sql`. The web needs a
+deploy and the phone a new build.
+
+"% to target" on the Sales page now measures the team against a team target
+you set. On the web, a Team target field sits under "% to target" (managers
+only). On the phone it is the team target on the Reports screen, as before.
+Leave it blank and the team is measured against the salesmen's goals added
+up, which is what the web showed until now (3 × 100,000 = 300,000, hence 24%).
+The dashboard's team goal and the Reports team target use the same figure.
+
+Why the two apps disagreed: the phone saved its team target into the same
+place the web keeps each salesman's default goal. Setting the team to
+100,000 on the phone gave every salesman a 100,000 goal on the web. They are
+now stored apart.
+
+**After running the SQL, set the team target once** on the Sales page or the
+phone. The old figure is not copied over, because there's no telling whether
+it was meant as the team's total or each salesman's default. Check the
+salesmen's own goals too: the three showing 100,000 may be the phone's old
+team figure.
+
+Until the SQL is run, the web shows no Team target field and both apps
+measure against the salesmen's goals added up.
+
+---
+
 ## 2026-09-29 — An uploaded price is not shown as a discount
 
 Nothing new to run in Supabase (it needs RUN-ME-31 from the entry below). The

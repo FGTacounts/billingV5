@@ -3191,3 +3191,36 @@ that has re-dated sales before.
 line (margin, round subtotal) still freezes the list price as its price before
 discount, as RUN-ME-31's manager_edit_order does. Not changed: it only affects
 lines written before today.
+
+2026-09-30 — REPLACES "The team's goal stays the sum of the salesmen's goals"
+(2026-09-04). Owner: "The percentage to target is wrong. it should be
+adjustable too", and asked, chose one team target the manager sets. Stored in
+a new column, app_settings.team_monthly_target (RUN-ME-32). Null means not
+set, and then the team's target is still the rostered salesmen's goals added
+up, so nothing moves until someone sets it. One rule on both apps: web
+`teamTarget` in lib/queries/targets.ts, phone GoalsStore.teamGoal. Used for
+the Sales page's "% to target", its Monthly Detail team Target column, the
+dashboard's goal table, the Reports team target and the Detailed Sales widget.
+
+2026-09-30 — The phone no longer writes its team target to
+app_settings.default_monthly_target. The web has always read that column as
+each salesman's default goal, so a team figure typed on the phone became every
+salesman's goal on the web — why the phone showed ~72% and the web 24% for
+the same month. The phone now reads it as the per-salesman default too
+(it used a hard-coded 100,000). Nothing is copied from it into the new column,
+because it could hold either meaning.
+
+2026-09-30 — The phone's manager dashboard goal table now uses the team
+target instead of adding up its own goals, so it matches its own Team Goal
+widget and the web. Phone Reports: a blank team target clears it.
+
+2026-09-30 — The team target is AED with two decimals (numeric(14,2)), not
+minor units, to match default_monthly_target and users.monthly_target beside
+it. The web field saves on blur like the per-salesman goal field beside it,
+with no optimistic update, matching the existing pattern.
+
+
+2026-09-30 — RUN-ME-32 uses plain statements, not a DO $$ block — The owner's
+first run reached Supabase cut off inside the block ("unterminated
+dollar-quoted string"), so the constraint is now dropped-if-exists and
+re-added, which is re-runnable without one.

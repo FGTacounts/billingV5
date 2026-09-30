@@ -163,7 +163,8 @@ function DetailedSalesWidget() {
       fetchSalesByMonth(supabase, { yearsAgo: 1 }),
       fetchMonthlyTargets(supabase),
     ]);
-    const target = targets.fallback || FALLBACK_MONTHLY_TARGET;
+    // The team's own target where a manager has set one.
+    const target = targets.team ?? (targets.fallback || FALLBACK_MONTHLY_TARGET);
     return thisYear.map((m, i) => ({
       label: m.label,
       sale: m.value,

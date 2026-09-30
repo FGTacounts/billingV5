@@ -16,7 +16,7 @@ import {
   salesOnDay,
   type DailyPoint,
 } from "@/lib/queries/dashboard";
-import { fetchMonthlyTargets, saveIncentive, teamTarget, FALLBACK_MONTHLY_TARGET, type MonthlyTargets } from "@/lib/queries/targets";
+import { fetchMonthlyTargets, saveIncentive, saveTeamTarget, teamTarget, FALLBACK_MONTHLY_TARGET, type MonthlyTargets } from "@/lib/queries/targets";
 import { toast } from "@/lib/toast";
 import { t } from "@/lib/i18n";
 import { friendlyError } from "@/lib/errors";
@@ -55,11 +55,12 @@ const SALES_WIDGET_FULL: Record<SalesWidgetKey, boolean> = {
   monthlyDetail: true,
 };
 
-function StatTile({ label, value }: { label: string; value: string }) {
+function StatTile({ label, value, children }: { label: string; value: string; children?: ReactNode }) {
   return (
     <Card className="p-4">
       <div className="text-caption text-secondary truncate">{label}</div>
       <div className="text-title font-bold mt-1 tabular-nums">{value}</div>
+      {children}
     </Card>
   );
 }
@@ -195,6 +196,11 @@ export default function SalesView({ user }: { user: AppUser }) {
       : myTarget
     : FALLBACK_MONTHLY_TARGET;
   const targetPct = combinedTarget > 0 ? totalSale / combinedTarget : 0;
+  // What the team is measured against when no team target is set — shown as
+  // the field's placeholder so blank reads as "this, worked out".
+  const summedGoals = targets
+    ? rosteredIds.reduce((sum, id) => sum + targets.forUser(id), 0)
+    : FALLBACK_MONTHLY_TARGET;
   // Monthly Detail has its own salesman picker, so its Target column follows
   // that selection rather than the page-level one.
   const monthlyTarget = !targets
@@ -241,6 +247,29 @@ export default function SalesView({ user }: { user: AppUser }) {
     }
     toast.success(target === null ? t("sales.goalCleared") : t("sales.goalSaved"));
     load();
+  }
+
+  // The team's own target, behind "% to target". Blank goes back to the
+  // salesmen's goals added up.
+  async function saveTeam(raw: string) {
+    const trimmed = raw.trim();
+    const target = trimmed === "" ? null : Number(trimmed);
+    if (target !== null && (!Number.isFinite(target) || target < 0)) {
+      toast.error(t("sales.teamTargetInvalid"));
+      return;
+    }
+    if (target === (targets?.team ?? null)) return;
+    try {
+      const applied = await saveTeamTarget(supabaseBrowser(), target);
+      if (!applied) {
+        toast.error(t("sales.goalNoPermission"));
+        return;
+      }
+      toast.success(target === null ? t("sales.teamTargetCleared") : t("sales.teamTargetSaved"));
+      load();
+    } catch (e) {
+      toast.error(friendlyError(e, t("sales.teamTargetSaveFailed")));
+    }
   }
 
   // The bonus and the special offer the manager sets alongside the goal —
@@ -322,7 +351,26 @@ export default function SalesView({ user }: { user: AppUser }) {
         <StatTile label={t("sales.totalSale")} value={formatAed(totalSale)} />
         {isManager && <StatTile label={t("sales.totalGp")} value={formatAed(totalGp)} />}
         <StatTile label={t("sales.topSeller")} value={topSeller} />
-        <StatTile label={t("sales.pctToTarget")} value={`${Math.min(100, Math.round(targetPct * 100))}%`} />
+        <StatTile label={t("sales.pctToTarget")} value={`${Math.min(100, Math.round(targetPct * 100))}%`}>
+          {/* Hidden until RUN-ME-32 has been run, like the bonus fields. */}
+          {isManager && targets?.teamSupported && (
+            <label className="flex items-center gap-2 mt-2">
+              <span className="text-caption text-secondary shrink-0">{t("sales.teamTarget")}</span>
+              <input
+                key={targets.team ?? "sum"}
+                type="number"
+                min="0"
+                step="1000"
+                defaultValue={targets.team ?? ""}
+                placeholder={String(summedGoals)}
+                onBlur={(ev) => saveTeam(ev.target.value)}
+                onKeyDown={(ev) => { if (ev.key === "Enter") (ev.target as HTMLInputElement).blur(); }}
+                className="w-full min-w-0 px-3 py-1 rounded-chip border border-hairline bg-canvas text-caption tabular-nums text-right"
+                title={t("sales.teamTargetHint")}
+              />
+            </label>
+          )}
+        </StatTile>
       </div>
     ),
     trend: (

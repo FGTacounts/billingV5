@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { UserRole } from "@/lib/types/db";
-import { saleValue, revenueIn } from "@/lib/queries/dashboard";
+import { saleValue, revenueIn, monthBounds, type Month } from "@/lib/queries/dashboard";
 import { t } from "@/lib/i18n";
 
 export interface LeaderboardEntry {
@@ -19,13 +19,6 @@ export interface Seller {
   name: string;
   role: UserRole;
   isActive: boolean;
-}
-
-function monthRangeIso(monthsAgo = 0): { start: string; end: string } {
-  const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth() - monthsAgo, 1);
-  const end = new Date(now.getFullYear(), now.getMonth() - monthsAgo + 1, 1);
-  return { start: start.toISOString(), end: end.toISOString() };
 }
 
 // Everyone who may be recorded as the person billing an order.
@@ -54,9 +47,8 @@ export async function fetchSellers(supabase: SupabaseClient): Promise<Seller[]> 
 
 export async function fetchLeaderboard(
   supabase: SupabaseClient,
-  monthsAgo = 0
+  month?: Month
 ): Promise<LeaderboardEntry[]> {
-  const { start, end } = monthRangeIso(monthsAgo);
   // Every user, not just the active salesmen: the totals below have to find
   // a name for whoever is on the order. Someone who has left still sold
   // what they sold, and a manager who bills is not invisible.
@@ -67,10 +59,7 @@ export async function fetchLeaderboard(
 
   // Shares the one fetch of counted orders the rest of the page uses, rather
   // than pulling the whole set again for the leaderboard alone.
-  const orders = await revenueIn(supabase, {
-    from: new Date(start),
-    to: new Date(new Date(end).getTime() - 1),
-  });
+  const orders = await revenueIn(supabase, monthBounds(month));
 
   const totalsBySalesman = new Map<string, number>();
   for (const o of orders ?? []) {

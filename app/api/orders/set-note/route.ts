@@ -31,7 +31,16 @@ export async function POST(req: NextRequest) {
   }
 
   const supabase = supabaseCaller();
-  const { error } = await supabase.from("orders").update({ [field]: text.trim() || null }).eq("id", orderId);
+  // Ask for the row back: a write the database declines reports success and
+  // changes nothing, and the note would look saved until the next reload.
+  const { data, error } = await supabase
+    .from("orders")
+    .update({ [field]: text.trim() || null })
+    .eq("id", orderId)
+    .select("id");
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  if (!data || data.length === 0) {
+    return NextResponse.json({ error: t("orders.notAllowed") }, { status: 403 });
+  }
   return NextResponse.json({ ok: true });
 }

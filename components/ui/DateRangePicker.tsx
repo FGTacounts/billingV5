@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { t } from "@/lib/i18n";
+import { localDateKey } from "@/lib/queries/dashboard";
 
 // Preset days-back values; -1/-2 are sentinels for the two calendar-anchored
 // presets (Month to date, Year to date) that aren't a fixed day count.
@@ -28,7 +29,10 @@ export function presetToRange(days: number): SaleRange {
     from = new Date(to);
     from.setDate(from.getDate() - (days - 1));
   }
-  return { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) };
+  // Local dates. toISOString() gives the UTC date, and local midnight on the
+  // 1st is still the previous day in UTC here — "Month to date" started on
+  // the last day of the month before.
+  return { from: localDateKey(from), to: localDateKey(to) };
 }
 
 export function rangeLabel(range: SaleRange): string {

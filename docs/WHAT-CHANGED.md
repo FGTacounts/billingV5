@@ -1,5 +1,52 @@
 # What changed, and what you need to do
 
+## 2026-10-01 — Orders waiting for approval show their amount
+
+Nothing to run in Supabase. The web needs a deploy; the phone is unchanged.
+
+Orders that a manager has not approved yet (pending, waiting, picking,
+packed) listed as **AED 0.00** on the web, because the amount is only saved
+on approval. The web now adds the lines up for these, the way the phone
+already did, so you see what the order comes to (VAT included). Approved
+orders show the saved invoice figure as before.
+
+---
+
+## 2026-10-01 — Pick a month on Sales and the Dashboard; GP fixed
+
+Nothing to run in Supabase. The web needs a deploy; the phone is unchanged.
+
+**Month chooser.** Sales and the Dashboard have a month menu at the top.
+Pick a month and the page shows that month: sale, GP, profit, orders,
+expenses, money collected, the leaderboard and the charts. It opens on the
+current month each time. Things that are about *today* stay as they are:
+pending/waiting/packed counts, and Remaining and Overdue.
+
+**GP was wrong.** GP % was GP divided by *all* sales, including imported
+invoices that have no product lines and so no cost. For September that showed
+32%; the real margin on orders with costs is **53.2%** (GP AED 26,553.79). The
+GP card on Sales now also says how much sale was left out for having no cost
+(AED 32,553.30 in September). A line with no cost used to count as pure
+profit, and an order discount was not taken off GP; both are fixed.
+
+Also fixed: the daily sale chart showed each day's sale one day late and drew
+an extra empty day at the end; "Month to date" started a day early; and
+expenses on the last day of a month also showed in the next month.
+
+---
+
+## 2026-10-01 — Notes for the warehouse and the salesman on an order
+
+Nothing to run in Supabase. The web needs a deploy; the phone is unchanged.
+
+Open any order as a manager on the web and you now have **+ Add note for
+warehouse** and **+ Add note for salesman** (they read "Edit note for …" once
+written). The warehouse sees its note on the order, and the salesman sees
+theirs, as with notes written when the order was created. The phone's order
+editor already had both.
+
+---
+
 ## 2026-09-30 — One team target, set by you
 
 **Run in Supabase:** `scratchpad/RUN-ME-32-team-target.sql`. The web needs a

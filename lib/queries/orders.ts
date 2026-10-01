@@ -3,6 +3,9 @@ import { invalidateOrderFacts } from "@/lib/queries/dashboard";
 import { invalidateAging } from "@/lib/queries/aging";
 import { t } from "@/lib/i18n";
 import { billingDateColumn, billedAtSelect, type BillingDateColumn } from "@/lib/billingDate";
+import { BILLED_STATUSES } from "@/lib/billedStatuses";
+import { subtotalFils, toAed, billed, FALLBACK_VAT_RATE, type Priceable } from "@/lib/money";
+import { resolveVatRate } from "@/lib/queries/zones";
 import type {
   Order,
   OrderItem,
@@ -116,12 +119,99 @@ async function attachRelations(
 
   const custById = new Map((customers ?? []).map((c: any) => [c.id, c]));
   const salesById = new Map((salesmen ?? []).map((s: any) => [s.id, s]));
+  const unbilledTotals = await unbilledTotalsFromLines(supabase, rows);
 
-  return rows.map((r) => ({
-    ...r,
-    customer: r.customer_id ? custById.get(r.customer_id) ?? null : null,
-    salesman: r.salesman_id ? salesById.get(r.salesman_id) ?? null : null,
-  }));
+  return rows.map((r) => {
+    const fromLines = unbilledTotals.get(r.id);
+    return {
+      ...r,
+      ...(fromLines ?? {}),
+      customer: r.customer_id ? custById.get(r.customer_id) ?? null : null,
+      salesman: r.salesman_id ? salesById.get(r.salesman_id) ?? null : null,
+    };
+  });
+}
+
+/**
+ * What an order not yet approved comes to, added up from its lines.
+ *
+ * subtotal/vat_amount/total are written at approval (app/api/orders/approve)
+ * and are 0 on the row until then, so every waiting, picking or pending order
+ * listed as AED 0.00 (owner, 2026-10-01). The phone never did: its
+ * `receivableTotal` falls back to the lines when the stored total is 0. This
+ * is the same fallback, with the same arithmetic as recalcOrderTotals — lines
+ * at picked qty else ordered, less the order discount, VAT at the customer's
+ * zone rate — so the figure here is the one approval will store.
+ *
+ * Display only: nothing is written. Billed orders are left alone, a stored
+ * 0 there is a real figure (an order billed before lines were kept).
+ */
+async function unbilledTotalsFromLines(
+  supabase: SupabaseClient,
+  rows: Order[]
+): Promise<Map<string, Pick<Order, "subtotal" | "vat_amount" | "total">>> {
+  const out = new Map<string, Pick<Order, "subtotal" | "vat_amount" | "total">>();
+  const todo = rows.filter((r) => !BILLED_STATUSES.includes(r.status) && !Number(r.total));
+  if (!todo.length) return out;
+
+  const ids = todo.map((r) => r.id);
+  const customerIds = [...new Set(todo.map((r) => r.customer_id).filter(Boolean))] as string[];
+  // In chunks: a list can hold 300 orders, and 300 ids in one GET is past
+  // what a URL comfortably carries.
+  const CHUNK = 100;
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += CHUNK) chunks.push(ids.slice(i, i + CHUNK));
+
+  // unit_cost is never asked for: staff are refused the whole read if it is.
+  const [itemResults, discountResults, { data: settings }, { data: custs }] = await Promise.all([
+    Promise.all(
+      chunks.map((c) =>
+        supabase.from("order_items").select("order_id, unit_price, ordered_qty, picked_qty").in("order_id", c)
+      )
+    ),
+    // discount_amount arrives with RUN-ME-28; without it the discount is 0.
+    Promise.all(chunks.map((c) => supabase.from("orders").select("id, discount_amount").in("id", c))),
+    supabase.from("app_settings").select("vat_rate").limit(1).maybeSingle(),
+    customerIds.length
+      ? supabase.from("customers").select("id, country_code").in("id", customerIds)
+      : Promise.resolve({ data: [] as { id: string; country_code: string | null }[] }),
+  ]);
+
+  const itemsByOrder = new Map<string, Priceable[]>();
+  for (const { data } of itemResults) {
+    for (const it of (data ?? []) as (Priceable & { order_id: string })[]) {
+      const list = itemsByOrder.get(it.order_id) ?? [];
+      list.push(it);
+      itemsByOrder.set(it.order_id, list);
+    }
+  }
+  const discountById = new Map<string, number>();
+  for (const { data, error } of discountResults) {
+    if (error) continue;
+    for (const d of (data ?? []) as { id: string; discount_amount: number | null }[]) {
+      discountById.set(d.id, Number(d.discount_amount) || 0);
+    }
+  }
+
+  // One rate per country, not per order — a list is nearly always one country.
+  const fallbackRate = settings?.vat_rate ?? FALLBACK_VAT_RATE;
+  const countryByCustomer = new Map(
+    ((custs ?? []) as { id: string; country_code: string | null }[]).map((c) => [c.id, c.country_code ?? null])
+  );
+  const rateByCountry = new Map<string | null, number>();
+  for (const cc of new Set(todo.map((r) => (r.customer_id ? countryByCustomer.get(r.customer_id) ?? null : null)))) {
+    rateByCountry.set(cc, await resolveVatRate(supabase, cc, fallbackRate));
+  }
+
+  for (const r of todo) {
+    const items = itemsByOrder.get(r.id);
+    if (!items?.length) continue;
+    const cc = r.customer_id ? countryByCustomer.get(r.customer_id) ?? null : null;
+    const net = Math.max(0, subtotalFils(items) - Math.round((discountById.get(r.id) ?? 0) * 100));
+    const { subtotal, vatAmount, total } = billed(toAed(net), rateByCountry.get(cc) ?? fallbackRate);
+    out.set(r.id, { subtotal, vat_amount: vatAmount, total });
+  }
+  return out;
 }
 
 // Manager can see every order; Salesman/Warehouse are limited by RLS to

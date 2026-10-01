@@ -23,7 +23,12 @@ import {
   fetchExpenseBreakdown,
   fetchPaymentsSummary,
   fetchSalesByCategory,
+  currentMonth,
+  isCurrentMonth,
+  gpPercent,
   type DailyPoint,
+  type GrossProfit,
+  type Month,
   type MonthPoint,
   type MonthSegments,
   type ExpenseSlice,
@@ -46,6 +51,7 @@ import PageFooterActions from "@/components/ui/PageFooterActions";
 import { TrendLineChart, MonthlyBarChart, DonutChart } from "@/components/ui/charts";
 import NewOrderSheet from "@/components/orders/NewOrderSheet";
 import { DateRangePicker, presetToRange, rangeLabel, type SaleRange } from "@/components/ui/DateRangePicker";
+import { MonthPicker, monthAsRange, monthLabel } from "@/components/ui/MonthPicker";
 
 function StatTile({
   label,
@@ -254,6 +260,7 @@ function SaleExpanded({
   totalSale,
   avgSale,
   totalGp,
+  costedSale,
   totalProfit,
   leaderboard,
   onNavigateSales,
@@ -265,11 +272,14 @@ function SaleExpanded({
   totalSale: number;
   avgSale: number;
   totalGp: number;
+  // The sale GP was worked out on; GP % is a share of this, not of every
+  // sale (imported invoices carry no cost) — lib/queries/dashboard.ts.
+  costedSale: number;
   totalProfit: number;
   leaderboard: LeaderboardEntry[];
   onNavigateSales: () => void;
 }) {
-  const gpPct = totalSale > 0 ? (totalGp / totalSale) * 100 : 0;
+  const gpPct = costedSale > 0 ? (totalGp / costedSale) * 100 : 0;
   const topContributor = leaderboard[0];
   return (
     <div className="grid lg:grid-cols-[1fr_260px] gap-4 items-start">
@@ -522,7 +532,7 @@ function EmptyStateInline({ text }: { text: string }) {
 // donut — a catalogue this size has far too many categories for a readable
 // pie, and the useful question here is "which sell most", which reads better
 // as a sorted list.
-function CategorySalesWidget({ salesmanId }: { salesmanId?: string }) {
+function CategorySalesWidget({ salesmanId, month }: { salesmanId?: string; month?: Month }) {
   const { preferences } = usePreferences();
   const colorful = preferences.colorfulData === true;
   const [groupBy, setGroupBy] = useState<"category" | "product">("category");
@@ -531,13 +541,13 @@ function CategorySalesWidget({ salesmanId }: { salesmanId?: string }) {
   useEffect(() => {
     let cancelled = false;
     setRows(null);
-    fetchSalesByCategory(supabaseBrowser(), { groupBy, salesmanId })
+    fetchSalesByCategory(supabaseBrowser(), { groupBy, salesmanId, month })
       .then((r) => !cancelled && setRows(r))
       .catch(() => !cancelled && setRows([]));
     return () => {
       cancelled = true;
     };
-  }, [groupBy, salesmanId]);
+  }, [groupBy, salesmanId, month]);
 
   const max = rows && rows.length ? Math.max(...rows.map((r) => r.value)) : 0;
 
@@ -661,6 +671,16 @@ export default function DashboardView({ user }: { user: AppUser }) {
   const { preferences, update: updatePrefs, loaded: prefsLoaded } = usePreferences();
   const { format: formatMoney } = useDisplayCurrency();
   const [saleRange, setSaleRange] = useState<SaleRange>(() => presetToRange(30));
+  // The month the dashboard shows (owner, 2026-10-01: "a month chooser on
+  // the sales page and the dashboard, so the whole page shows only data of
+  // that month"). Choosing one moves the sale chart's range to that month
+  // too, without saving it as the chart's preferred range.
+  const [month, setMonth] = useState<Month>(() => currentMonth());
+
+  function chooseMonth(m: Month) {
+    setMonth(m);
+    setSaleRange(monthAsRange(m));
+  }
 
   useEffect(() => {
     if (!prefsLoaded) return;
@@ -725,7 +745,8 @@ export default function DashboardView({ user }: { user: AppUser }) {
   // manager
   const [sales, setSales] = useState(0);
   const [prevSales, setPrevSales] = useState(0);
-  const [gp, setGp] = useState(0);
+  const [gpInfo, setGpInfo] = useState<GrossProfit>({ gp: 0, costedSale: 0, uncostedSale: 0 });
+  const gp = gpInfo.gp;
   const [expenseSlices, setExpenseSlices] = useState<ExpenseSlice[]>([]);
   const [expenseTotal, setExpenseTotal] = useState(0);
   const [pending, setPending] = useState(0);
@@ -763,21 +784,21 @@ export default function DashboardView({ user }: { user: AppUser }) {
 
     if (isManager) {
       const [s, g, eb, p, w, pk, tr, ptr, pm, sm, lb, oc] = await Promise.all([
-        monthToDateSales(supabase),
-        monthToDateGrossProfit(supabase),
-        fetchExpenseBreakdown(supabase),
+        monthToDateSales(supabase, undefined, month),
+        monthToDateGrossProfit(supabase, undefined, month),
+        fetchExpenseBreakdown(supabase, month),
         countByStatus(supabase, ["pending"]),
         countByStatus(supabase, ["waiting", "accepted"]),
         countByStatus(supabase, ["packed"]),
         fetchSaleTrend(supabase, { from: new Date(saleRange.from), to: new Date(saleRange.to) }),
         fetchSaleTrend(supabase, { from: prevFrom, to: prevTo }),
-        fetchPaymentsByMonthSegmented(supabase),
-        fetchSalesByMonth(supabase),
-        fetchLeaderboard(supabase),
-        countOrdersThisMonth(supabase),
+        fetchPaymentsByMonthSegmented(supabase, { endMonth: month }),
+        fetchSalesByMonth(supabase, { endMonth: month }),
+        fetchLeaderboard(supabase, month),
+        countOrdersThisMonth(supabase, undefined, month),
       ]);
       setSales(s);
-      setGp(g);
+      setGpInfo(g);
       setExpenseSlices(eb.slices);
       setExpenseTotal(eb.total);
       setPending(p);
@@ -792,22 +813,22 @@ export default function DashboardView({ user }: { user: AppUser }) {
       // payment and every return — about a second on its own. The rest of
       // the dashboard no longer waits behind it; the tile fills in when it
       // lands.
-      fetchPaymentsSummary(supabase).then(setPaySummary).catch(() => {});
+      fetchPaymentsSummary(supabase, { month }).then(setPaySummary).catch(() => {});
       fetchMonthlyTargets(supabase).then(setTargets).catch(() => {});
       const prevMonth = sm.length >= 2 ? sm[sm.length - 2].value : 0;
       setPrevSales(prevMonth);
     } else if (isSalesman) {
       const [s, d, w, ap, rj, tr, ptr, pm, sm, oc] = await Promise.all([
-        monthToDateSales(supabase, salesmanId),
+        monthToDateSales(supabase, salesmanId, month),
         countByStatus(supabase, ["draft"], salesmanId),
         countByStatus(supabase, ["pending"], salesmanId),
         countByStatus(supabase, ["approved"], salesmanId),
         countByStatus(supabase, ["rejected"], salesmanId),
         fetchSaleTrend(supabase, { salesmanId, from: new Date(saleRange.from), to: new Date(saleRange.to) }),
         fetchSaleTrend(supabase, { salesmanId, from: prevFrom, to: prevTo }),
-        fetchPaymentsByMonthSegmented(supabase, { collectedBy: user.id }),
-        fetchSalesByMonth(supabase, { salesmanId }),
-        countOrdersThisMonth(supabase, salesmanId),
+        fetchPaymentsByMonthSegmented(supabase, { collectedBy: user.id, endMonth: month }),
+        fetchSalesByMonth(supabase, { salesmanId, endMonth: month }),
+        countOrdersThisMonth(supabase, salesmanId, month),
       ]);
       setSales(s);
       setDrafts(d);
@@ -821,7 +842,7 @@ export default function DashboardView({ user }: { user: AppUser }) {
       setOrdersThisMonth(oc);
       // Same as the manager's: the receivables walk fills in after the page
       // is already up rather than holding it back.
-      fetchPaymentsSummary(supabase, { salesmanId, collectedBy: user.id })
+      fetchPaymentsSummary(supabase, { salesmanId, collectedBy: user.id, month })
         .then(setPaySummary)
         .catch(() => {});
       fetchMonthlyTargets(supabase).then(setTargets).catch(() => {});
@@ -838,7 +859,7 @@ export default function DashboardView({ user }: { user: AppUser }) {
       setResume(rp);
     }
     setLoading(false);
-  }, [isManager, isSalesman, isWarehouse, user.id, saleRange]);
+  }, [isManager, isSalesman, isWarehouse, user.id, saleRange, month]);
 
   useEffect(() => {
     load();
@@ -864,6 +885,13 @@ export default function DashboardView({ user }: { user: AppUser }) {
 
   // This user's own goal, used by the Target bar on the salesman dashboard.
   const myTarget = targets ? targets.forUser(user.id) : FALLBACK_MONTHLY_TARGET;
+  const salesLabel = isCurrentMonth(month)
+    ? t("dashboard.salesMonthToDate")
+    : t("dashboard.salesInMonth", { month: monthLabel(month) });
+  const ordersLabel = isCurrentMonth(month)
+    ? t("dashboard.ordersThisMonth")
+    : t("dashboard.ordersInMonth", { month: monthLabel(month) });
+  const gpPct = gpPercent(gpInfo);
 
   const managerWidgets: Record<(typeof MANAGER_WIDGETS)[number], ReactNode> = {
     stats: (
@@ -877,12 +905,12 @@ export default function DashboardView({ user }: { user: AppUser }) {
         >
           <CompactStat label={t("sales.sale")} value={formatCompact(sales)} />
           <CompactStat label={t("nav.orders")} value={String(ordersThisMonth)} />
-          <CompactStat label={t("dashboard.gp")} value={sales > 0 ? `${Math.round((gp / sales) * 100)}%` : t("common.notSet")} />
+          <CompactStat label={t("dashboard.gp")} value={gpPct !== null ? `${Math.round(gpPct)}%` : t("common.notSet")} />
           <CompactStat label={t("dashboard.profit")} value={formatCompact(gp - expenseTotal)} />
         </Card>
         <div className="hidden lg:grid grid-cols-4 gap-4">
           <StatTile
-            label={t("dashboard.salesMonthToDate")}
+            label={salesLabel}
             value={formatMoney(sales)}
             numeric={sales}
             format={formatMoney}
@@ -898,7 +926,7 @@ export default function DashboardView({ user }: { user: AppUser }) {
             onClick={() => router.push("/sales")}
           />
           <StatTile
-            label={t("dashboard.ordersThisMonth")}
+            label={ordersLabel}
             value={String(ordersThisMonth)}
             numeric={ordersThisMonth}
             format={(n) => String(Math.round(n))}
@@ -929,6 +957,7 @@ export default function DashboardView({ user }: { user: AppUser }) {
             totalSale={sales}
             avgSale={trend.length ? trend.reduce((s, t) => s + t.value, 0) / trend.length : 0}
             totalGp={gp}
+            costedSale={gpInfo.costedSale}
             totalProfit={gp - expenseTotal}
             leaderboard={leaderboard}
             onNavigateSales={() => router.push("/sales")}
@@ -1034,7 +1063,7 @@ export default function DashboardView({ user }: { user: AppUser }) {
         <LeaderboardStrip entries={leaderboard} />
       </ExpandableWidget>
     ),
-    categorySales: <CategorySalesWidget />,
+    categorySales: <CategorySalesWidget month={month} />,
   };
 
   const salesmanWidgets: Record<(typeof SALESMAN_WIDGETS)[number], ReactNode> = {
@@ -1045,12 +1074,12 @@ export default function DashboardView({ user }: { user: AppUser }) {
           onClick={() => router.push("/sales")}
         >
           <div className="flex items-center justify-between mb-1">
-            <span className="text-caption text-secondary">{t("dashboard.salesMonthToDate")}</span>
+            <span className="text-caption text-secondary">{salesLabel}</span>
             {changePct !== null && <ChangeBadge pct={changePct} />}
           </div>
           <div className="text-title font-bold tabular-nums">{formatMoney(sales)}</div>
         </Card>
-        <StatTile label={t("dashboard.ordersThisMonth")} value={String(ordersThisMonth)} onClick={() => router.push("/orders")} />
+        <StatTile label={ordersLabel} value={String(ordersThisMonth)} onClick={() => router.push("/orders")} />
       </div>
     ),
     newOrder: (
@@ -1098,6 +1127,7 @@ export default function DashboardView({ user }: { user: AppUser }) {
             totalSale={sales}
             avgSale={trend.length ? trend.reduce((s, t) => s + t.value, 0) / trend.length : 0}
             totalGp={0}
+            costedSale={0}
             totalProfit={0}
             leaderboard={[]}
             onNavigateSales={() => router.push("/sales")}
@@ -1167,11 +1197,15 @@ export default function DashboardView({ user }: { user: AppUser }) {
         {/* Arrange lives at the foot of the page — see PageFooterActions
             below. While you are actually arranging, a Done button belongs
             up here where your eye already is. */}
-        {isManager && arranging && (
-          <Button tier="primary" onClick={() => setArranging(false)} className="!px-4 !py-1.5 text-caption">
-            {t("common.done")}
-          </Button>
-        )}
+        <div className="flex items-center gap-3 shrink-0">
+          {/* Warehouse's dashboard is today's queue; nothing on it is a month. */}
+          {!isWarehouse && <MonthPicker value={month} onChange={chooseMonth} />}
+          {isManager && arranging && (
+            <Button tier="primary" onClick={() => setArranging(false)} className="!px-4 !py-1.5 text-caption">
+              {t("common.done")}
+            </Button>
+          )}
+        </div>
       </div>
 
       {isManager && (

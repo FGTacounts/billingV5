@@ -14,7 +14,13 @@ import {
   countOrdersInRange,
   paymentsReceivedInRange,
   salesOnDay,
+  currentMonth,
+  isCurrentMonth,
+  monthBounds,
+  gpPercent,
   type DailyPoint,
+  type GrossProfit,
+  type Month,
 } from "@/lib/queries/dashboard";
 import { fetchMonthlyTargets, saveIncentive, saveTeamTarget, teamTarget, FALLBACK_MONTHLY_TARGET, type MonthlyTargets } from "@/lib/queries/targets";
 import { toast } from "@/lib/toast";
@@ -30,6 +36,7 @@ import { usePreferences } from "@/lib/hooks/usePreferences";
 import { WidgetAdjustPopover, resolveOrder, SIZE_SPAN, type WidgetSize } from "@/components/ui/WidgetArrange";
 import { SalesmanDrilldown } from "@/components/sales/SalesmanDrilldown";
 import { WidgetContextMenu } from "@/components/ui/WidgetContextMenu";
+import { MonthPicker, monthAsRange } from "@/components/ui/MonthPicker";
 
 const MEDAL = ["#FFD700", "#C0C0C0", "#CD7F32"];
 
@@ -82,10 +89,17 @@ function ChangeBadge({ label, pct }: { label: string; pct: number | null }) {
 
 type GoalSort = "rank" | "name" | "pct";
 
+const NO_GP: GrossProfit = { gp: 0, costedSale: 0, uncostedSale: 0 };
+
 export default function SalesView({ user }: { user: AppUser }) {
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [goalSort, setGoalSort] = useState<GoalSort>("rank");
+  // The month the whole page shows (owner, 2026-10-01: "a month chooser on
+  // the sales page and the dashboard, so the whole page shows only data of
+  // that month"). Choosing one also moves the Orders & payments widget's own
+  // range to that month; its picker still works after that.
+  const [month, setMonth] = useState<Month>(() => currentMonth());
   const [widgetRange, setWidgetRange] = useState<SaleRange>(() => presetToRange(30));
   const [drilldownSalesman, setDrilldownSalesman] = useState<LeaderboardEntry | null>(null);
   // Monthly Detail's own salesman picker (§Sales: "no need for the whole
@@ -96,7 +110,8 @@ export default function SalesView({ user }: { user: AppUser }) {
   const { preferences, update: updatePrefs } = usePreferences();
 
   const [totalSale, setTotalSale] = useState(0);
-  const [totalGp, setTotalGp] = useState(0);
+  const [gpInfo, setGpInfo] = useState<GrossProfit>(NO_GP);
+  const totalGp = gpInfo.gp;
   const [trend, setTrend] = useState<DailyPoint[]>([]);
   const [monthly, setMonthly] = useState<{ label: string; sale: number; pastYear: number }[]>([]);
   const [ordersInRange, setOrdersInRange] = useState(0);
@@ -127,16 +142,23 @@ export default function SalesView({ user }: { user: AppUser }) {
     const from = new Date(widgetRange.from);
     const to = new Date(widgetRange.to);
     const today = new Date();
+    const thisMonth = isCurrentMonth(month);
+    const bounds = monthBounds(month);
     const dayLastMonth = new Date(today);
     dayLastMonth.setMonth(dayLastMonth.getMonth() - 1);
     const dayLastYear = new Date(today);
     dayLastYear.setFullYear(dayLastYear.getFullYear() - 1);
 
     const [lb, sale, gp, tr, oc, pr, todayS, lastMonthS, lastYearS, tgts] = await Promise.all([
-      fetchLeaderboard(supabase),
-      monthToDateSales(supabase, scopedSalesmanId),
-      isManager ? monthToDateGrossProfit(supabase, scopedSalesmanId) : Promise.resolve(0),
-      fetchSaleTrend(supabase, { salesmanId: scopedSalesmanId }),
+      fetchLeaderboard(supabase, month),
+      monthToDateSales(supabase, scopedSalesmanId, month),
+      isManager ? monthToDateGrossProfit(supabase, scopedSalesmanId, month) : Promise.resolve(NO_GP),
+      // The chosen month's days, up to today if it is this month.
+      fetchSaleTrend(supabase, {
+        salesmanId: scopedSalesmanId,
+        from: bounds.from,
+        to: thisMonth ? today : bounds.to,
+      }),
       countOrdersInRange(supabase, { from, to, salesmanId: scopedSalesmanId }),
       paymentsReceivedInRange(supabase, { from, to, collectedBy: isManager ? undefined : user.id }),
       salesOnDay(supabase, today, scopedSalesmanId),
@@ -151,7 +173,7 @@ export default function SalesView({ user }: { user: AppUser }) {
       setTargetsEditable(!probe.error);
     }
     setTotalSale(sale);
-    setTotalGp(gp);
+    setGpInfo(gp);
     setTrend(tr);
     setOrdersInRange(oc);
     setPaymentsInRange(pr);
@@ -159,7 +181,7 @@ export default function SalesView({ user }: { user: AppUser }) {
     setSameDayLastMonth(lastMonthS);
     setSameDayLastYear(lastYearS);
     setLoading(false);
-  }, [scopedSalesmanId, isManager, widgetRange, user.id]);
+  }, [scopedSalesmanId, isManager, widgetRange, user.id, month]);
 
   useEffect(() => {
     load();
@@ -171,12 +193,17 @@ export default function SalesView({ user }: { user: AppUser }) {
     const monthlyScopedForRole = isManager ? monthlyScopedId : user.id;
     const supabase = supabaseBrowser();
     Promise.all([
-      fetchSalesByMonth(supabase, { salesmanId: monthlyScopedForRole }),
-      fetchSalesByMonth(supabase, { salesmanId: monthlyScopedForRole, yearsAgo: 1 }),
+      fetchSalesByMonth(supabase, { salesmanId: monthlyScopedForRole, endMonth: month }),
+      fetchSalesByMonth(supabase, { salesmanId: monthlyScopedForRole, yearsAgo: 1, endMonth: month }),
     ]).then(([thisYear, lastYear]) => {
       setMonthly(thisYear.map((m, i) => ({ label: m.label, sale: m.value, pastYear: lastYear[i]?.value ?? 0 })));
     });
-  }, [isManager, monthlyScopedId, user.id]);
+  }, [isManager, monthlyScopedId, user.id, month]);
+
+  function chooseMonth(m: Month) {
+    setMonth(m);
+    setWidgetRange(monthAsRange(m));
+  }
 
   const visible = entries;
   const topSeller = entries[0]?.name ?? "—";
@@ -388,11 +415,14 @@ export default function SalesView({ user }: { user: AppUser }) {
           </div>
         </div>
         <TrendLineChart values={trend.map((t) => t.value)} height={180} showAverage />
-        <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-          <span className="text-caption text-secondary">{t("sales.todayVsSameDay")}</span>
-          <ChangeBadge label={t("sales.lastMonthLower")} pct={dayMomPct} />
-          <ChangeBadge label={t("sales.lastYearLower")} pct={dayYoyPct} />
-        </div>
+        {/* "Today" is not in a past month, so the row only shows for this one. */}
+        {isCurrentMonth(month) && (
+          <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+            <span className="text-caption text-secondary">{t("sales.todayVsSameDay")}</span>
+            <ChangeBadge label={t("sales.lastMonthLower")} pct={dayMomPct} />
+            <ChangeBadge label={t("sales.lastYearLower")} pct={dayYoyPct} />
+          </div>
+        )}
       </Card>
     ),
     goal:
@@ -544,9 +574,17 @@ export default function SalesView({ user }: { user: AppUser }) {
       <Card className="p-4">
         <div className="text-caption text-secondary mb-1">{t("sales.grossProfit")}</div>
         <div className="text-title font-bold tabular-nums">{formatAed(totalGp)}</div>
-        <div className="text-caption text-secondary mt-0.5">
-          {totalSale > 0 ? t("sales.pctOfSale", { pct: Math.round((totalGp / totalSale) * 100) }) : t("common.notSet")}
+        <div className="text-caption text-secondary mt-0.5 tabular-nums">
+          {gpPercent(gpInfo) !== null ? t("sales.pctOfSale", { pct: Math.round(gpPercent(gpInfo)!) }) : t("common.notSet")}
         </div>
+        {/* Imported invoices have no lines, so no cost: their sale is in
+            Total sale but cannot be in GP, and saying so is what stops the
+            two from looking like they disagree. */}
+        {gpInfo.uncostedSale > 0 && (
+          <div className="text-caption text-secondary mt-0.5 tabular-nums">
+            {t("sales.gpUncosted", { amount: formatAed(gpInfo.uncostedSale) })}
+          </div>
+        )}
       </Card>
     ),
     ordersPayments: (
@@ -633,6 +671,7 @@ export default function SalesView({ user }: { user: AppUser }) {
       <div className="flex items-center justify-between mb-5 gap-3 flex-wrap">
         <h1 className="text-large-title font-bold">{t("nav.sales")}</h1>
         <div className="flex items-center gap-3">
+          <MonthPicker value={month} onChange={chooseMonth} />
           <WidgetAdjustPopover
             order={salesOrder}
             labels={SALES_WIDGET_LABELS}

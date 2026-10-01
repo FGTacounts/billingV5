@@ -1,7 +1,7 @@
 "use client";
 
 import { toast } from "@/lib/toast";
-import { t } from "@/lib/i18n";
+import { t, type MessageKey } from "@/lib/i18n";
 import { friendlyError } from "@/lib/errors";
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useMutation } from "@tanstack/react-query";
@@ -45,6 +45,24 @@ import { TextInput, Label } from "@/components/ui/Field";
 import { OrderStatusPill, Pill } from "@/components/ui/Badge";
 import { tap, tapSuccess } from "@/lib/haptics";
 import { queuePickUpdate, getQueuedPickItemIds } from "@/lib/offline-queue";
+
+// The three role-routed notes on an order, named for who they are FOR.
+type NoteField = "manager_note" | "warehouse_note" | "salesman_note";
+const NOTE_LABEL: Record<NoteField, MessageKey> = {
+  manager_note: "orders.noteForManager",
+  warehouse_note: "orders.noteForWarehouse",
+  salesman_note: "orders.noteForSalesman",
+};
+const NOTE_ADD: Record<NoteField, MessageKey> = {
+  manager_note: "orders.addNoteForManager",
+  warehouse_note: "orders.addNoteForWarehouse",
+  salesman_note: "orders.addNoteForSalesman",
+};
+const NOTE_EDIT: Record<NoteField, MessageKey> = {
+  manager_note: "orders.editNoteForManager",
+  warehouse_note: "orders.editNoteForWarehouse",
+  salesman_note: "orders.editNoteForSalesman",
+};
 
 export default function OrderDetail({
   orderId,
@@ -100,9 +118,11 @@ export default function OrderDetail({
   const [productSearch, setProductSearch] = useState("");
   const [productResults, setProductResults] = useState<Product[]>([]);
   // §Orders: Warehouse can send a note to the Manager during picking.
-  const [editingManagerNote, setEditingManagerNote] = useState(false);
-  const [managerNoteDraft, setManagerNoteDraft] = useState("");
-  const [savingManagerNote, setSavingManagerNote] = useState(false);
+  // The one note being written, if any: the warehouse's to the manager, or
+  // the manager's to the warehouse or the salesman.
+  const [editingNote, setEditingNote] = useState<NoteField | null>(null);
+  const [noteDraft, setNoteDraft] = useState("");
+  const [savingNote, setSavingNote] = useState(false);
   // §Orders: "Manager has complete flexibility over an order at any stage
   // (invoice number, customer, salesman, PO number editable)".
   const [showEditFields, setShowEditFields] = useState(false);
@@ -501,24 +521,24 @@ export default function OrderDetail({
     }
   }
 
-  async function saveManagerNote() {
-    setSavingManagerNote(true);
+  async function saveNote(field: NoteField) {
+    setSavingNote(true);
     try {
       const res = await fetch("/api/orders/set-note", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ orderId, field: "manager_note", text: managerNoteDraft }),
+        body: JSON.stringify({ orderId, field, text: noteDraft }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error ?? t("orders.saveNoteFailed"));
       }
-      setEditingManagerNote(false);
+      setEditingNote(null);
       load();
     } catch (e) {
       toast.error(friendlyError(e, t("orders.saveNoteFailed")));
     } finally {
-      setSavingManagerNote(false);
+      setSavingNote(false);
     }
   }
 
@@ -721,28 +741,40 @@ export default function OrderDetail({
         </div>
       )}
 
-      {isWarehouse && ["waiting", "picking", "packed"].includes(order.status) && (
+      {/* Writing a note. The warehouse writes to the manager while the
+          order is with them; a manager writes to the warehouse or the
+          salesman on any order, as the phone's order editor allows. Who may
+          write which note is enforced again by /api/orders/set-note. */}
+      {((isWarehouse && ["waiting", "picking", "packed"].includes(order.status)) || isManager) && (
         <div className="mb-5">
-          {editingManagerNote ? (
+          {editingNote ? (
             <div className="p-3 rounded-card bg-canvas">
-              <Label>{t("orders.noteForManager")}</Label>
+              <Label>{t(NOTE_LABEL[editingNote])}</Label>
               <textarea
                 autoFocus
                 className="w-full px-3.5 py-2.5 rounded-card border border-hairline bg-surface text-subhead outline-none focus:border-accent min-h-[64px]"
-                value={managerNoteDraft}
-                onChange={(e) => setManagerNoteDraft(e.target.value)}
+                value={noteDraft}
+                onChange={(e) => setNoteDraft(e.target.value)}
               />
               <div className="flex gap-2 mt-2">
-                <Button tier="plain" onClick={() => setEditingManagerNote(false)}>{t("common.cancel")}</Button>
-                <Button tier="tinted" disabled={savingManagerNote} onClick={saveManagerNote}>
-                  {savingManagerNote ? t("common.saving") : t("common.save")}
+                <Button tier="plain" onClick={() => setEditingNote(null)}>{t("common.cancel")}</Button>
+                <Button tier="tinted" disabled={savingNote} onClick={() => saveNote(editingNote)}>
+                  {savingNote ? t("common.saving") : t("common.save")}
                 </Button>
               </div>
             </div>
           ) : (
-            <Button tier="plain" onClick={() => { setManagerNoteDraft(order.manager_note ?? ""); setEditingManagerNote(true); }}>
-              {order.manager_note ? t("orders.editNoteForManager") : t("orders.addNoteForManager")}
-            </Button>
+            <div className="flex gap-2 flex-wrap">
+              {(isManager ? (["warehouse_note", "salesman_note"] as const) : (["manager_note"] as const)).map((field) => (
+                <Button
+                  key={field}
+                  tier="plain"
+                  onClick={() => { setNoteDraft(order[field] ?? ""); setEditingNote(field); }}
+                >
+                  {t(order[field] ? NOTE_EDIT[field] : NOTE_ADD[field])}
+                </Button>
+              ))}
+            </div>
           )}
         </div>
       )}

@@ -3224,3 +3224,89 @@ with no optimistic update, matching the existing pattern.
 first run reached Supabase cut off inside the block ("unterminated
 dollar-quoted string"), so the constraint is now dropped-if-exists and
 re-added, which is re-runnable without one.
+
+2026-10-01 — The web order screen lets a manager write the note for the
+warehouse and the note for the salesman on an existing order. Owner: "There is
+no note for warehouse or salesman in the orders part". Both notes could only be
+set when the order was created; on an existing order the web showed them but
+had no way to write them, while the phone's manager order editor has always
+had both boxes. Offered on every order the manager opens, as on the phone. The
+warehouse keeps its own "note for manager" editor unchanged; one editor
+component now serves all three notes. /api/orders/set-note already allowed
+these writes and still decides who may write which note.
+
+2026-10-01 — /api/orders/set-note now asks for the changed row back and
+reports a refused write instead of returning ok. Same reason as the goal
+fields: an update RLS declines changes nothing and returns no error.
+
+2026-10-01 — Not added: a salesman's "note for manager" on an existing web
+order (the phone has one). Not asked for; raised with the owner instead.
+
+
+## 2026-10-01 — A month chooser on Sales and the Dashboard; GP worked out per order
+
+Owner: "The GP is showing wrong. Add a month chooser on the salespage and the
+dashboard. So then the whole page shows only data of that month".
+
+2026-10-01 — GP is each order's sale (`subtotal`, net of the order discount)
+less the cost of its lines, summed only over sale whose cost is known; GP % is
+a share of that sale, not of the whole month's. Read against the live
+database for September 2026: 28 of 43 counted orders (AED 32,373 of AED
+82,476) are imported invoices with no lines, so no cost. They added nothing to
+GP and all of their sale to the divisor, so the Dashboard and Sales page read
+GP 32% for orders that made 53.2% (GP AED 26,553.79 on AED 49,922.22). Also
+fixed in the same function (`grossProfitIn`, lib/queries/dashboard.ts): a line
+with no cost on record (5 lines, AED 180) counted as pure profit, and the
+order discount (RUN-ME-28) never reached GP. The Sales page's GP card now says
+how much sale was left out. The salesman drill-down's Avg. GP% uses the same
+function — Rejected: falling back to the product's current cost for a line
+with none; staff sessions cannot read `products.cost` (RUN-ME-4), and today's
+cost is not what the goods cost then.
+
+2026-10-01 — The month chooser is a select of this month and the 24 before it,
+in the page header, starting on this month every visit (not saved). It moves:
+sale, GP, profit, orders, expenses, collected, the leaderboard, the category
+widget, the twelve-month charts and table (they end on the chosen month, so
+"vs last month" compares with the month before it), and the sale chart and
+Orders & payments widget, whose own range pickers jump to the month and still
+work after. It does not move what is a reading of today: the order-status
+pipeline counts, Remaining and Overdue (there is no record of what was owed
+at a past month end), the warehouse dashboard (no chooser), and borrowed
+catalog widgets. Sales' "Today vs same day" row only shows for this month —
+Rejected: a URL parameter to carry the month between pages; not asked for.
+
+2026-10-01 — For this month the Sales trend chart shows the 1st to today
+rather than the trailing 30 days, so it matches the month's total beside it.
+The Dashboard's sale chart keeps its saved range until a month is chosen.
+
+2026-10-01 — The shared order cache reaches back further than 25 months when
+a chosen month's year-earlier column needs it, instead of reading zero.
+
+2026-10-01 — Three date faults fixed while making these pages follow a month,
+all from toISOString() giving the UTC date (local midnight is the previous
+day in UTC here): the sale trend charts labelled each day with the previous
+day's sale and drew one point too many ("30 days" was 31, the last one
+tomorrow); "Month to date" in the range picker started on the last day of the
+previous month; and the expense breakdown counted the last day of the
+previous month as this month's.
+
+2026-10-01 — Phone not changed yet. Its dashboard and Sales screens have the
+same month-to-date figures; asked the owner before mirroring this.
+
+2026-10-01 — Orders not yet approved show what their lines come to, not
+AED 0.00. Owner reported every Waiting order listing as 0.00. Cause: an
+order's subtotal/vat_amount/total are written at approval and are 0 on the
+row until then (by design — see approve and recalcOrderTotals), and the web
+lists printed the stored figure. The phone never showed 0: its
+`receivableTotal` falls back to the lines when the stored total is 0
+(2026-09-05). The web now does the same in `attachRelations`
+(lib/queries/orders.ts), so every order list gets it — Orders, warehouse
+stages, customer page, exports. Same arithmetic as recalcOrderTotals: lines
+at picked qty else ordered, less the order discount, VAT at the customer's
+zone rate — so the figure shown is the one approval will store. Display
+only, nothing written. Billed orders (approved/delivering/delivered) are
+left alone even at 0, since an old imported invoice can hold a real 0.
+Rejected: writing the total at order creation plus a backfill — the stored
+figure means "billed" everywhere (approval, unapprove and grant-edit all
+reset it to 0), and the phone creates orders directly, so it would need an
+iOS change and a RUN-ME to stay true. Phone unchanged; it already shows these.

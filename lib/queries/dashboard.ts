@@ -5,6 +5,7 @@ import { fetchOutstandingInvoices, getOverdueThresholdDays } from "@/lib/queries
 import { BILLED_STATUSES } from "@/lib/billedStatuses";
 import { t } from "@/lib/i18n";
 import { fetchAllForIds, fetchAllPages } from "@/lib/paging";
+import { effectiveQty, toAed, toFils } from "@/lib/money";
 
 // Every read of orders, order lines and payments in this file is paged
 // (lib/paging.ts). One request stops at 1,000 rows without saying so, and a
@@ -51,8 +52,8 @@ export interface RevenueOrder {
 
 const REVENUE_TTL_MS = 10_000;
 const REVENUE_MONTHS_BACK = 25;
-let revenueCache: { at: number; rows: RevenueOrder[] } | null = null;
-let revenueInFlight: Promise<RevenueOrder[]> | null = null;
+let revenueCache: { at: number; since: string; rows: RevenueOrder[] } | null = null;
+let revenueInFlight: { since: string; rows: Promise<RevenueOrder[]> } | null = null;
 
 export function invalidateOrderFacts() {
   revenueCache = null;
@@ -63,13 +64,19 @@ function revenueWindowIso(): string {
   return new Date(d.getFullYear(), d.getMonth() - REVENUE_MONTHS_BACK, 1).toISOString();
 }
 
-async function revenueOrders(supabase: SupabaseClient): Promise<RevenueOrder[]> {
-  if (revenueCache && Date.now() - revenueCache.at < REVENUE_TTL_MS) return revenueCache.rows;
-  if (revenueInFlight) return revenueInFlight;
+// With the month chooser a page can ask about a month whose year-earlier
+// comparison sits before the usual twenty-five months; the window then
+// stretches back to cover it rather than quietly reading zero.
+async function revenueOrders(supabase: SupabaseClient, needFrom?: Date): Promise<RevenueOrder[]> {
+  const usual = revenueWindowIso();
+  const since = needFrom && needFrom.toISOString() < usual ? needFrom.toISOString() : usual;
+  if (revenueCache && revenueCache.since <= since && Date.now() - revenueCache.at < REVENUE_TTL_MS) {
+    return revenueCache.rows;
+  }
+  if (revenueInFlight && revenueInFlight.since <= since) return revenueInFlight.rows;
 
-  revenueInFlight = (async () => {
+  const pending = (async () => {
     const statuses = BILLED_STATUSES;
-    const since = revenueWindowIso();
     const billed = await billingDateColumn(supabase);
     const rows = await fetchAllPages<RevenueOrder>(
       (from, to) =>
@@ -82,13 +89,16 @@ async function revenueOrders(supabase: SupabaseClient): Promise<RevenueOrder[]> 
           .range(from, to) as never,
       { keyOf: (o) => o.id }
     );
-    revenueCache = { at: Date.now(), rows };
+    // Never trade a wider fresh window for a narrower one.
+    const keep = revenueCache && revenueCache.since < since && Date.now() - revenueCache.at < REVENUE_TTL_MS;
+    if (!keep) revenueCache = { at: Date.now(), since, rows };
     return rows;
   })().finally(() => {
-    revenueInFlight = null;
+    if (revenueInFlight?.rows === pending) revenueInFlight = null;
   });
+  revenueInFlight = { since, rows: pending };
 
-  return revenueInFlight;
+  return pending;
 }
 
 /** The counted orders in a window, for one salesman or the whole team. */
@@ -96,7 +106,7 @@ export async function revenueIn(
   supabase: SupabaseClient,
   opts: { from?: Date; to?: Date; salesmanId?: string } = {}
 ): Promise<RevenueOrder[]> {
-  const rows = await revenueOrders(supabase);
+  const rows = await revenueOrders(supabase, opts.from);
   const fromMs = opts.from ? opts.from.getTime() : -Infinity;
   const toMs = opts.to ? opts.to.getTime() : Infinity;
   return rows.filter((o) => {
@@ -106,9 +116,41 @@ export async function revenueIn(
   });
 }
 
-function startOfMonthIso(): string {
+// A calendar month on this device's clock. `month` is 0-based, as in Date.
+// The Sales page and the Dashboard both have a month chooser, and every
+// "this month" figure below takes one; leaving it out means the current
+// month, which is what every other caller has always had.
+export interface Month {
+  year: number;
+  month: number;
+}
+
+export function currentMonth(): Month {
   const d = new Date();
-  return new Date(d.getFullYear(), d.getMonth(), 1).toISOString();
+  return { year: d.getFullYear(), month: d.getMonth() };
+}
+
+export function isCurrentMonth(m: Month): boolean {
+  const c = currentMonth();
+  return m.year === c.year && m.month === c.month;
+}
+
+/** Local midnight on the 1st to the last millisecond of the month. */
+export function monthBounds(m: Month = currentMonth()): { from: Date; to: Date } {
+  const from = new Date(m.year, m.month, 1);
+  const to = new Date(new Date(m.year, m.month + 1, 1).getTime() - 1);
+  return { from, to };
+}
+
+/** YYYY-MM-DD from the local date — not toISOString, which is a day early here before 4am. */
+export function localDateKey(d: Date): string {
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${mm}-${dd}`;
+}
+
+function startOfMonthIso(m?: Month): string {
+  return monthBounds(m).from.toISOString();
 }
 
 // Sales figure = value of approved (billed) orders this month. `orders.total` is
@@ -122,9 +164,10 @@ function startOfMonthIso(): string {
 // does include the VAT.
 export async function monthToDateSales(
   supabase: SupabaseClient,
-  salesmanId?: string
+  salesmanId?: string,
+  month?: Month
 ): Promise<number> {
-  const rows = await revenueIn(supabase, { from: new Date(startOfMonthIso()), salesmanId });
+  const rows = await revenueIn(supabase, { ...monthBounds(month), salesmanId });
   return rows.reduce((sum, o) => sum + saleValue(o), 0);
 }
 
@@ -138,12 +181,10 @@ export async function monthToDateSales(
 // never tell different stories again.
 export async function countOrdersThisMonth(
   supabase: SupabaseClient,
-  salesmanId?: string
+  salesmanId?: string,
+  month?: Month
 ): Promise<number> {
-  const rows = await revenueIn(supabase, {
-    from: new Date(startOfMonthIso()),
-    salesmanId,
-  });
+  const rows = await revenueIn(supabase, { ...monthBounds(month), salesmanId });
   return rows.length;
 }
 
@@ -164,6 +205,7 @@ export async function countByStatus(
 
 interface SafeItemRow {
   id: string;
+  order_id: string;
   product_id: string;
   sku: string | null;
   description: string | null;
@@ -181,7 +223,7 @@ function fetchSafeItems(supabase: SupabaseClient, orderIds: string[]): Promise<S
     (chunk, from, to) =>
       supabase
         .from("order_items_safe")
-        .select("id, product_id, sku, description, unit_price, unit_cost, ordered_qty, picked_qty")
+        .select("id, order_id, product_id, sku, description, unit_price, unit_cost, ordered_qty, picked_qty")
         .in("order_id", chunk)
         .order("id")
         .range(from, to) as never,
@@ -189,51 +231,105 @@ function fetchSafeItems(supabase: SupabaseClient, orderIds: string[]): Promise<S
   );
 }
 
-// Manager-only figure (needs unit_cost). Sums grossProfit across approved
-// orders' items this month, same convention as fetchBalanceSheet in
-// reports.ts (order_items_safe exposes real cost to a Manager session).
+export interface GrossProfit {
+  /** Sale less cost, over the sale whose cost is known. */
+  gp: number;
+  /** The sale GP was worked out on — what GP % is a percentage of. */
+  costedSale: number;
+  /** Sale with no cost behind it, left out of both figures above. */
+  uncostedSale: number;
+}
+
+// Manager-only figure (needs unit_cost, which order_items_safe gives a
+// manager and nulls for anyone else).
+//
+// GP used to be Σ (unit_price − unit_cost) × qty over every line, and the
+// screens divided it by the whole month's sale for GP %. That was wrong
+// three ways, all visible on the live data for September 2026:
+//  - An order with no lines (every imported invoice — 28 of September's 43,
+//    AED 32,373 of AED 82,476) has a sale and no cost. It added nothing to
+//    GP and all of its sale to the divisor: GP % read 32% for orders that
+//    actually made 53%.
+//  - A line with no cost recorded counted as pure profit (`unit_cost ?? 0`).
+//  - The order discount (RUN-ME-28) is taken off `subtotal`, not off any
+//    line, so it never reached GP.
+// Now each order's GP is its sale (`subtotal`, net of the discount) less
+// its cost. A line with no cost leaves that line's value out of both sides,
+// and an order with no lines leaves out entirely; both are reported as
+// `uncostedSale` so the screen can say so.
+export async function grossProfitIn(
+  supabase: SupabaseClient,
+  opts: { from?: Date; to?: Date; salesmanId?: string }
+): Promise<GrossProfit> {
+  const orders = await revenueIn(supabase, opts);
+  const out: GrossProfit = { gp: 0, costedSale: 0, uncostedSale: 0 };
+  if (orders.length === 0) return out;
+
+  const items = await fetchSafeItems(
+    supabase,
+    orders.map((o) => o.id)
+  );
+  const byOrder = new Map<string, SafeItemRow[]>();
+  for (const it of items) {
+    const list = byOrder.get(it.order_id) ?? [];
+    list.push(it);
+    byOrder.set(it.order_id, list);
+  }
+
+  // In fils, so a month of lines adds up exactly (lib/money.ts).
+  let gpFils = 0;
+  let costedFils = 0;
+  let uncostedFils = 0;
+  for (const o of orders) {
+    const saleFils = toFils(saleValue(o));
+    const lines = byOrder.get(o.id) ?? [];
+    if (lines.length === 0) {
+      uncostedFils += saleFils;
+      continue;
+    }
+    let costFils = 0;
+    let noCostFils = 0;
+    for (const it of lines) {
+      const qty = effectiveQty(it);
+      if (it.unit_cost == null) noCostFils += Math.round(toFils(it.unit_price) * qty);
+      else costFils += Math.round(toFils(it.unit_cost) * qty);
+    }
+    const costed = Math.max(0, saleFils - noCostFils);
+    if (costed === 0 && costFils === 0) {
+      uncostedFils += saleFils;
+      continue;
+    }
+    costedFils += costed;
+    uncostedFils += saleFils - costed;
+    gpFils += costed - costFils;
+  }
+  return { gp: toAed(gpFils), costedSale: toAed(costedFils), uncostedSale: toAed(uncostedFils) };
+}
+
 export async function monthToDateGrossProfit(
   supabase: SupabaseClient,
-  salesmanId?: string
-): Promise<number> {
-  const orders = await revenueIn(supabase, { from: new Date(startOfMonthIso()), salesmanId });
-  const orderIds = orders.map((o) => o.id);
-  if (orderIds.length === 0) return 0;
+  salesmanId?: string,
+  month?: Month
+): Promise<GrossProfit> {
+  return grossProfitIn(supabase, { ...monthBounds(month), salesmanId });
+}
 
-  const items = await fetchSafeItems(supabase, orderIds);
-
-  return items.reduce((sum, it) => {
-    const qty = it.picked_qty ?? it.ordered_qty;
-    return sum + (it.unit_price - (it.unit_cost ?? 0)) * qty;
-  }, 0);
+/** GP as a percentage of the sale it was worked out on, or null when there is none. */
+export function gpPercent(g: GrossProfit): number | null {
+  return g.costedSale > 0 ? (g.gp / g.costedSale) * 100 : null;
 }
 
 // Avg. GP% for one salesman over an arbitrary window (§sales-salesman
-// mockup's "Avg. GP%" card). Returns null when there's nothing counted in
-// the window, so the UI can show "—" instead of a misleading 0%.
+// mockup's "Avg. GP%" card). Returns null when there's nothing costed in
+// the window — including for anyone but a manager, whose lines come back
+// with no cost — so the UI can show "—" instead of a misleading figure.
 export async function salesmanAvgGpPercent(
   supabase: SupabaseClient,
   salesmanId: string,
   from: Date,
   to: Date
 ): Promise<number | null> {
-  const orders = await revenueIn(supabase, { from, to, salesmanId });
-  const orderIds = orders.map((o) => o.id);
-  if (orderIds.length === 0) return null;
-
-  const items = await fetchSafeItems(supabase, orderIds);
-
-  let sales = 0;
-  let cost = 0;
-  for (const it of items) {
-    const qty = it.picked_qty ?? it.ordered_qty;
-    sales += it.unit_price * qty;
-    cost += (it.unit_cost ?? 0) * qty;
-  }
-  // unit_cost comes back null for non-Manager sessions — GP is meaningless
-  // there, so report nothing rather than a fake 100%.
-  if (sales <= 0 || cost <= 0) return null;
-  return ((sales - cost) / sales) * 100;
+  return gpPercent(await grossProfitIn(supabase, { from, to, salesmanId }));
 }
 
 // Item count per order, for the Orders list's "N items" subtitle.
@@ -286,21 +382,25 @@ export async function fetchSaleTrend(
   start.setHours(0, 0, 0, 0);
   const end = new Date(to);
   end.setHours(23, 59, 59, 999);
-  const totalDays = Math.max(1, Math.round((end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000)) + 1);
 
   const data = await revenueIn(supabase, { from: start, to: end, salesmanId: opts.salesmanId });
 
+  // Both sides keyed by the local date. The orders used to be keyed by their
+  // UTC date and the days by toISOString() of local midnight — which is the
+  // day before, here — so each point showed the sale of the day before the
+  // one on its label.
   const byDay = new Map<string, number>();
   for (const o of data ?? []) {
-    const key = (o.billed_at as string).slice(0, 10);
+    const key = localDateKey(new Date(o.billed_at as string));
     byDay.set(key, (byDay.get(key) ?? 0) + saleValue(o));
   }
 
+  // One point per calendar day from start to end. This used to round the
+  // span (ending at 23:59:59.999) up and add one, which drew a point for the
+  // day after the window — "30 days" was 31 points, the last one tomorrow.
   const points: DailyPoint[] = [];
-  for (let i = 0; i < totalDays; i++) {
-    const d = new Date(start);
-    d.setDate(d.getDate() + i);
-    const key = d.toISOString().slice(0, 10);
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    const key = localDateKey(d);
     points.push({ label: String(d.getDate()), value: byDay.get(key) ?? 0 });
   }
   return points;
@@ -358,10 +458,12 @@ export interface MonthSegments {
 // still pending as neutral.
 export async function fetchPaymentsByMonthSegmented(
   supabase: SupabaseClient,
-  opts: { collectedBy?: string } = {}
+  opts: { collectedBy?: string; endMonth?: Month } = {}
 ): Promise<MonthSegments[]> {
-  const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth() - 11, 1);
+  // The twelve months ending with the chosen one (this one by default).
+  const end = opts.endMonth ?? currentMonth();
+  const start = new Date(end.year, end.month - 11, 1);
+  const endExclusive = new Date(end.year, end.month + 1, 1);
 
   type Row = { id: string; amount: number | string; created_at: string; cheque_status: string | null };
   const data = await fetchAllPages<Row>(
@@ -370,7 +472,8 @@ export async function fetchPaymentsByMonthSegmented(
         .from("payments")
         .select("id, amount, created_at, collector_id, cheque_status")
         .eq("status", "confirmed")
-        .gte("created_at", start.toISOString());
+        .gte("created_at", start.toISOString())
+        .lt("created_at", endExclusive.toISOString());
       if (opts.collectedBy) q = q.eq("collector_id", opts.collectedBy);
       return q.order("id").range(from, to) as never;
     },
@@ -407,12 +510,13 @@ export async function fetchPaymentsByMonthSegmented(
 // chart and the Sales monthly detail table's "Past Year" column.
 export async function fetchSalesByMonth(
   supabase: SupabaseClient,
-  opts: { salesmanId?: string; yearsAgo?: number } = {}
+  opts: { salesmanId?: string; yearsAgo?: number; endMonth?: Month } = {}
 ): Promise<MonthPoint[]> {
-  const now = new Date();
+  // The twelve months ending with the chosen one (this one by default).
+  const last = opts.endMonth ?? currentMonth();
   const yearsAgo = opts.yearsAgo ?? 0;
-  const start = new Date(now.getFullYear() - yearsAgo, now.getMonth() - 11, 1);
-  const end = new Date(now.getFullYear() - yearsAgo, now.getMonth() + 1, 1);
+  const start = new Date(last.year - yearsAgo, last.month - 11, 1);
+  const end = new Date(last.year - yearsAgo, last.month + 1, 1);
 
   // `end` is exclusive here (the first of next month), so step back a
   // millisecond rather than including it.
@@ -505,7 +609,9 @@ export interface PaymentsSummary {
 // Scoped to a salesman's own orders when salesmanId is given.
 export async function fetchPaymentsSummary(
   supabase: SupabaseClient,
-  opts: { salesmanId?: string; collectedBy?: string } = {}
+  // `month` moves Collected only. Remaining and Overdue are what is owed
+  // today; there is no reading of what was owed at the end of a past month.
+  opts: { salesmanId?: string; collectedBy?: string; month?: Month } = {}
 ): Promise<PaymentsSummary> {
   // One reading of what a customer owes, shared with the Customers page and
   // the statements: confirmed payments and approved returns already taken
@@ -540,7 +646,7 @@ export async function fetchPaymentsSummary(
     }
   }
 
-  const received = await monthToDateConfirmedPayments(supabase, opts.collectedBy);
+  const received = await monthToDateConfirmedPayments(supabase, opts.collectedBy, opts.month);
   return { pendingCount, received, overdue, remaining };
 }
 
@@ -577,8 +683,9 @@ export async function paymentsReceivedInRange(
   return confirmedPaymentsTotal(supabase, { fromIso: start.toISOString(), toIso: end.toISOString(), collectedBy: opts.collectedBy });
 }
 
-async function monthToDateConfirmedPayments(supabase: SupabaseClient, collectedBy?: string): Promise<number> {
-  return confirmedPaymentsTotal(supabase, { fromIso: startOfMonthIso(), collectedBy });
+async function monthToDateConfirmedPayments(supabase: SupabaseClient, collectedBy?: string, month?: Month): Promise<number> {
+  const { from, to } = monthBounds(month);
+  return confirmedPaymentsTotal(supabase, { fromIso: from.toISOString(), toIso: to.toISOString(), collectedBy });
 }
 
 // Σ amount of confirmed payments in a window. The arithmetic is what both
@@ -617,13 +724,19 @@ export interface CategorySale {
 // figure in the app are computed.
 export async function fetchSalesByCategory(
   supabase: SupabaseClient,
-  opts: { groupBy?: "category" | "product"; salesmanId?: string; limit?: number } = {}
+  opts: { groupBy?: "category" | "product"; salesmanId?: string; limit?: number; month?: Month } = {}
 ): Promise<CategorySale[]> {
   const statuses = BILLED_STATUSES;
   const billed = await billingDateColumn(supabase);
+  const { from: monthFrom, to: monthTo } = monthBounds(opts.month);
   const orders = await fetchAllPages<{ id: string }>(
     (from, to) => {
-      let orderQ = supabase.from("orders").select("id").in("status", statuses).gte(billed, startOfMonthIso());
+      let orderQ = supabase
+        .from("orders")
+        .select("id")
+        .in("status", statuses)
+        .gte(billed, monthFrom.toISOString())
+        .lte(billed, monthTo.toISOString());
       if (opts.salesmanId) orderQ = orderQ.eq("salesman_id", opts.salesmanId);
       return orderQ.order("id").range(from, to) as never;
     },
@@ -682,17 +795,22 @@ export async function fetchSalesByCategory(
 // direct anon-key query — the `expenses` RLS policy still references the
 // old `users.auth_id` column and 400s on every anon-key query; see
 // app/api/expenses/route.ts.
-export async function fetchExpenseBreakdown(_supabase: SupabaseClient): Promise<{
+export async function fetchExpenseBreakdown(_supabase: SupabaseClient, month?: Month): Promise<{
   slices: ExpenseSlice[];
   total: number;
 }> {
   const res = await fetch("/api/expenses");
   const json = await res.json();
   if (!res.ok) throw new Error(json.error ?? t("dashboard.failedToLoadExpenses"));
-  const monthStart = startOfMonthIso().slice(0, 10);
+  // `date` is a plain calendar date, so compare it with local dates. This
+  // used to be toISOString() of local midnight on the 1st — the last day of
+  // the previous month here — so that day's expenses counted twice.
+  const { from, to } = monthBounds(month);
+  const monthStart = localDateKey(from);
+  const monthEnd = localDateKey(to);
   const data: { type: string; category: string | null; amount: number; date: string }[] = (
     json.expenses ?? []
-  ).filter((e: { date: string }) => e.date >= monthStart);
+  ).filter((e: { date: string }) => e.date >= monthStart && e.date <= monthEnd);
 
   const byLabel = new Map<string, number>();
   for (const e of data) {

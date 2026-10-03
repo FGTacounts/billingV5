@@ -3,6 +3,7 @@ import { getAppUser } from "@/lib/auth";
 import { t } from "@/lib/i18n";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { aiConfigured, type ScannedArticle } from "@/lib/ai-scan";
+import { hasCost, listSkus, noCostVerdict } from "@/lib/articleCost";
 import { scanArticlesPreview, existingProductSkus, JobInputError } from "@/lib/job-runners";
 
 export const runtime = "nodejs";
@@ -62,6 +63,23 @@ export async function POST(req: NextRequest) {
 
       if (fresh.length === 0) {
         return NextResponse.json({ ok: true, added: 0, duplicates });
+      }
+
+      // Every article added needs a cost (lib/articleCost.ts). The review
+      // screen asks for one before it gets here; this is the line itself.
+      const noCost = fresh.filter((a) => !hasCost(a.cost)).map((a) => String(a.sku));
+      const verdict = noCostVerdict(user.role, noCost.length, form.get("confirmNoCost") === "true");
+      if (verdict === "refuse") {
+        return NextResponse.json(
+          { error: t("products.costRequiredSkus", { skus: listSkus(noCost) }), code: "cost_required", skus: noCost },
+          { status: 422 }
+        );
+      }
+      if (verdict === "confirm") {
+        return NextResponse.json(
+          { error: t("products.noCostSkusBody", { skus: listSkus(noCost) }), needsConfirmation: "no_cost", skus: noCost },
+          { status: 409 }
+        );
       }
 
       const { error } = await admin.from("products").insert(

@@ -3,6 +3,7 @@ import { getAppUser } from "@/lib/auth";
 import { t } from "@/lib/i18n";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { cleanDashPlaceholder, dedupeSkus } from "@/lib/importAliases";
+import { hasCost, listSkus, noCostVerdict } from "@/lib/articleCost";
 
 export const runtime = "nodejs";
 
@@ -46,8 +47,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: t("common.managerAccessRequired") }, { status: 403 });
   }
 
-  const { rows, stockMode = "keep" } = (await req.json()) as {
+  const { rows, stockMode = "keep", confirmed = false } = (await req.json()) as {
     rows: ImportRow[];
+    // An admin has seen the warning about new articles with no cost.
+    confirmed?: boolean;
     // What to do with stock on SKUs that already exist:
     //   keep    leave the stock we already have (safe default)
     //   replace use the number in the file
@@ -118,7 +121,40 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const payload = clean.map((r) => {
+  // A NEW SKU needs a cost, and a SKU that has a cost does not lose it to a
+  // 0 in the sheet (lib/articleCost.ts); a blank cell already keeps it. A
+  // manager's sheet still imports everything else — a new SKU with no cost
+  // is left out, a cleared cost is kept — and the toast names them. An admin
+  // is asked first.
+  const noCost = clean.filter((r) => !held.has(r.sku) && !hasCost(r.cost)).map((r) => r.sku);
+  const clearing = clean
+    .filter((r) => r.cost !== null && !hasCost(r.cost) && hasCost(held.get(r.sku)?.cost))
+    .map((r) => r.sku);
+  const verdict = noCostVerdict(user.role, noCost.length + clearing.length, confirmed === true);
+  if (verdict === "confirm") {
+    const said = [
+      noCost.length > 0 ? t("products.noCostSkusBody", { skus: listSkus(noCost) }) : "",
+      clearing.length > 0 ? t("products.clearCostSkusBody", { skus: listSkus(clearing) }) : "",
+    ];
+    return NextResponse.json(
+      { error: said.filter(Boolean).join(" "), needsConfirmation: "no_cost", skus: [...noCost, ...clearing] },
+      { status: 409 }
+    );
+  }
+  const refused = new Set(verdict === "refuse" ? noCost : []);
+  const keptCost = new Set(verdict === "refuse" ? clearing : []);
+  const accepted = clean
+    .filter((r) => !refused.has(r.sku))
+    // null is "the sheet did not say", which keeps what we hold.
+    .map((r) => (keptCost.has(r.sku) ? { ...r, cost: null } : r));
+  if (accepted.length === 0) {
+    return NextResponse.json(
+      { error: t("products.costRequiredSkus", { skus: listSkus(noCost) }), code: "cost_required", skus: noCost },
+      { status: 422 }
+    );
+  }
+
+  const payload = accepted.map((r) => {
     const known = existingStock.get(r.sku);
     const isNew = known === undefined;
     const fromFile = r.stock_on_hand;
@@ -159,11 +195,19 @@ export async function POST(req: NextRequest) {
   const { error } = await admin.from("products").upsert(payload, { onConflict: "sku" });
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
-  const updated = clean.filter((r) => existingStock.has(r.sku)).length;
+  const updated = accepted.filter((r) => existingStock.has(r.sku)).length;
   return NextResponse.json({
     ok: true,
-    count: clean.length,
-    created: clean.length - updated,
+    count: accepted.length,
+    created: accepted.length - updated,
     updated,
+    // ImportCsvButton appends this sentence to the toast.
+    note:
+      [
+        refused.size > 0 ? t("products.costRequiredSkipped", { skus: listSkus([...refused]) }) : "",
+        keptCost.size > 0 ? t("products.costKeptSkus", { skus: listSkus([...keptCost]) }) : "",
+      ]
+        .filter(Boolean)
+        .join(" ") || undefined,
   });
 }

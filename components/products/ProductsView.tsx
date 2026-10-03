@@ -26,6 +26,8 @@ import PinnableOptionsButton from "@/components/ui/PinnableOptions";
 import { usePagination, Pagination } from "@/components/ui/Pagination";
 import SegmentedControl from "@/components/ui/SegmentedControl";
 import { PRODUCT_SAMPLE_EXAMPLE, PRODUCT_SAMPLE_HEADERS } from "@/lib/importSamples";
+import { hasCost } from "@/lib/articleCost";
+import { friendlyError } from "@/lib/errors";
 
 type SortKey = "none" | "sku" | "price_asc" | "price_desc" | "stock_asc" | "lowStock";
 const SORT_OPTIONS: { key: SortKey; label: string }[] = [
@@ -455,7 +457,7 @@ export default function ProductsView({ isManager, user }: { isManager: boolean; 
         {isManager && <ExportLink type="products" />}
           {/* A supplier invoice read straight into the catalogue, so a
               delivery of new lines doesn't have to be typed twice. */}
-          {isManager && <ScanArticlesButton onAdded={load} />}
+          {isManager && <ScanArticlesButton onAdded={load} isAdmin={user.role === "admin"} />}
           {isManager && (
             <Button tier="primary" onClick={() => setEditing("new")} className="flex items-center gap-1.5">
               <Plus size={16} /> {t("products.addProduct")}
@@ -770,6 +772,7 @@ export default function ProductsView({ isManager, user }: { isManager: boolean; 
           // prefilled with the previous product's data.
           key={editing === "new" ? "new" : editing.id}
           product={editing === "new" ? null : editing}
+          isAdmin={user.role === "admin"}
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);
@@ -906,11 +909,13 @@ function OverrideField({
 
 function ProductEditor({
   product,
+  isAdmin,
   onClose,
   onSaved,
   onLinksChanged,
 }: {
   product: Product | null;
+  isAdmin: boolean;
   onClose: () => void;
   onSaved: () => void;
   onLinksChanged: () => void;
@@ -934,6 +939,13 @@ function ProductEditor({
       product?.stock_holding_days_override != null ? String(product.stock_holding_days_override) : "",
   });
   const [saving, setSaving] = useState(false);
+  // A new article needs a cost, and an article that has one keeps it
+  // (lib/articleCost.ts). A manager is stopped at the field; an admin is asked
+  // once, below the price, and may go ahead. An article with no cost yet is
+  // edited as before.
+  const guardsCost = !product || hasCost(product.cost);
+  const [costError, setCostError] = useState(false);
+  const [askNoCost, setAskNoCost] = useState(false);
   // §Products: "when adding a new image during product creation, the
   // Additional Details section doesn't show — should follow the design."
   // The photo is uploaded on save (it's filed in Drive under the SKU, so it
@@ -1059,7 +1071,17 @@ function ProductEditor({
     setShowDetails(true);
   }
 
-  async function save() {
+  async function save(confirmNoCost = false) {
+    if (guardsCost && !hasCost(form.cost) && !confirmNoCost) {
+      if (isAdmin) {
+        setAskNoCost(true);
+      } else {
+        setCostError(true);
+        document.getElementById("product-cost")?.focus();
+      }
+      return;
+    }
+    setAskNoCost(false);
     setSaving(true);
     const supabase = supabaseBrowser();
     try {
@@ -1075,8 +1097,8 @@ function ProductEditor({
         stock_holding_days_override: num(form.stock_holding_days_override),
       };
       const result = product
-        ? await updateProduct(supabase, product.id, payload)
-        : await createProduct(supabase, payload);
+        ? await updateProduct(supabase, product.id, payload, { confirmNoCost })
+        : await createProduct(supabase, payload, { confirmNoCost });
       if (result?.overridesDropped) {
         toast.error(t("products.overridesDropped"));
       }
@@ -1096,6 +1118,8 @@ function ProductEditor({
         }
       }
       onSaved();
+    } catch (e) {
+      toast.error(friendlyError(e, product ? t("products.updateFailed") : t("products.createFailed")));
     } finally {
       setSaving(false);
     }
@@ -1109,7 +1133,7 @@ function ProductEditor({
       footer={
         <>
           <Button tier="plain" onClick={onClose}>{t("common.cancel")}</Button>
-          <Button tier="primary" onClick={save} disabled={saving || !form.sku || !form.name}>
+          <Button tier="primary" onClick={() => save()} disabled={saving || !form.sku || !form.name}>
             {saving ? t("common.saving") : t("common.save")}
           </Button>
         </>
@@ -1184,9 +1208,44 @@ function ProductEditor({
           </div>
           <div>
             <Label>{t("products.costAed")}</Label>
-            <TextInput type="number" value={form.cost} onChange={(e) => setForm({ ...form, cost: Number(e.target.value) })} />
+            <TextInput
+              id="product-cost"
+              type="number"
+              value={form.cost}
+              aria-invalid={costError || undefined}
+              aria-describedby={costError ? "product-cost-error" : undefined}
+              className={costError ? "!border-[--status-danger]" : undefined}
+              onChange={(e) => {
+                setForm({ ...form, cost: Number(e.target.value) });
+                setCostError(false);
+                setAskNoCost(false);
+              }}
+            />
+            {costError && (
+              <p id="product-cost-error" role="alert" className="text-caption text-[--status-danger] mt-1">
+                {product ? t("products.costCantBeClearedHint") : t("products.costRequiredHint")}
+              </p>
+            )}
           </div>
         </div>
+        {askNoCost && (
+          <div
+            role="alertdialog"
+            aria-live="polite"
+            className="mt-2 rounded-card border border-[--status-warning] bg-[--status-warning]/10 p-3"
+          >
+            <p className="text-subhead font-semibold">{t("products.noCostTitle")}</p>
+            <p className="text-caption text-secondary mt-1">{t("products.noCostBody")}</p>
+            <div className="flex items-center justify-end gap-2 mt-2.5">
+              <Button tier="plain" type="button" className="min-h-11" disabled={saving} onClick={() => setAskNoCost(false)}>
+                {t("common.cancel")}
+              </Button>
+              <Button tier="primary" type="button" className="min-h-11" disabled={saving} onClick={() => save(true)}>
+                {t("products.noCostConfirm")}
+              </Button>
+            </div>
+          </div>
+        )}
         {/* Computed from price − cost, with its margin on the right, as drawn. */}
         <Label>{t("products.grossProfit")}</Label>
         <div className="flex items-center justify-between px-3.5 py-2.5 rounded-card border border-hairline bg-canvas">

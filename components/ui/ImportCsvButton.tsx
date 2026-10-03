@@ -60,16 +60,32 @@ export default function ImportCsvButton({
   const inputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<Record<string, unknown>[] | null>(null);
+  // A route that wants a yes before it writes (a 409 with
+  // `needsConfirmation`) — today, an admin importing new articles with no
+  // cost (lib/articleCost.ts). Its own sentence is shown, and the same rows go
+  // again with `confirmed`.
+  const [confirming, setConfirming] = useState<{
+    rows: Record<string, unknown>[];
+    stockMode?: string;
+    message: string;
+  } | null>(null);
 
-  async function send(rows: Record<string, unknown>[], stockMode?: string) {
+  async function send(rows: Record<string, unknown>[], stockMode?: string, confirmed = false) {
     setBusy(true);
+    setConfirming(null);
     try {
+      const body: Record<string, unknown> = stockMode ? { rows, stockMode } : { rows };
+      if (confirmed) body.confirmed = true;
       const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(stockMode ? { rows, stockMode } : { rows }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
+      if (res.status === 409 && data.needsConfirmation) {
+        setConfirming({ rows, stockMode, message: data.error ?? t("ui.importFailed") });
+        return;
+      }
       if (!res.ok) throw new Error(data.error ?? t("ui.importFailed"));
       onImported();
       const detail =
@@ -218,6 +234,30 @@ export default function ImportCsvButton({
             ))}
           </div>
           <p className="text-caption text-secondary mt-4">{t("ui.blankStockCellNote")}</p>
+        </Sheet>
+      )}
+
+      {confirming && (
+        <Sheet
+          open
+          onClose={() => setConfirming(null)}
+          title={t("products.noCostTitle")}
+          footer={
+            <>
+              <Button tier="plain" onClick={() => setConfirming(null)} disabled={busy}>
+                {t("common.cancel")}
+              </Button>
+              <Button
+                tier="primary"
+                disabled={busy}
+                onClick={() => send(confirming.rows, confirming.stockMode, true)}
+              >
+                {t("ui.importAnyway")}
+              </Button>
+            </>
+          }
+        >
+          <p role="alert" className="text-subhead text-secondary">{confirming.message}</p>
         </Sheet>
       )}
     </div>

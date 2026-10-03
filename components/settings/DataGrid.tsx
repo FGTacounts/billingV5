@@ -16,10 +16,12 @@ import { fetchProducts, createProduct, updateProduct } from "@/lib/queries/produ
 import { fetchOrders, type OrderRow } from "@/lib/queries/orders";
 import { DEFAULT_OVERDUE_DAYS } from "@/lib/queries/aging";
 import ImportCsvButton from "@/components/ui/ImportCsvButton";
+import Button from "@/components/ui/Button";
 import { CUSTOMER_ALIASES, PRODUCT_ALIASES, ORDER_ALIASES } from "@/lib/importAliases";
 import { Skeleton } from "@/components/ui/Empty";
 import type { AppUser, Customer, Product } from "@/lib/types/db";
 import { t } from "@/lib/i18n";
+import { hasCost } from "@/lib/articleCost";
 import { CUSTOMER_SAMPLE_HEADERS, ORDER_SAMPLE_EXAMPLE, ORDER_SAMPLE_HEADERS, PRODUCT_SAMPLE_EXAMPLE, PRODUCT_SAMPLE_HEADERS, customerSampleExample } from "@/lib/importSamples";
 
 // The phone's Manager Dashboard -> Data tab (ManagerDashboardView.swift,
@@ -57,7 +59,7 @@ interface Column {
   numeric?: boolean;
 }
 
-export default function DataGrid() {
+export default function DataGrid({ isAdmin }: { isAdmin: boolean }) {
   const [kind, setKind] = useState<Kind>("Customers");
   const [search, setSearch] = useState("");
 
@@ -101,7 +103,7 @@ export default function DataGrid() {
       </div>
 
       {kind === "Customers" && <CustomersGrid search={search} />}
-      {kind === "Articles" && <ArticlesGrid search={search} />}
+      {kind === "Articles" && <ArticlesGrid search={search} isAdmin={isAdmin} />}
       {kind === "Orders" && <OrdersGrid search={search} />}
       {kind === "Users" && <UsersGrid search={search} />}
     </div>
@@ -493,7 +495,7 @@ function placeholderSku(existing: Product[]): string {
   return `NEW-${n}`;
 }
 
-function ArticlesGrid({ search }: { search: string }) {
+function ArticlesGrid({ search, isAdmin }: { search: string; isAdmin: boolean }) {
   const { rows, setRows, loading, setLoading, patch } = useOptimisticRows<Product>();
   const [adding, setAdding] = useState(false);
 
@@ -546,16 +548,38 @@ function ArticlesGrid({ search }: { search: string }) {
     // `price` is not nullable — an empty price cell reads as nothing owed,
     // which is a number, not an absence.
     const resolved = field === "price" ? value ?? 0 : value;
+    // A cost, once there, is not cleared (lib/articleCost.ts): a manager is
+    // refused and the cell goes back, an admin is asked first.
+    const clearingCost = field === "cost" && hasCost(product.cost) && !hasCost(resolved);
+    if (clearingCost && !isAdmin) {
+      toast.error(t("products.costCantBeCleared"));
+      return false;
+    }
+    if (clearingCost && !confirm(t("settings.clearCostConfirm"))) return false;
     patch(
       product.id,
       { [field]: resolved } as Partial<Product>,
-      () => updateProduct(supabaseBrowser(), product.id, { [field]: resolved }),
+      () =>
+        updateProduct(supabaseBrowser(), product.id, { [field]: resolved }, { confirmNoCost: clearingCost }),
       t("settings.couldntSaveChange")
     );
     return true;
   }
 
+  // Add row asks for the cost first, because a new article needs one
+  // (lib/articleCost.ts): a manager cannot add until it is typed, an admin who
+  // leaves it empty is warned and may go ahead. The rest is filled in on the
+  // row as before.
+  const [askingCost, setAskingCost] = useState(false);
+  const [newCost, setNewCost] = useState("");
+
   async function addRow() {
+    const costGiven = hasCost(newCost);
+    if (!costGiven && !isAdmin) return;
+    if (!costGiven && !confirm(t("settings.addRowNoCostConfirm"))) return;
+    const cost = costGiven ? Math.round(Number(newCost) * 100) / 100 : 0;
+    setAskingCost(false);
+    setNewCost("");
     setAdding(true);
     const sku = placeholderSku(rows);
     const draft: Product = {
@@ -563,7 +587,7 @@ function ArticlesGrid({ search }: { search: string }) {
       sku,
       name: "(new article)",
       price: 0,
-      cost: 0,
+      cost,
       // 12 is the catalogue's own default, the one the product editor and the
       // bulk import both use.
       default_qty: 12,
@@ -579,11 +603,11 @@ function ArticlesGrid({ search }: { search: string }) {
         sku,
         name: draft.name,
         price: 0,
-        cost: 0,
+        cost,
         default_qty: 12,
         stock_on_hand: 0,
         is_active: true,
-      });
+      }, { confirmNoCost: !costGiven });
       await load();
     } catch (e) {
       setRows((current) => current.filter((r) => r.id !== draft.id));
@@ -596,7 +620,14 @@ function ArticlesGrid({ search }: { search: string }) {
   return (
     <>
       <ActionBar>
-        <AddRowButton onClick={addRow} busy={adding} label={t("settings.addRow")} />
+        <AddRowButton
+          onClick={() => {
+            setNewCost("");
+            setAskingCost(true);
+          }}
+          busy={adding}
+          label={t("settings.addRow")}
+        />
         <ImportCsvButton
           endpoint="/api/products/import"
           onImported={load}
@@ -609,6 +640,41 @@ function ArticlesGrid({ search }: { search: string }) {
           }}
         />
       </ActionBar>
+
+      {askingCost && (
+        <form
+          className="flex items-end gap-2 flex-wrap mb-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            addRow();
+          }}
+        >
+          <label className="flex flex-col gap-1">
+            <span className="text-caption font-semibold text-secondary">{t("settings.newRowCost")}</span>
+            <input
+              autoFocus
+              type="number"
+              step="0.01"
+              min={0}
+              inputMode="decimal"
+              value={newCost}
+              onChange={(e) => setNewCost(e.target.value)}
+              onKeyDown={(e) => e.key === "Escape" && setAskingCost(false)}
+              aria-describedby="new-row-cost-hint"
+              className="w-36 min-h-11 px-3 rounded-card border border-hairline bg-canvas text-subhead text-end tabular-nums outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
+            />
+          </label>
+          <Button tier="primary" type="submit" className="min-h-11" disabled={!isAdmin && !hasCost(newCost)}>
+            {t("settings.addRow")}
+          </Button>
+          <Button tier="plain" type="button" className="min-h-11" onClick={() => setAskingCost(false)}>
+            {t("common.cancel")}
+          </Button>
+          <p id="new-row-cost-hint" className="basis-full text-caption text-secondary">
+            {t("settings.newRowCostHint")}
+          </p>
+        </form>
+      )}
 
       <GridShell columns={ARTICLE_COLUMNS} loading={loading} rowCount={visible.length}>
         {visible.map((p) => (

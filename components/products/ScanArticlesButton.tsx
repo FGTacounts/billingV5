@@ -8,6 +8,7 @@ import { friendlyError } from "@/lib/errors";
 import { runQueuedJob } from "@/lib/jobs-client";
 import Sheet from "@/components/ui/Sheet";
 import Button from "@/components/ui/Button";
+import { hasCost, listSkus } from "@/lib/articleCost";
 
 // A supplier invoice or price list, read once and turned into products.
 //
@@ -27,7 +28,7 @@ interface ScannedArticle {
   barcode: string;
 }
 
-export default function ScanArticlesButton({ onAdded }: { onAdded: () => void }) {
+export default function ScanArticlesButton({ onAdded, isAdmin }: { onAdded: () => void; isAdmin: boolean }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -35,12 +36,18 @@ export default function ScanArticlesButton({ onAdded }: { onAdded: () => void })
   const [error, setError] = useState<string | null>(null);
   const [rows, setRows] = useState<ScannedArticle[] | null>(null);
   const [duplicates, setDuplicates] = useState<string[]>([]);
+  // Every article added needs a cost (lib/articleCost.ts). A manager cannot
+  // add until each row has one; an admin is warned once and may go ahead.
+  const [askNoCost, setAskNoCost] = useState(false);
+  const noCost = (rows ?? []).filter((r) => !hasCost(r.cost));
+  const blockedForCost = !isAdmin && noCost.length > 0;
 
   function close() {
     setOpen(false);
     setRows(null);
     setError(null);
     setDuplicates([]);
+    setAskNoCost(false);
     setBusy(false);
     setSaving(false);
     if (fileRef.current) fileRef.current.value = "";
@@ -86,12 +93,18 @@ export default function ScanArticlesButton({ onAdded }: { onAdded: () => void })
     setBusy(false);
   }
 
-  async function save() {
-    if (!rows || rows.length === 0) return;
+  async function save(confirmNoCost = false) {
+    if (!rows || rows.length === 0 || blockedForCost) return;
+    if (noCost.length > 0 && !confirmNoCost) {
+      setAskNoCost(true);
+      return;
+    }
+    setAskNoCost(false);
     setSaving(true);
     try {
       const fd = new FormData();
       fd.append("articles", JSON.stringify(rows));
+      if (confirmNoCost) fd.append("confirmNoCost", "true");
       const res = await fetch("/api/scan-articles", { method: "POST", body: fd });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? t("products.scanSaveFailed"));
@@ -113,6 +126,7 @@ export default function ScanArticlesButton({ onAdded }: { onAdded: () => void })
 
   function edit(i: number, patch: Partial<ScannedArticle>) {
     setRows((prev) => prev && prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+    setAskNoCost(false);
   }
 
   return (
@@ -144,8 +158,8 @@ export default function ScanArticlesButton({ onAdded }: { onAdded: () => void })
               </Button>
               <Button
                 tier="primary"
-                disabled={busy || saving || !rows || rows.length === 0}
-                onClick={save}
+                disabled={busy || saving || !rows || rows.length === 0 || blockedForCost}
+                onClick={() => save()}
               >
                 {saving
                   ? t("products.adding")
@@ -179,6 +193,33 @@ export default function ScanArticlesButton({ onAdded }: { onAdded: () => void })
               <p className="text-caption text-secondary mb-2">
                 {t("products.checkBeforeAdding")}
               </p>
+              {blockedForCost && (
+                <p role="alert" className="text-caption text-[--status-danger] mb-2">
+                  {noCost.length === 1
+                    ? t("products.scanCostMissingOne")
+                    : t("products.scanCostMissing", { n: noCost.length })}
+                </p>
+              )}
+              {askNoCost && (
+                <div
+                  role="alertdialog"
+                  aria-live="polite"
+                  className="mb-3 rounded-card border border-[--status-warning] bg-[--status-warning]/10 p-3"
+                >
+                  <p className="text-subhead font-semibold">{t("products.noCostTitle")}</p>
+                  <p className="text-caption text-secondary mt-1">
+                    {t("products.noCostSkusBody", { skus: listSkus(noCost.map((r) => r.sku)) })}
+                  </p>
+                  <div className="flex items-center justify-end gap-2 mt-2.5">
+                    <Button tier="plain" type="button" className="min-h-11" disabled={saving} onClick={() => setAskNoCost(false)}>
+                      {t("common.cancel")}
+                    </Button>
+                    <Button tier="primary" type="button" className="min-h-11" disabled={saving} onClick={() => save(true)}>
+                      {t("products.addAnyway")}
+                    </Button>
+                  </div>
+                </div>
+              )}
               <div className="border border-hairline rounded-card overflow-x-auto">
                 <table className="w-full text-subhead min-w-[520px]">
                   <thead>
@@ -213,7 +254,11 @@ export default function ScanArticlesButton({ onAdded }: { onAdded: () => void })
                             type="number"
                             step="0.01"
                             min={0}
-                            className="w-20 text-right tabular-nums px-1.5 py-1 rounded-inner border border-hairline bg-canvas"
+                            aria-label={t("products.cost")}
+                            aria-invalid={!hasCost(r.cost) || undefined}
+                            className={`w-20 text-right tabular-nums px-1.5 py-1 rounded-inner border bg-canvas ${
+                              hasCost(r.cost) ? "border-hairline" : "border-[--status-danger]"
+                            }`}
                             value={r.cost}
                             onChange={(e) => edit(i, { cost: Number(e.target.value) || 0 })}
                           />

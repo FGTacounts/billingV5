@@ -25,12 +25,14 @@ export async function fetchProducts(
 
 export async function createProduct(
   supabase: SupabaseClient,
-  input: Partial<Product>
+  input: Partial<Product>,
+  // An admin has been warned the article has no cost (lib/articleCost.ts).
+  opts: { confirmNoCost?: boolean } = {}
 ) {
   const res = await fetch("/api/products", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
+    body: JSON.stringify(opts.confirmNoCost ? { ...input, confirmNoCost: true } : input),
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error ?? t("products.createFailed"));
@@ -40,12 +42,14 @@ export async function createProduct(
 export async function updateProduct(
   supabase: SupabaseClient,
   id: string,
-  input: Partial<Product>
+  input: Partial<Product>,
+  // An admin has been warned the article's cost is being cleared.
+  opts: { confirmNoCost?: boolean } = {}
 ) {
   const res = await fetch("/api/products", {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id, ...input }),
+    body: JSON.stringify(opts.confirmNoCost ? { id, ...input, confirmNoCost: true } : { id, ...input }),
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error ?? t("products.updateFailed"));

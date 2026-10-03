@@ -102,7 +102,7 @@ export default function SettingsView({ user }: { user: AppUser }) {
 
       {tab === "General" && <GeneralTab isManager={(user.role === "manager" || user.role === "admin")} role={user.role} />}
       {tab === "Zones" && isAdmin && <ZonesTab />}
-      {tab === "Data" && <DataTab isManager={(user.role === "manager" || user.role === "admin")} />}
+      {tab === "Data" && <DataTab isManager={(user.role === "manager" || user.role === "admin")} isAdmin={isAdmin} />}
       {tab === "Users" && <UsersTab currentUser={user} />}
       {tab === "Account" && <AccountTab user={user} />}
         </div>
@@ -835,7 +835,7 @@ function ZonesTab() {
 // All roles (§6): bulk "Download All" for each data type — Excel for
 // Manager, PDF for everyone else, the same export-format rule already
 // applied everywhere else in the app, just generalized beyond Invoices.
-function DataTab({ isManager }: { isManager: boolean }) {
+function DataTab({ isManager, isAdmin }: { isManager: boolean; isAdmin: boolean }) {
   const types: { key: string; label: string }[] = [
     { key: "customers", label: t("nav.customers") },
     { key: "products", label: t("nav.products") },
@@ -879,7 +879,7 @@ function DataTab({ isManager }: { isManager: boolean }) {
           </span>
         </a>
       )}
-      {isManager && <DataGrid />}
+      {isManager && <DataGrid isAdmin={isAdmin} />}
       {isManager && <DuplicateOrdersSection />}
     </div>
   );

@@ -4,6 +4,7 @@ import { t } from "@/lib/i18n";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { productFromRow, fetchProductsServer } from "@/lib/products-server";
 import type { Product } from "@/lib/types/db";
+import { hasCost, noCostVerdict } from "@/lib/articleCost";
 
 export const runtime = "nodejs";
 
@@ -91,7 +92,19 @@ export async function POST(req: NextRequest) {
   if (!user || (user.role !== "manager" && user.role !== "admin")) {
     return NextResponse.json({ error: t("common.managerAccessRequired") }, { status: 403 });
   }
-  const body = (await req.json()) as Partial<Product> & { name?: string };
+  const { confirmNoCost, ...body } = (await req.json()) as Partial<Product> & {
+    name?: string;
+    confirmNoCost?: boolean;
+  };
+  // A new article needs a cost: a manager is refused, an admin is asked
+  // first (lib/articleCost.ts).
+  const verdict = noCostVerdict(user.role, hasCost(body.cost) ? 0 : 1, confirmNoCost === true);
+  if (verdict === "refuse") {
+    return NextResponse.json({ error: t("products.costRequired"), code: "cost_required" }, { status: 422 });
+  }
+  if (verdict === "confirm") {
+    return NextResponse.json({ error: t("products.noCostBody"), needsConfirmation: "no_cost" }, { status: 409 });
+  }
   const payload = toDbPayload(body);
   const admin = supabaseAdmin();
   let { data, error } = await admin.from("products").insert(payload).select().single();
@@ -109,10 +122,27 @@ export async function PATCH(req: NextRequest) {
   if (!user || (user.role !== "manager" && user.role !== "admin")) {
     return NextResponse.json({ error: t("common.managerAccessRequired") }, { status: 403 });
   }
-  const { id, ...rest } = (await req.json()) as Partial<Product> & { id: string; name?: string };
+  const { id, confirmNoCost, ...rest } = (await req.json()) as Partial<Product> & {
+    id: string;
+    name?: string;
+    confirmNoCost?: boolean;
+  };
   if (!id) return NextResponse.json({ error: t("common.idRequired") }, { status: 400 });
   const payload = toDbPayload(rest);
   const admin = supabaseAdmin();
+  // A cost, once there, is not cleared (lib/articleCost.ts): a manager is
+  // refused, an admin asked first. An article that has no cost yet is edited
+  // as before.
+  if (rest.cost !== undefined && !hasCost(rest.cost)) {
+    const { data: current } = await admin.from("products").select("cost").eq("id", id).maybeSingle();
+    const verdict = noCostVerdict(user.role, hasCost(current?.cost) ? 1 : 0, confirmNoCost === true);
+    if (verdict === "refuse") {
+      return NextResponse.json({ error: t("products.costCantBeCleared"), code: "cost_required" }, { status: 422 });
+    }
+    if (verdict === "confirm") {
+      return NextResponse.json({ error: t("products.noCostBody"), needsConfirmation: "no_cost" }, { status: 409 });
+    }
+  }
   let { error } = await admin.from("products").update(payload).eq("id", id);
   let overridesDropped = false;
   if (error && isMissingOverrideColumn(error.message)) {

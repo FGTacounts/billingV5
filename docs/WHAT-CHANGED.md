@@ -1212,3 +1212,20 @@ pass, not a failure. The check now says so.
 Nothing was ever exposed by this. The privilege is gone, confirmed by the
 `has_table_privilege` rows RUN-ME-24 prints at the end, and the view could
 not have been written through in any case.
+
+# 2026-10-03 — New articles need a cost price
+
+- **Managers** can no longer add an article without a cost price — from Add
+  product, an Excel import, or Scan invoice. An import still brings in
+  everything else and tells you which new SKUs were left out.
+- **Admins** get a warning instead, and can still go ahead.
+- **A cost can't be cleared.** If an article has a cost, a manager can't set
+  it back to empty or 0 — in the editor, the Settings → Data grid, or by
+  importing a 0 (the old cost is kept and the message says so). Admins are
+  warned instead. Articles that have no cost yet can still be edited.
+- **Settings → Data → Articles → Add row** now asks for the cost first.
+
+**Run `scratchpad/RUN-ME-33-articles-need-a-cost.sql`** in Supabase → SQL
+Editor (role selector: `postgres`). It holds the same two lines for the
+phone, which saves articles straight to the database. If you already ran it
+earlier today, run it again — it was updated.

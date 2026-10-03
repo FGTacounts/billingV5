@@ -3343,3 +3343,61 @@ Orders, red count. It is AllOrdersView with a new `onlyStatus: "rejected"`
 multi-select and the editor's Reapprove come with it. The collapsible
 Rejected list under New Orders is unchanged. iOS commit 4c1f719 holds only
 this change; the other uncommitted iOS work was left as it was.
+
+2026-10-03 — A new article needs a cost price. Owner: "Don't allow anybody
+to add articles without cost. (managers - don't allow and admins - warning)".
+"Without cost" is empty, not a number, or 0 and below (lib/articleCost.ts,
+`hasCost`). A manager is refused; an admin is warned and may go ahead, and
+the route is then told so (`confirmNoCost` / `confirmed`). Only adding is
+covered — an article already in the catalogue is edited exactly as before,
+including the ones that hold no cost today. Every way the web adds one:
+- Products → Add product: a manager gets a red "Required for a new article."
+  under Cost and nothing is saved; an admin gets an inline warning under the
+  price fields with Cancel / Save without cost. The editor's save also gained
+  the error toast it never had (a refused save used to fail silently).
+- Excel import (Products and Settings → Data): only NEW SKUs are checked. A
+  manager's sheet still imports everything else and the toast names what was
+  left out; if nothing is left, the import is refused naming the SKUs. An
+  admin is asked first (Import anyway). ImportCsvButton shows any route's 409
+  `needsConfirmation` sentence and re-sends with `confirmed: true`.
+- Scan invoice: rows with no cost are outlined red; a manager cannot add
+  until each has one, an admin is warned with the SKUs (Add anyway).
+- Settings → Data → Articles → Add row: the row is created at cost 0 and
+  filled in afterwards, so a manager is now told to add from Products or by
+  import, and an admin confirms first. This takes Add row away from managers
+  in that grid — a direct consequence of the rule, flagged to the owner.
+- The server routes (POST /api/products, /api/products/import,
+  /api/scan-articles) apply the same rule, so the screens are not the line.
+The phone inserts into `products` with the person's own session, so
+RUN-ME-33 adds a BEFORE INSERT trigger refusing a no-cost row for any
+signed-in non-admin ("A new article needs a cost price."). It lets through
+calls with no auth.uid() — the web's server-key routes (which check first)
+and the SQL editor — and admins. Rejected: refusing cost 0 on UPDATE too,
+which would also stop a manager clearing a cost on an existing article but
+would block every edit of the articles that already have none until a cost
+is typed; not asked for, raised with the owner instead. Rejected: making
+cost nullable to tell "unknown" from 0 — cost is NOT NULL live and every
+reader treats 0 as none.
+
+2026-10-03 — A cost, once there, cannot be cleared; and Add row asks for the
+cost. Owner, answering the two questions above: "block clearing cost and ask
+for the cost on row". Same split as adding: a manager is refused, an admin
+is warned and may go ahead. "Clearing" is setting a cost above 0 back to
+empty or 0; an article with no cost yet is edited as before (so the
+articles that have none today stay editable). Where it applies on the web:
+the product editor (red "This article has a cost. It can't be cleared."
+under Cost for a manager, the same inline warning for an admin), the
+Settings → Data cost cell (manager: toast, the cell goes back; admin:
+confirm), and PATCH /api/products, which reads the stored cost with the
+server key to decide. An import with 0 in the Cost column for a SKU that has
+a cost keeps the cost for a manager (the rest of the row still updates, the
+toast names them) and is asked about for an admin, in the same question as
+new SKUs with no cost. A blank Cost cell already kept the cost.
+RUN-ME-33 gains `update of cost` on the same trigger: a non-admin signed-in
+session cannot take a cost above 0 to empty or 0 ("An article's cost price
+can't be cleared."). Changes that do not name the cost column are not
+checked at all. Settings → Data → Articles → Add row now opens a cost field
+first (Add / Cancel, Enter adds, Escape cancels); a manager's Add stays off
+until a cost above 0 is typed, an admin may leave it empty and is asked.
+The row is then created with that cost, rounded to 2 decimals, and filled
+in as before. This replaces the morning's "manager can't use Add row".

@@ -3335,5 +3335,11 @@ Trash with Restore (rule 1 — not removed without asking). The view filters
 the page's own order list directly, not `sections`, because `sections`
 honours the All Orders status filter and would empty this view. Search and
 sort apply. Rejected orders are purged after 30 days, so the list is short
-and inside the page's 300 unbilled-order fetch. Phone not changed yet —
-asking the owner.
+and inside the page's 300 unbilled-order fetch.
+
+2026-10-03 — Phone: same Rejected tab on the manager's Orders, beside New
+Orders, red count. It is AllOrdersView with a new `onlyStatus: "rejected"`
+(chips hidden, own empty text) rather than a new list, so search, rows,
+multi-select and the editor's Reapprove come with it. The collapsible
+Rejected list under New Orders is unchanged. iOS commit 4c1f719 holds only
+this change; the other uncommitted iOS work was left as it was.

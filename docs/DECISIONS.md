@@ -3325,3 +3325,15 @@ re-probes every 15s and on focus/tab-visible. Picking always attempts the
 real save and queues only when the fetch itself fails (that fallback already
 existed). Phone unchanged: it uses NWPathMonitor, not this flag, and no
 false offline has been reported there.
+
+2026-10-03 — Manager's Orders switcher gains a Rejected button beside New
+Orders and All Orders, with a count; it lists every rejected order (owner:
+"add a rejected section. All the rejected orders are there"). Rows open the
+order as before, where the manager already has resubmit. Kept as they were:
+the Rejected section at the foot of All Orders, and rejected orders in the
+Trash with Restore (rule 1 — not removed without asking). The view filters
+the page's own order list directly, not `sections`, because `sections`
+honours the All Orders status filter and would empty this view. Search and
+sort apply. Rejected orders are purged after 30 days, so the list is short
+and inside the page's 300 unbilled-order fetch. Phone not changed yet —
+asking the owner.

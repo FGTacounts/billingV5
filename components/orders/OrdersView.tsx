@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { Plus, FileText, ChevronDown, ChevronRight, Search, SlidersHorizontal, PackageCheck, Trash2 } from "lucide-react";
+import { Plus, FileText, ChevronDown, ChevronRight, Search, SlidersHorizontal, PackageCheck, Trash2, XCircle } from "lucide-react";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import {
   fetchOrders,
@@ -195,7 +195,7 @@ export default function OrdersView({ user }: { user: AppUser }) {
   // A stage asked for in the URL opens on it.
   const searchParams = useSearchParams();
   const requestedStage = stageFromParam(searchParams.get("stage"));
-  const [managerView, setManagerView] = useState<"new" | "warehouse" | "all">(
+  const [managerView, setManagerView] = useState<"new" | "rejected" | "warehouse" | "all">(
     requestedStage ? "warehouse" : "new"
   );
   const [warehouseStage, setWarehouseStage] = useState<WarehouseStage>(requestedStage ?? "waiting");
@@ -354,12 +354,17 @@ export default function OrdersView({ user }: { user: AppUser }) {
     } satisfies Record<WarehouseStage, number>;
     return {
       newOrders: count("pending"),
+      rejected: count("rejected"),
       stageCounts,
       warehouseCount: Object.values(stageCounts).reduce((a, b) => a + b, 0),
       all: totalCount,
       thisMonth: monthCount,
     };
   }, [orders, isManager, totalCount, monthCount]);
+
+  // Not taken from `sections`: that one honours the All Orders status filter,
+  // which would quietly empty this view.
+  const rejectedRows = useMemo(() => searchedOrders.filter((o) => o.status === "rejected"), [searchedOrders]);
 
   // The manager has always been able to step through the warehouse stages.
   // The warehouse itself could not: it saw one flat queue mixing orders not yet
@@ -492,6 +497,12 @@ export default function OrdersView({ user }: { user: AppUser }) {
                     onClick={() => setManagerView("new")}
                   />
                   <SwitchButton
+                    label={t("orders.rejectedSwitch")}
+                    count={switcherStats.rejected}
+                    active={managerView === "rejected"}
+                    onClick={() => setManagerView("rejected")}
+                  />
+                  <SwitchButton
                     label={t("orders.allOrdersSwitch")}
                     count={switcherStats.all}
                     active={managerView === "all"}
@@ -548,6 +559,17 @@ export default function OrdersView({ user }: { user: AppUser }) {
 
       {isManager && managerView === "new" && (
         <Section title={t("orders.newOrdersToReview")} rows={sections.pending ?? []} onOpen={setOpenId} />
+      )}
+      {/* Every rejected order in one place (owner, 2026-10-03), rather than
+          only at the foot of All Orders or folded into the Trash — both of
+          those stay as they were. Rejected orders are purged after 30 days,
+          so the list stays short; opening one gives the usual resubmit. */}
+      {isManager && managerView === "rejected" && (
+        rejectedRows.length > 0 ? (
+          <Section title={t("orders.rejected")} rows={rejectedRows} onOpen={setOpenId} />
+        ) : (
+          <EmptyState icon={XCircle} title={t("orders.noRejectedOrders")} />
+        )
       )}
       {isManager && managerView === "warehouse" && (
         <Section title={WAREHOUSE_STAGE_LABEL[warehouseStage]} rows={warehouseRows} onOpen={setOpenId} />

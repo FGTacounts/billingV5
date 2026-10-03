@@ -208,12 +208,14 @@ export const en = {
   // The manager's switcher and the warehouse stage tabs.
   "orders.pending": "Pending",
   "orders.newOrdersSwitch": "New Orders",
+  "orders.rejectedSwitch": "Rejected",
   "orders.allOrdersSwitch": "All Orders",
   "orders.thisMonthCount": "{n} this month",
   "orders.stageWaiting": "Waiting",
   "orders.stagePicking": "Picking",
   "orders.stagePacked": "Packed",
   "orders.nothingInStageRightNow": "Nothing {stage} right now.",
+  "orders.noRejectedOrders": "No rejected orders.",
 
   // Section headings on the orders list.
   "orders.newOrdersToReview": "New orders to review",

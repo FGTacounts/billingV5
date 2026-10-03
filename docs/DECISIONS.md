@@ -3310,3 +3310,18 @@ Rejected: writing the total at order creation plus a backfill — the stored
 figure means "billed" everywhere (approval, unapprove and grant-edit all
 reset it to 0), and the phone creates orders directly, so it would need an
 iOS change and a RUN-ME to stay true. Phone unchanged; it already shows these.
+
+2026-10-03 — "Offline — picks will sync automatically" no longer trusts the
+browser's own online flag. Owner saw it on the Orders page while plainly
+online. Cause: OfflineSyncBanner showed "Offline" whenever
+`navigator.onLine` was false and only cleared on an "online" event; Chrome on
+macOS reports false with a VPN or virtual adapter up, and can miss the
+"online" event after sleep, so the pill stuck. The same flag gated picking in
+OrderDetail, so a falsely-offline browser parked picks in localStorage
+instead of saving them. Now: a false flag is confirmed with a HEAD on a
+static public asset (`isReachable` in lib/offline-queue.ts — public path, no
+middleware, no body); any HTTP response means online. While offline it
+re-probes every 15s and on focus/tab-visible. Picking always attempts the
+real save and queues only when the fetch itself fails (that fallback already
+existed). Phone unchanged: it uses NWPathMonitor, not this flag, and no
+false offline has been reported there.

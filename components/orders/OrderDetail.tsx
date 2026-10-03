@@ -189,10 +189,10 @@ export default function OrderDetail({
   // replay instead of rolling back a tap the picker visibly just made.
   const pickMutation = useMutation({
     mutationFn: async ({ itemId, pickedQty }: { itemId: string; pickedQty: number | null }) => {
-      if (!navigator.onLine) {
-        queuePickUpdate(itemId, pickedQty);
-        return { queued: true };
-      }
+      // Always attempt the real save. navigator.onLine can claim "offline"
+      // on a working connection (VPN, after sleep), which used to park
+      // picks on the device that should have reached the server; only a
+      // fetch that actually fails sends the pick to the queue.
       try {
         const res = await fetch("/api/orders/update-picked-qty", {
           method: "POST",

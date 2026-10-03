@@ -37,6 +37,22 @@ export function getQueuedPickItemIds(): string[] {
   return readQueue().map((q) => q.itemId);
 }
 
+// navigator.onLine === false is not proof of being offline: Chrome on macOS
+// reports it with a VPN or virtual network adapter up, and after sleep it
+// can miss the "online" event entirely, leaving the banner stuck on
+// "Offline" while every request still works. Only a request that fails to
+// reach our own origin counts. A HEAD on a static asset (public path, no
+// middleware, no body) costs next to nothing; any HTTP response at all —
+// even an error status — means the network is up.
+export async function isReachable(): Promise<boolean> {
+  try {
+    await fetch(`/brand/fgt-logo.svg?probe=${Date.now()}`, { method: "HEAD", cache: "no-store" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function hasQueuedPicks(): boolean {
   return readQueue().length > 0;
 }

@@ -2,8 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { WifiOff, RefreshCw } from "lucide-react";
-import { flushPickQueue, hasQueuedPicks } from "@/lib/offline-queue";
+import { flushPickQueue, hasQueuedPicks, isReachable } from "@/lib/offline-queue";
 import { t } from "@/lib/i18n";
+
+// While the banner says "Offline", re-probe this often so it clears on its
+// own even if the browser never fires an "online" event.
+const RECHECK_MS = 15_000;
 
 // Mounted once at the app shell level so a queued pick survives navigation
 // and syncs the moment connectivity returns, wherever the Warehouse user
@@ -14,32 +18,54 @@ export default function OfflineSyncBanner() {
   const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
-    setOffline(!navigator.onLine);
+    let cancelled = false;
+    let recheck: ReturnType<typeof setInterval> | null = null;
     setPending(hasQueuedPicks());
 
     async function trySync() {
-      if (!navigator.onLine || !hasQueuedPicks()) return;
+      if (!hasQueuedPicks()) return;
       setSyncing(true);
       await flushPickQueue();
+      if (cancelled) return;
       setPending(hasQueuedPicks());
       setSyncing(false);
     }
 
-    function onOnline() {
-      setOffline(false);
-      trySync();
-    }
-    function onOffline() {
-      setOffline(true);
+    // The browser's online flag is only a hint (see isReachable): trust it
+    // when it says online, but confirm with a real request before showing
+    // "Offline", and keep re-checking until we're reachable again.
+    async function check() {
+      const reachable = navigator.onLine || (await isReachable());
+      if (cancelled) return;
+      setOffline(!reachable);
+      if (reachable) {
+        if (recheck) {
+          clearInterval(recheck);
+          recheck = null;
+        }
+        trySync();
+      } else if (!recheck) {
+        recheck = setInterval(check, RECHECK_MS);
+      }
     }
 
-    window.addEventListener("online", onOnline);
-    window.addEventListener("offline", onOffline);
-    trySync();
+    function onVisible() {
+      if (document.visibilityState === "visible") check();
+    }
+
+    window.addEventListener("online", check);
+    window.addEventListener("offline", check);
+    window.addEventListener("focus", check);
+    document.addEventListener("visibilitychange", onVisible);
+    check();
 
     return () => {
-      window.removeEventListener("online", onOnline);
-      window.removeEventListener("offline", onOffline);
+      cancelled = true;
+      if (recheck) clearInterval(recheck);
+      window.removeEventListener("online", check);
+      window.removeEventListener("offline", check);
+      window.removeEventListener("focus", check);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, []);
 

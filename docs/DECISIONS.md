@@ -3401,3 +3401,26 @@ first (Add / Cancel, Enter adds, Escape cancels); a manager's Add stays off
 until a cost above 0 is typed, an admin may leave it empty and is asked.
 The row is then created with that cost, rounded to 2 decimals, and filled
 in as before. This replaces the morning's "manager can't use Add row".
+
+2026-10-03 — Phone: the same two rules (a new article needs a cost; a cost
+is not cleared), manager refused / admin warned, on every way the phone
+writes an article: Add/Edit product (AddArticleSheet), Scan invoice
+(AIScanView), Import and paste (ManagerProductsView, the Data tab), the Data
+tab's add-row (asks "Cost of the new article (AED)" first) and its Cost
+cell. One shared helper, ArticleCost.swift; the web's sentences word for
+word. Differences from the web: the phone's scan review has no cost fields,
+so a manager is told which SKUs have none rather than "enter a cost for
+every row"; and the scan only checks rows that would become new articles —
+a row matching an existing SKU only adds stock there. The phone reads
+existing costs for the import check through `products_safe`, because staff
+sessions are not granted `products.cost`; if that read fails, every zeroed
+existing SKU counts as holding a cost (a manager's import keeps it, an admin
+is asked) — over-warning rather than wiping. Found and fixed on the way:
+`updateArticle` sent the phone's saved copy of the cost with every edit, and
+a copy saved by a session that could not read cost holds 0, so an unrelated
+edit (stock, rack, name) could wipe a real cost — and with RUN-ME-33 would
+now be refused outright for a manager. It now sends cost only when it
+differs from what was loaded, and never when cost could not be read.
+Noticed, not changed: every Data tab cell edit rebuilds the article without
+its category and the four Additional Details figures, so a grid edit writes
+an empty category and resets them — worth its own fix.

@@ -262,7 +262,42 @@ export async function grossProfitIn(
   opts: { from?: Date; to?: Date; salesmanId?: string }
 ): Promise<GrossProfit> {
   const orders = await revenueIn(supabase, opts);
-  const out: GrossProfit = { gp: 0, costedSale: 0, uncostedSale: 0 };
+  // In fils, so a month of lines adds up exactly (lib/money.ts).
+  let gpFils = 0;
+  let costedFils = 0;
+  let uncostedFils = 0;
+  for (const g of (await gpFilsByOrder(supabase, orders)).values()) {
+    gpFils += g.gp;
+    costedFils += g.costedSale;
+    uncostedFils += g.uncostedSale;
+  }
+  return { gp: toAed(gpFils), costedSale: toAed(costedFils), uncostedSale: toAed(uncostedFils) };
+}
+
+// The same figure one order at a time, for the Orders list's GP column
+// (owner, 2026-10-06). Shares the arithmetic above, so an order's GP on the
+// list always adds up to the month's GP on the Dashboard. Manager-only in
+// effect: anyone else's lines come back with no cost, and every order reads
+// as uncosted.
+export async function grossProfitByOrder(
+  supabase: SupabaseClient,
+  orders: { id: string; subtotal?: number | null; total?: number | null }[]
+): Promise<Map<string, GrossProfit>> {
+  const out = new Map<string, GrossProfit>();
+  for (const [id, g] of await gpFilsByOrder(supabase, orders)) {
+    out.set(id, { gp: toAed(g.gp), costedSale: toAed(g.costedSale), uncostedSale: toAed(g.uncostedSale) });
+  }
+  return out;
+}
+
+// Each order's GP in fils. An order's GP is its sale (`subtotal`, net of the
+// order discount) less its cost; a line with no cost leaves its value out of
+// both sides, and an order with no lines is all uncosted.
+async function gpFilsByOrder(
+  supabase: SupabaseClient,
+  orders: { id: string; subtotal?: number | null; total?: number | null }[]
+): Promise<Map<string, GrossProfit>> {
+  const out = new Map<string, GrossProfit>();
   if (orders.length === 0) return out;
 
   const items = await fetchSafeItems(
@@ -276,15 +311,11 @@ export async function grossProfitIn(
     byOrder.set(it.order_id, list);
   }
 
-  // In fils, so a month of lines adds up exactly (lib/money.ts).
-  let gpFils = 0;
-  let costedFils = 0;
-  let uncostedFils = 0;
   for (const o of orders) {
     const saleFils = toFils(saleValue(o));
     const lines = byOrder.get(o.id) ?? [];
     if (lines.length === 0) {
-      uncostedFils += saleFils;
+      out.set(o.id, { gp: 0, costedSale: 0, uncostedSale: saleFils });
       continue;
     }
     let costFils = 0;
@@ -296,14 +327,12 @@ export async function grossProfitIn(
     }
     const costed = Math.max(0, saleFils - noCostFils);
     if (costed === 0 && costFils === 0) {
-      uncostedFils += saleFils;
+      out.set(o.id, { gp: 0, costedSale: 0, uncostedSale: saleFils });
       continue;
     }
-    costedFils += costed;
-    uncostedFils += saleFils - costed;
-    gpFils += costed - costFils;
+    out.set(o.id, { gp: costed - costFils, costedSale: costed, uncostedSale: saleFils - costed });
   }
-  return { gp: toAed(gpFils), costedSale: toAed(costedFils), uncostedSale: toAed(uncostedFils) };
+  return out;
 }
 
 export async function monthToDateGrossProfit(

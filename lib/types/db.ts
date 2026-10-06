@@ -81,6 +81,13 @@ export interface UserPreferences {
   // Orders Adjust View (§Next Updates: "Adjust View option in the all
   // orders subtab") — same pattern as productColumns/customerColumns.
   ordersColumns?: string[];
+  // Its successor (owner, 2026-10-06: "make proper adjust view for the
+  // orders page, similar to the customers adjust view, but I want GP"):
+  // named views plus individually toggled columns, the money columns among
+  // them. A new key because ordersColumns meant something narrower — an
+  // empty list there still showed Amount/Received/Balance on a computer.
+  orderListColumns?: string[];
+  orderListView?: string;
   // Sales page Arrange (§Next Updates: "unify split-widget sizes with an
   // Arrange section") — same shape as dashboardLayout.
   salesLayout?: string[];

@@ -3683,3 +3683,49 @@ the customer has an open GRV, so a GRV alone can be used.
 2026-10-06 — The phone's Returns list shows the GRV number beside the date,
 as the web's does. The GRV report in Reports is unchanged on both apps.
 
+
+2026-10-06 — Orders: the progress circle is now the "This month" option.
+Clicking it (or the "This month" button that replaced the "{n} this month"
+caption beside the switcher) lists the orders billed this month — the same
+orders the figure has always counted: billed statuses, by billing date,
+within the calendar month on this device's clock (monthBounds). It is a
+paged list like Approved, so a busy month does not load in one go. Web only:
+the phone's Orders screen has no ring.
+
+2026-10-06 — Orders: the Warehouse block in the manager's switcher shows what
+each stage is worth (Waiting, Picking, Packed) and the three together at its
+edge as "Potential total" — sales still on their way through the warehouse.
+The figure is the order total including VAT, the same amount every order row
+shows, so the values add up to the rows underneath. Waiting includes
+"accepted", as its count does. Summed in fils. Web only: the phone's
+warehouse screen is a stage picker over lists, not this summary card.
+
+2026-10-06 — Orders: a proper Adjust View, on the Customers pattern, with GP
+(owner: "make proper adjust view for the orders page, similar to the
+customers adjust view options... But i want GP"). The sliders button now
+sits beside Sort for every role and applies to every list on the page (New
+orders, Rejected, Warehouse, This month, All), not only the All Orders tab.
+It has named views — Default (Amount, Received, Balance: the table as it was
+always drawn), Profit (Amount, GP, Balance), Compact, All columns — and
+individual toggles for Amount, Received, Balance, GP and District. Date,
+invoice, customer and status stay fixed, as name/balance/condition do on
+Customers. A view is highlighted when the ticked columns match it, rather
+than only straight after it is picked.
+- GP is offered to managers and admins only, and is stripped from anyone
+  else's saved choice; underneath, order_items_safe gives anyone else no
+  cost, so the column could only ever read "—" for them.
+- Each order's GP is worked out by the Dashboard's own arithmetic
+  (gpFilsByOrder in lib/queries/dashboard.ts, which grossProfitIn now sums),
+  so the rows add up to the month's GP: sale net of the order discount less
+  cost; a line with no cost is left out of both sides and the figure gets a
+  "*" with a tooltip; an order with no lines (imported invoices) reads "—".
+  GP % under it is of the costed sale. Fetched only while the column is on.
+- This can differ from the "Gross profit" row inside an order, which still
+  counts a line with no cost as all profit. Left alone — not asked.
+- Saved as new preferences orderListColumns / orderListView. The old
+  ordersColumns meant less (an empty list still drew the money columns on a
+  computer), so reusing it would have hidden them for anyone who had saved a
+  choice; its District tick carries over.
+- On a phone the row shows Amount and GP when on; Received and Balance stay
+  computer-only, as before (the phone row has no room for them).
+- Web only: the iPhone app has no Orders (or Customers) adjust view.

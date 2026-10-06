@@ -304,10 +304,15 @@ export async function fetchOrdersPage(
     // 2026-10-06 invoice 4503 was the 32nd newest billed order and searching
     // for it on Orders came back empty.
     search?: string;
+    // Billing-date window, as on fetchOrders: the Orders page's "This month"
+    // view lists exactly the orders its "{n} this month" figure counts.
+    from?: Date;
+    to?: Date;
   } = {}
 ): Promise<OrderPage> {
   const pageSize = opts.pageSize ?? 25;
   const searchFilter = await orderSearchFilter(supabase, opts.search);
+  const billed = await billingDateColumn(supabase);
   const build = (select: string, filterDeleted: boolean) => {
     let q = supabase
       .from("orders")
@@ -319,6 +324,8 @@ export async function fetchOrdersPage(
     if (opts.status?.length) q = q.in("status", opts.status);
     if (opts.excludeStatus?.length) q = q.not("status", "in", `(${opts.excludeStatus.join(",")})`);
     if (opts.salesmanId) q = q.eq("salesman_id", opts.salesmanId);
+    if (opts.from) q = q.gte(billed, opts.from.toISOString());
+    if (opts.to) q = q.lte(billed, opts.to.toISOString());
     // A second or() is ANDed with the cursor's, not merged into it.
     if (searchFilter) q = q.or(searchFilter);
     if (opts.cursor) {

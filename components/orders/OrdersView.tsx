@@ -1,8 +1,8 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
-import { Plus, FileText, ChevronDown, ChevronRight, Search, SlidersHorizontal, PackageCheck, Trash2, XCircle } from "lucide-react";
+import { Plus, FileText, ChevronDown, ChevronRight, Search, SlidersHorizontal, PackageCheck, Trash2, XCircle, CalendarDays } from "lucide-react";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import {
   fetchOrders,
@@ -20,7 +20,14 @@ import {
 import { toast } from "@/lib/toast";
 import { t } from "@/lib/i18n";
 import { friendlyError } from "@/lib/errors";
-import { countOrdersThisMonth, orderItemCounts } from "@/lib/queries/dashboard";
+import {
+  countOrdersThisMonth,
+  monthBounds,
+  orderItemCounts,
+  grossProfitByOrder,
+  gpPercent,
+  type GrossProfit,
+} from "@/lib/queries/dashboard";
 import { fetchPaidByOrder } from "@/lib/queries/aging";
 import { useRealtimeTable } from "@/lib/realtime/useRealtimeTable";
 import type { AppUser, OrderStatus } from "@/lib/types/db";
@@ -31,11 +38,11 @@ import { Card } from "@/components/ui/Card";
 import { RingProgress } from "@/components/ui/charts";
 import ScrollAwayTabs from "@/components/ui/ScrollAwayTabs";
 import { BILLED_STATUSES } from "@/lib/billedStatuses";
-import { EmptyState, SkeletonList } from "@/components/ui/Empty";
+import { EmptyState, Skeleton, SkeletonList } from "@/components/ui/Empty";
 import { StaggerList } from "@/components/ui/StaggerList";
 import { OrderStatusPill, Pill } from "@/components/ui/Badge";
 import { usePreferences } from "@/lib/hooks/usePreferences";
-import { formatAed } from "@/lib/money";
+import { formatAed, toAed, toFils } from "@/lib/money";
 import NewOrderSheet from "./NewOrderSheet";
 import OrderDetail from "./OrderDetail";
 import ImportCsvButton from "@/components/ui/ImportCsvButton";
@@ -43,21 +50,48 @@ import { ORDER_ALIASES } from "@/lib/importAliases";
 import { ORDER_SAMPLE_EXAMPLE, ORDER_SAMPLE_HEADERS } from "@/lib/importSamples";
 
 // Orders Adjust View (§Next Updates: "Adjust View option in the all orders
-// subtab") — optional extra columns shown per row, same split as the
-// Products/Customers Adjust View (fixed identity+status columns, a handful
-// of individually-toggleable extras).
-type OrderColumnKey = "amount" | "district";
-const ALL_ORDER_COLUMNS: OrderColumnKey[] = ["amount", "district"];
+// subtab"; owner, 2026-10-06: "make proper adjust view for the orders page,
+// similar to the customers adjust view, but I want GP"). Date, invoice,
+// customer and status are the fixed identity+status columns; the money
+// columns and the district are individually toggleable, with a few named
+// views on top — the Customers popover's shape. GP is a manager's column:
+// nobody else is shown cost, so nobody else is offered it.
+type OrderColumnKey = "amount" | "received" | "balance" | "gp" | "district";
+const ALL_ORDER_COLUMNS: OrderColumnKey[] = ["amount", "received", "balance", "gp", "district"];
 const ORDER_COLUMN_LABELS: Record<OrderColumnKey, string> = {
   amount: t("orders.amount"),
+  received: t("orders.received"),
+  balance: t("orders.balance"),
+  gp: t("orders.gp"),
   district: t("orders.district"),
 };
+// Default is the table as it has always been drawn on a computer.
+const ORDER_VIEWS: { key: string; label: string; columns: OrderColumnKey[]; managerOnly?: boolean }[] = [
+  { key: "default", label: t("orders.viewDefault"), columns: ["amount", "received", "balance"] },
+  { key: "profit", label: t("orders.viewProfit"), columns: ["amount", "gp", "balance"], managerOnly: true },
+  { key: "compact", label: t("orders.viewCompact"), columns: [] },
+  { key: "all", label: t("orders.viewAllColumns"), columns: ALL_ORDER_COLUMNS },
+];
+
+// The columns every list on the page draws, so Section /
+// PaginatedOrderSection / OrderList need not pass them one prop at a time.
+const OrderColumnsContext = createContext<OrderColumnKey[]>(ORDER_VIEWS[0].columns);
+
+function sameColumns(a: OrderColumnKey[], b: OrderColumnKey[]): boolean {
+  return a.length === b.length && a.every((c) => b.includes(c));
+}
 
 function OrdersAdjustViewPopover({
+  views,
+  columns,
   activeColumns,
+  onSelectView,
   onToggleColumn,
 }: {
+  views: typeof ORDER_VIEWS;
+  columns: OrderColumnKey[];
   activeColumns: OrderColumnKey[];
+  onSelectView: (view: (typeof ORDER_VIEWS)[number]) => void;
   onToggleColumn: (col: OrderColumnKey) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -74,9 +108,24 @@ function OrdersAdjustViewPopover({
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute end-0 mt-2 w-56 glass rounded-card shadow-floating z-20 p-3">
+          <div className="absolute end-0 mt-2 w-64 glass rounded-card shadow-floating z-20 p-3">
+            <div className="text-caption text-secondary font-semibold mb-1.5">{t("orders.defaultViews")}</div>
+            <div className="flex flex-wrap gap-1.5 mb-3">
+              {views.map((v) => (
+                <button
+                  key={v.key}
+                  onClick={() => onSelectView(v)}
+                  aria-pressed={sameColumns(v.columns, activeColumns)}
+                  className={`px-2.5 py-1 rounded-card text-caption font-medium border ${
+                    sameColumns(v.columns, activeColumns) ? "bg-accent text-white border-accent" : "border-hairline text-secondary"
+                  }`}
+                >
+                  {v.label}
+                </button>
+              ))}
+            </div>
             <div className="text-caption text-secondary font-semibold mb-1.5">{t("orders.columns")}</div>
-            {ALL_ORDER_COLUMNS.map((col) => (
+            {columns.map((col) => (
               <label key={col} className="flex items-center gap-2 py-1 text-subhead">
                 <input type="checkbox" checked={activeColumns.includes(col)} onChange={() => onToggleColumn(col)} />
                 {ORDER_COLUMN_LABELS[col]}
@@ -196,13 +245,14 @@ export default function OrdersView({ user }: { user: AppUser }) {
   }, [search]);
   const [sort, setSort] = useState<OrderSort>("newest");
   const { preferences, update: updatePrefs } = usePreferences();
-  const activeOrderColumns = (preferences.ordersColumns as OrderColumnKey[] | undefined) ?? [];
   // Manager's Orders/New Orders/Warehouse switcher (§1.3) — the other roles
   // keep their existing bucketed views untouched.
   // A stage asked for in the URL opens on it.
   const searchParams = useSearchParams();
   const requestedStage = stageFromParam(searchParams.get("stage"));
-  const [managerView, setManagerView] = useState<"new" | "rejected" | "warehouse" | "all">(
+  // "month" is the orders billed this month — the ring's own view (owner,
+  // 2026-10-06: clicking the progress circle filters the orders to this month).
+  const [managerView, setManagerView] = useState<"new" | "rejected" | "warehouse" | "all" | "month">(
     requestedStage ? "warehouse" : "new"
   );
   const [warehouseStage, setWarehouseStage] = useState<WarehouseStage>(requestedStage ?? "waiting");
@@ -301,6 +351,21 @@ export default function OrdersView({ user }: { user: AppUser }) {
 
   const isManager = (user.role === "manager" || user.role === "admin");
 
+  // What the Adjust View offers this person, and what they have chosen. GP
+  // is taken out for anyone but a manager, whatever their saved choice says.
+  const offeredColumns = isManager ? ALL_ORDER_COLUMNS : ALL_ORDER_COLUMNS.filter((c) => c !== "gp");
+  const offeredViews = ORDER_VIEWS.filter((v) => isManager || !v.managerOnly).map((v) => ({
+    ...v,
+    columns: v.columns.filter((c) => offeredColumns.includes(c)),
+  }));
+  const chosenView = offeredViews.find((v) => v.key === preferences.orderListView) ?? offeredViews[0];
+  // Before this popover had views, its only lasting choice was District;
+  // that carries over until a new choice is saved.
+  const savedColumns =
+    (preferences.orderListColumns as OrderColumnKey[] | undefined) ??
+    (preferences.ordersColumns?.includes("district") ? [...chosenView.columns, "district"] : chosenView.columns);
+  const activeOrderColumns = offeredColumns.filter((c) => savedColumns.includes(c));
+
   // Coming from the nav while this page is already open does not remount it,
   // so the stage named in the URL is followed whenever it changes.
   useEffect(() => {
@@ -359,10 +424,29 @@ export default function OrdersView({ user }: { user: AppUser }) {
       picking: count("picking"),
       packed: count("packed"),
     } satisfies Record<WarehouseStage, number>;
+    // What each stage's orders are worth — the order total, as every order
+    // row shows it — and all three together as the Potential total: the
+    // sales still on their way through the warehouse (owner, 2026-10-06).
+    // Summed in fils so a float artefact can't creep into the figure.
+    const stageFils = (stage: WarehouseStage) =>
+      orders
+        .filter((o) => (stage === "waiting" ? ["waiting", "accepted"].includes(o.status) : o.status === stage))
+        .reduce((sum, o) => sum + toFils(Number(o.total ?? 0)), 0);
+    const stageValueFils = {
+      waiting: stageFils("waiting"),
+      picking: stageFils("picking"),
+      packed: stageFils("packed"),
+    } satisfies Record<WarehouseStage, number>;
     return {
       newOrders: count("pending"),
       rejected: count("rejected"),
       stageCounts,
+      stageValues: {
+        waiting: toAed(stageValueFils.waiting),
+        picking: toAed(stageValueFils.picking),
+        packed: toAed(stageValueFils.packed),
+      } satisfies Record<WarehouseStage, number>,
+      potentialTotal: toAed(Object.values(stageValueFils).reduce((a, b) => a + b, 0)),
       warehouseCount: Object.values(stageCounts).reduce((a, b) => a + b, 0),
       all: totalCount,
       thisMonth: monthCount,
@@ -413,6 +497,7 @@ export default function OrdersView({ user }: { user: AppUser }) {
 
   return (
     <OrderSelectionContext.Provider value={selection}>
+    <OrderColumnsContext.Provider value={activeOrderColumns}>
     <div className="p-4 md:p-6 max-w-[1600px] mx-auto">
       <div className="flex items-center justify-between mb-5 gap-3 flex-wrap">
         <h1 className="text-large-title font-bold">
@@ -466,6 +551,19 @@ export default function OrdersView({ user }: { user: AppUser }) {
             </option>
           ))}
         </select>
+        <OrdersAdjustViewPopover
+          views={offeredViews}
+          columns={offeredColumns}
+          activeColumns={activeOrderColumns}
+          onSelectView={(v) => updatePrefs({ orderListView: v.key, orderListColumns: v.columns })}
+          onToggleColumn={(col) =>
+            updatePrefs({
+              orderListColumns: activeOrderColumns.includes(col)
+                ? activeOrderColumns.filter((c) => c !== col)
+                : [...activeOrderColumns, col],
+            })
+          }
+        />
         {isManager &&
           (selecting ? (
             <div className="flex items-center gap-2 ms-auto">
@@ -495,14 +593,24 @@ export default function OrdersView({ user }: { user: AppUser }) {
         <ScrollAwayTabs>
           <Card className="p-4 mb-5">
             <div className="flex items-start gap-5 flex-wrap">
-              <div className="flex flex-col items-center gap-1.5 shrink-0">
+              {/* The ring is the "This month" option: clicking it lists the
+                  orders billed this month (owner, 2026-10-06). */}
+              <button
+                type="button"
+                onClick={() => pickView("month")}
+                aria-pressed={shownView === "month"}
+                aria-label={t("orders.thisMonthSwitch")}
+                className={`flex flex-col items-center gap-1.5 shrink-0 p-1 -m-1 rounded-card transition-colors ${
+                  shownView === "month" ? "bg-accent/[0.08]" : "hover:bg-black/5 dark:hover:bg-white/10"
+                }`}
+              >
                 <RingProgress
                   value={switcherStats.newOrders}
                   max={Math.max(1, switcherStats.all)}
                   label={String(switcherStats.newOrders)}
                 />
                 <span className="text-caption font-semibold text-secondary">{t("orders.pending")}</span>
-              </div>
+              </button>
 
               <div className="flex-1 min-w-[220px] flex flex-col gap-3">
                 <div className="flex items-center gap-2 flex-wrap">
@@ -524,8 +632,13 @@ export default function OrdersView({ user }: { user: AppUser }) {
                     active={shownView === "all"}
                     onClick={() => pickView("all")}
                   />
-                  <span className="text-caption text-secondary ms-auto tabular-nums">
-                    {t("orders.thisMonthCount", { n: switcherStats.thisMonth })}
+                  <span className="ms-auto">
+                    <SwitchButton
+                      label={t("orders.thisMonthSwitch")}
+                      count={switcherStats.thisMonth}
+                      active={shownView === "month"}
+                      onClick={() => pickView("month")}
+                    />
                   </span>
                 </div>
 
@@ -565,6 +678,24 @@ export default function OrdersView({ user }: { user: AppUser }) {
                         </button>
                       );
                     })}
+                    {/* Each stage's value, then the three together at the
+                        edge (owner, 2026-10-06). */}
+                    <div className="ms-auto flex items-end gap-5 flex-wrap">
+                      {WAREHOUSE_STAGES.map((stage) => (
+                        <div key={stage} className="flex flex-col items-end">
+                          <span className="text-caption text-secondary">{WAREHOUSE_STAGE_LABEL[stage]}</span>
+                          <span className="text-caption font-semibold tabular-nums">
+                            {formatAed(switcherStats.stageValues[stage])}
+                          </span>
+                        </div>
+                      ))}
+                      <div className="flex flex-col items-end ps-5 border-s border-hairline">
+                        <span className="text-caption text-secondary">{t("orders.potentialTotal")}</span>
+                        <span className="text-subhead font-semibold tabular-nums">
+                          {formatAed(switcherStats.potentialTotal)}
+                        </span>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -589,6 +720,20 @@ export default function OrdersView({ user }: { user: AppUser }) {
       )}
       {isManager && shownView === "warehouse" && (
         <Section title={WAREHOUSE_STAGE_LABEL[warehouseStage]} rows={warehouseRows} onOpen={setOpenId} />
+      )}
+      {/* The orders billed this month — the same orders the switcher's
+          "This month" figure counts, by billing date (owner, 2026-10-06). */}
+      {isManager && shownView === "month" && (
+        <PaginatedOrderSection
+          title={t("orders.thisMonthSwitch")}
+          statusOnly={BILLED_STATUSES}
+          billedWindow={monthBounds()}
+          onOpen={setOpenId}
+          refreshKey={refreshKey}
+         
+          sort={sort}
+          empty={<EmptyState icon={CalendarDays} title={t("orders.noOrdersThisMonth")} />}
+        />
       )}
 
       {showsWarehouseStages && (
@@ -651,15 +796,6 @@ export default function OrdersView({ user }: { user: AppUser }) {
                   )
                 )}
               </select>
-              <OrdersAdjustViewPopover
-                activeColumns={activeOrderColumns}
-                onToggleColumn={(col) => {
-                  const next = activeOrderColumns.includes(col)
-                    ? activeOrderColumns.filter((c) => c !== col)
-                    : [...activeOrderColumns, col];
-                  updatePrefs({ ordersColumns: next });
-                }}
-              />
             </div>
           )}
 
@@ -683,9 +819,9 @@ export default function OrdersView({ user }: { user: AppUser }) {
             <Section title={t("orders.pending")} rows={sections.pending} onOpen={setOpenId} />
           )}
           {isManager && sections.pending && (
-            <Section title={t("orders.newOrdersToReview")} rows={sections.pending} onOpen={setOpenId} columns={activeOrderColumns} />
+            <Section title={t("orders.newOrdersToReview")} rows={sections.pending} onOpen={setOpenId} />
           )}
-          {sections.pipeline && <Section title={t("orders.inProgress")} rows={sections.pipeline} onOpen={setOpenId} columns={isManager ? activeOrderColumns : undefined} />}
+          {sections.pipeline && <Section title={t("orders.inProgress")} rows={sections.pipeline} onOpen={setOpenId} />}
           {sections.queue && <Section title={t("orders.queue")} rows={sections.queue} onOpen={setOpenId} />}
           {sections.past && sections.past.length > 0 && <Section title={t("orders.past")} rows={sections.past} onOpen={setOpenId} />}
           {user.role === "salesman" && (
@@ -706,12 +842,12 @@ export default function OrdersView({ user }: { user: AppUser }) {
               onOpen={setOpenId}
               refreshKey={refreshKey}
               search={serverSearch}
-              columns={activeOrderColumns}
+             
               sort={sort}
             />
           )}
-          {sections.other && sections.other.length > 0 && <Section title={t("orders.other")} rows={sections.other} onOpen={setOpenId} columns={isManager ? activeOrderColumns : undefined} />}
-          {sections.rejected && <Section title={t("orders.rejected")} rows={sections.rejected} onOpen={setOpenId} columns={isManager ? activeOrderColumns : undefined} />}
+          {sections.other && sections.other.length > 0 && <Section title={t("orders.other")} rows={sections.other} onOpen={setOpenId} />}
+          {sections.rejected && <Section title={t("orders.rejected")} rows={sections.rejected} onOpen={setOpenId} />}
         </>
       )}
 
@@ -735,6 +871,7 @@ export default function OrdersView({ user }: { user: AppUser }) {
         <OrderDetail orderId={openId} user={user} onClose={() => setOpenId(null)} onChanged={load} />
       )}
     </div>
+    </OrderColumnsContext.Provider>
     </OrderSelectionContext.Provider>
   );
 }
@@ -948,12 +1085,10 @@ function Section({
   title,
   rows,
   onOpen,
-  columns,
 }: {
   title: string;
   rows: OrderRow[];
   onOpen: (id: string) => void;
-  columns?: OrderColumnKey[];
 }) {
   if (rows.length === 0) return null;
   return (
@@ -961,7 +1096,7 @@ function Section({
       <h2 className="text-caption font-semibold text-secondary uppercase tracking-wide mb-2">
         {title} <span className="tabular-nums">({rows.length})</span>
       </h2>
-      <OrderList rows={rows} onOpen={onOpen} columns={columns} />
+      <OrderList rows={rows} onOpen={onOpen} />
     </div>
   );
 }
@@ -976,8 +1111,9 @@ function PaginatedOrderSection({
   onOpen,
   refreshKey,
   search,
-  columns,
   sort,
+  billedWindow,
+  empty,
 }: {
   title?: string;
   statusOnly: OrderStatus[];
@@ -985,8 +1121,12 @@ function PaginatedOrderSection({
   onOpen: (id: string) => void;
   refreshKey: number;
   search?: string;
-  columns?: OrderColumnKey[];
   sort?: OrderSort;
+  // Billing-date window (the "This month" view). Taken by time so a new
+  // Date in the parent's render does not restart the fetch.
+  billedWindow?: { from: Date; to: Date };
+  // Shown instead of nothing once the list has loaded empty.
+  empty?: ReactNode;
 }) {
   const [rows, setRows] = useState<OrderRow[]>([]);
   const [cursor, setCursor] = useState<OrderCursor | null>(null);
@@ -998,16 +1138,25 @@ function PaginatedOrderSection({
   // found too. Only the newest request may fill the list: an answer to
   // "45" arriving after the one to "4503" must not replace it.
   const latest = useRef(0);
+  const fromMs = billedWindow?.from.getTime();
+  const toMs = billedWindow?.to.getTime();
   const reset = useCallback(async () => {
     const ask = ++latest.current;
     const supabase = supabaseBrowser();
-    const page = await fetchOrdersPage(supabase, { status: statusOnly, salesmanId, pageSize: 25, search });
+    const page = await fetchOrdersPage(supabase, {
+      status: statusOnly,
+      salesmanId,
+      pageSize: 25,
+      search,
+      from: fromMs === undefined ? undefined : new Date(fromMs),
+      to: toMs === undefined ? undefined : new Date(toMs),
+    });
     if (ask !== latest.current) return;
     setRows(page.rows);
     setCursor(page.nextCursor);
     setHasMore(page.nextCursor !== null);
     setLoaded(true);
-  }, [statusOnly.join(","), salesmanId, search]);
+  }, [statusOnly.join(","), salesmanId, search, fromMs, toMs]);
 
   // Parent owns the single "orders" Realtime subscription (two
   // useRealtimeTable("orders") calls with no filter collide on the same
@@ -1021,7 +1170,15 @@ function PaginatedOrderSection({
     setLoadingMore(true);
     const supabase = supabaseBrowser();
     const ask = latest.current;
-    const page = await fetchOrdersPage(supabase, { status: statusOnly, salesmanId, cursor, pageSize: 25, search });
+    const page = await fetchOrdersPage(supabase, {
+      status: statusOnly,
+      salesmanId,
+      cursor,
+      pageSize: 25,
+      search,
+      from: fromMs === undefined ? undefined : new Date(fromMs),
+      to: toMs === undefined ? undefined : new Date(toMs),
+    });
     if (ask !== latest.current) { setLoadingMore(false); return; }
     setRows((prev) => [...prev, ...page.rows]);
     setCursor(page.nextCursor);
@@ -1034,13 +1191,14 @@ function PaginatedOrderSection({
   // "Load more" brings in older rows and re-sorts them in with the rest.
   const visibleRows = sortOrders(rows, sort ?? "newest");
 
-  if (!loaded || rows.length === 0) return null;
+  if (!loaded) return null;
+  if (rows.length === 0) return <>{empty ?? null}</>;
   return (
     <div className="mb-5">
       {title && (
         <h2 className="text-caption font-semibold text-secondary uppercase tracking-wide mb-2">{title}</h2>
       )}
-      <OrderList rows={visibleRows} onOpen={onOpen} columns={columns} />
+      <OrderList rows={visibleRows} onOpen={onOpen} />
       {hasMore && (
         <div className="flex justify-center mt-3">
           <button
@@ -1068,13 +1226,12 @@ const OrderSelectionContext = createContext<OrderSelection | null>(null);
 function OrderList({
   rows,
   onOpen,
-  columns = [],
 }: {
   rows: OrderRow[];
   onOpen: (id: string) => void;
-  columns?: OrderColumnKey[];
 }) {
   const selection = useContext(OrderSelectionContext);
+  const columns = useContext(OrderColumnsContext);
   const activate = (id: string) => (selection ? selection.toggle(id) : onOpen(id));
   // "N items" per row (§iPhone orders mockup). Fetched here rather than
   // widening fetchOrders, so the count follows whatever rows are on screen
@@ -1105,27 +1262,59 @@ function OrderList({
     };
   }, [rowIds]);
 
+  // GP per order, only while the GP column is on. Keyed on each row's sale
+  // as well as its id, so an order whose lines change is worked out again.
+  const showGp = columns.includes("gp");
+  const gpKey = showGp ? rows.map((o) => `${o.id}:${o.subtotal ?? ""}:${o.total ?? ""}`).join(",") : "";
+  const [gpByOrder, setGpByOrder] = useState<Map<string, GrossProfit> | null>(null);
+  useEffect(() => {
+    if (!gpKey) return;
+    let cancelled = false;
+    const asked = gpKey.split(",").map((k) => {
+      const [id, subtotal, total] = k.split(":");
+      return { id, subtotal: subtotal === "" ? null : Number(subtotal), total: total === "" ? null : Number(total) };
+    });
+    grossProfitByOrder(supabaseBrowser(), asked)
+      .then((m) => !cancelled && setGpByOrder(m))
+      .catch(() => !cancelled && setGpByOrder(new Map()));
+    return () => {
+      cancelled = true;
+    };
+  }, [gpKey]);
+
+  // Date | Invoice | Customer are fixed, then whichever money columns the
+  // Adjust View has on, in this order, then Status.
+  const moneyColumns = (["amount", "received", "balance", "gp"] as const).filter((c) => columns.includes(c));
+  const gridTemplateColumns = `92px 78px minmax(0,1fr) ${moneyColumns.map(() => "110px ").join("")}190px`;
+
   if (rows.length === 0) {
     return <EmptyState icon={FileText} title={t("orders.nothingHere")} />;
   }
   return (
     <div className="bg-surface border border-hairline rounded-card overflow-hidden">
       {/* §desktop Orders mockup: Date | Invoice | Customer Name | Amount |
-          Recieved | Balance | Status, with per-row Excel/PDF. Phones keep
-          the stacked row — this table can't fit there. */}
-      <div className="hidden lg:grid grid-cols-[92px_78px_1fr_110px_110px_110px_190px] gap-3 px-4 py-2 text-caption text-secondary uppercase font-medium border-b border-hairline">
+          Recieved | Balance | Status, with per-row Excel/PDF; the money
+          columns follow the Adjust View. Phones keep the stacked row — this
+          table can't fit there. */}
+      <div
+        className="hidden lg:grid gap-3 px-4 py-2 text-caption text-secondary uppercase font-medium border-b border-hairline"
+        style={{ gridTemplateColumns }}
+      >
         <span>{t("orders.date")}</span>
         <span>{t("orders.invoice")}</span>
         <span>{t("orders.customerName")}</span>
-        <span className="text-right">{t("orders.amount")}</span>
-        <span className="text-right">{t("orders.received")}</span>
-        <span className="text-right">{t("orders.balance")}</span>
+        {moneyColumns.map((c) => (
+          <span key={c} className="text-end">{ORDER_COLUMN_LABELS[c]}</span>
+        ))}
         <span className="text-right">{t("orders.status")}</span>
       </div>
       <StaggerList className="divide-y divide-hairline">
         {rows.map((o) => {
           const total = o.total ?? 0;
           const received = paidByOrder.get(o.id) ?? 0;
+          const gp = gpByOrder?.get(o.id);
+          const gpPct = gp ? gpPercent(gp) : null;
+          const gpPartial = gp != null && gp.costedSale > 0 && gp.uncostedSale > 0;
           return (
             <div
               key={o.id}
@@ -1176,9 +1365,22 @@ function OrderList({
                   </div>
                 </div>
                 <div className="flex items-center gap-3 shrink-0">
-                  {columns.includes("amount") && o.total != null && (
-                    <span className="text-caption font-semibold text-secondary tabular-nums">
-                      {formatAed(total)}
+                  {(columns.includes("amount") || showGp) && (
+                    <span className="text-end tabular-nums">
+                      {columns.includes("amount") && o.total != null && (
+                        <span className="block text-caption font-semibold text-secondary">{formatAed(total)}</span>
+                      )}
+                      {showGp &&
+                        (gpByOrder == null ? (
+                          <Skeleton className="h-3 w-16 mt-0.5" />
+                        ) : (
+                          <span
+                            className={`block text-caption ${gp && gp.gp < 0 ? "text-[--status-danger]" : "text-secondary"}`}
+                            title={gpPartial ? t("orders.gpPartial") : gpPct == null ? t("orders.gpNoCost") : undefined}
+                          >
+                            {t("orders.gp")} {gpPct == null ? t("common.notSet") : `${formatAed(gp!.gp)}${gpPartial ? " *" : ""}`}
+                          </span>
+                        ))}
                     </span>
                   )}
                   {/* Changed after it was sent — the same pill an edited
@@ -1189,7 +1391,7 @@ function OrderList({
               </div>
 
               {/* Desktop table row */}
-              <div className="hidden lg:grid grid-cols-[92px_78px_1fr_110px_110px_110px_190px] gap-3 items-center px-4 py-2.5">
+              <div className="hidden lg:grid gap-3 items-center px-4 py-2.5" style={{ gridTemplateColumns }}>
                 <span className="text-caption text-secondary uppercase tabular-nums">
                   {new Date(o.billed_at ?? o.updated_at).toLocaleDateString("en-GB", {
                     day: "2-digit",
@@ -1216,15 +1418,45 @@ function OrderList({
                       .join(" · ")}
                   </span>
                 </span>
-                <span className="text-right text-subhead tabular-nums font-semibold">
-                  {formatAed(total)}
-                </span>
-                <span className="text-right text-subhead tabular-nums text-accent">
-                  {formatAed(received)}
-                </span>
-                <span className="text-right text-subhead tabular-nums font-semibold">
-                  {formatAed(Math.max(0, total - received))}
-                </span>
+                {columns.includes("amount") && (
+                  <span className="text-right text-subhead tabular-nums font-semibold">
+                    {formatAed(total)}
+                  </span>
+                )}
+                {columns.includes("received") && (
+                  <span className="text-right text-subhead tabular-nums text-accent">
+                    {formatAed(received)}
+                  </span>
+                )}
+                {columns.includes("balance") && (
+                  <span className="text-right text-subhead tabular-nums font-semibold">
+                    {formatAed(Math.max(0, total - received))}
+                  </span>
+                )}
+                {/* GP, with GP % of the costed sale under it. "—" when no
+                    line of the order has a cost (every imported invoice);
+                    a "*" when some lines have none and were left out. */}
+                {showGp && (
+                  <span
+                    className="text-end tabular-nums"
+                    title={gpPartial ? t("orders.gpPartial") : gp && gpPct == null ? t("orders.gpNoCost") : undefined}
+                  >
+                    {gpByOrder == null ? (
+                      <Skeleton className="h-4 w-20 ms-auto" />
+                    ) : gpPct == null ? (
+                      <span className="text-subhead text-secondary">{t("common.notSet")}</span>
+                    ) : (
+                      <>
+                        <span className={`block text-subhead font-semibold ${gp!.gp < 0 ? "text-[--status-danger]" : ""}`}>
+                          {formatAed(gp!.gp)}
+                        </span>
+                        <span className="block text-caption text-secondary">
+                          {gpPct.toFixed(1)}%{gpPartial ? " *" : ""}
+                        </span>
+                      </>
+                    )}
+                  </span>
+                )}
                 <span className="flex items-center justify-end gap-1.5">
                   {o.edited_at && <Pill tone="warning">{t("orders.edited")}</Pill>}
                   <OrderStatusPill status={o.status} />

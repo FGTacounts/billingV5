@@ -187,6 +187,7 @@ export const en = {
   "orders.vatFivePercent": "VAT (5%)",
   "orders.discount": "Discount",
   "orders.gp": "GP",
+  "orders.gpPct": "GP %",
   "orders.grossProfit": "Gross profit",
   "orders.change": "Change",
   "orders.chooseOption": "— choose —",

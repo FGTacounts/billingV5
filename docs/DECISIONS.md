@@ -3729,3 +3729,13 @@ than only straight after it is picked.
 - On a phone the row shows Amount and GP when on; Received and Balance stay
   computer-only, as before (the phone row has no room for them).
 - Web only: the iPhone app has no Orders (or Customers) adjust view.
+
+2026-10-06 — Orders: the This month view shows GP and GP % in place of
+Received and Balance (owner: "instead of received and balance, add the GP
+and GP%"). Its columns are Amount, GP, GP % — GP % as a column of its own
+rather than the small line under GP — whatever the Adjust View is set to;
+District still follows the Adjust View. GP % is not offered in the Adjust
+View popover (nobody asked for it there); it exists only for this list. The
+figures are the same per-order GP the GP column already draws (gpFilsByOrder),
+so the "—" for an order with no cost and the "*" for a partly-costed one
+carry over. The view is manager-only, as GP is. Web only, as the view is.

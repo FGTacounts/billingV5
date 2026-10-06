@@ -56,13 +56,16 @@ import { ORDER_SAMPLE_EXAMPLE, ORDER_SAMPLE_HEADERS } from "@/lib/importSamples"
 // columns and the district are individually toggleable, with a few named
 // views on top — the Customers popover's shape. GP is a manager's column:
 // nobody else is shown cost, so nobody else is offered it.
-type OrderColumnKey = "amount" | "received" | "balance" | "gp" | "district";
+// gpPct is not offered in the popover: it is GP % as a column of its own,
+// drawn only by the This month view (below).
+type OrderColumnKey = "amount" | "received" | "balance" | "gp" | "gpPct" | "district";
 const ALL_ORDER_COLUMNS: OrderColumnKey[] = ["amount", "received", "balance", "gp", "district"];
 const ORDER_COLUMN_LABELS: Record<OrderColumnKey, string> = {
   amount: t("orders.amount"),
   received: t("orders.received"),
   balance: t("orders.balance"),
   gp: t("orders.gp"),
+  gpPct: t("orders.gpPct"),
   district: t("orders.district"),
 };
 // Default is the table as it has always been drawn on a computer.
@@ -723,7 +726,13 @@ export default function OrdersView({ user }: { user: AppUser }) {
       )}
       {/* The orders billed this month — the same orders the switcher's
           "This month" figure counts, by billing date (owner, 2026-10-06). */}
+      {/* Its money columns are GP and GP % rather than Received and
+          Balance (owner, 2026-10-06); District still follows the Adjust
+          View. Manager-only, as GP is. */}
       {isManager && shownView === "month" && (
+        <OrderColumnsContext.Provider
+          value={["amount", "gp", "gpPct", ...activeOrderColumns.filter((c) => c === "district")]}
+        >
         <PaginatedOrderSection
           title={t("orders.thisMonthSwitch")}
           statusOnly={BILLED_STATUSES}
@@ -734,6 +743,7 @@ export default function OrdersView({ user }: { user: AppUser }) {
           sort={sort}
           empty={<EmptyState icon={CalendarDays} title={t("orders.noOrdersThisMonth")} />}
         />
+        </OrderColumnsContext.Provider>
       )}
 
       {showsWarehouseStages && (
@@ -1264,7 +1274,8 @@ function OrderList({
 
   // GP per order, only while the GP column is on. Keyed on each row's sale
   // as well as its id, so an order whose lines change is worked out again.
-  const showGp = columns.includes("gp");
+  const showGpPct = columns.includes("gpPct");
+  const showGp = columns.includes("gp") || showGpPct;
   const gpKey = showGp ? rows.map((o) => `${o.id}:${o.subtotal ?? ""}:${o.total ?? ""}`).join(",") : "";
   const [gpByOrder, setGpByOrder] = useState<Map<string, GrossProfit> | null>(null);
   useEffect(() => {
@@ -1284,7 +1295,7 @@ function OrderList({
 
   // Date | Invoice | Customer are fixed, then whichever money columns the
   // Adjust View has on, in this order, then Status.
-  const moneyColumns = (["amount", "received", "balance", "gp"] as const).filter((c) => columns.includes(c));
+  const moneyColumns = (["amount", "received", "balance", "gp", "gpPct"] as const).filter((c) => columns.includes(c));
   const gridTemplateColumns = `92px 78px minmax(0,1fr) ${moneyColumns.map(() => "110px ").join("")}190px`;
 
   if (rows.length === 0) {
@@ -1378,7 +1389,10 @@ function OrderList({
                             className={`block text-caption ${gp && gp.gp < 0 ? "text-[--status-danger]" : "text-secondary"}`}
                             title={gpPartial ? t("orders.gpPartial") : gpPct == null ? t("orders.gpNoCost") : undefined}
                           >
-                            {t("orders.gp")} {gpPct == null ? t("common.notSet") : `${formatAed(gp!.gp)}${gpPartial ? " *" : ""}`}
+                            {t("orders.gp")}{" "}
+                            {gpPct == null
+                              ? t("common.notSet")
+                              : `${formatAed(gp!.gp)}${showGpPct ? ` · ${gpPct.toFixed(1)}%` : ""}${gpPartial ? " *" : ""}`}
                           </span>
                         ))}
                     </span>
@@ -1436,7 +1450,7 @@ function OrderList({
                 {/* GP, with GP % of the costed sale under it. "—" when no
                     line of the order has a cost (every imported invoice);
                     a "*" when some lines have none and were left out. */}
-                {showGp && (
+                {columns.includes("gp") && (
                   <span
                     className="text-end tabular-nums"
                     title={gpPartial ? t("orders.gpPartial") : gp && gpPct == null ? t("orders.gpNoCost") : undefined}
@@ -1450,10 +1464,29 @@ function OrderList({
                         <span className={`block text-subhead font-semibold ${gp!.gp < 0 ? "text-[--status-danger]" : ""}`}>
                           {formatAed(gp!.gp)}
                         </span>
-                        <span className="block text-caption text-secondary">
-                          {gpPct.toFixed(1)}%{gpPartial ? " *" : ""}
-                        </span>
+                        {!showGpPct && (
+                          <span className="block text-caption text-secondary">
+                            {gpPct.toFixed(1)}%{gpPartial ? " *" : ""}
+                          </span>
+                        )}
                       </>
+                    )}
+                  </span>
+                )}
+                {/* GP % as its own column (the This month view). */}
+                {showGpPct && (
+                  <span
+                    className="text-end tabular-nums"
+                    title={gpPartial ? t("orders.gpPartial") : gp && gpPct == null ? t("orders.gpNoCost") : undefined}
+                  >
+                    {gpByOrder == null ? (
+                      <Skeleton className="h-4 w-14 ms-auto" />
+                    ) : gpPct == null ? (
+                      <span className="text-subhead text-secondary">{t("common.notSet")}</span>
+                    ) : (
+                      <span className={`text-subhead font-semibold ${gp!.gp < 0 ? "text-[--status-danger]" : ""}`}>
+                        {gpPct.toFixed(1)}%{gpPartial ? " *" : ""}
+                      </span>
                     )}
                   </span>
                 )}

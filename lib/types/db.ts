@@ -270,6 +270,10 @@ export interface Payment {
   // What the manager let go on this collection, on top of `amount`. Optional
   // because the column arrives with scratchpad/RUN-ME-25.
   discount_amount?: number;
+  // CN100, CN101 … — the discount as a credit note, numbered by the database
+  // (scratchpad/RUN-ME-34). Null when there is no discount, or it was given
+  // before 2026-10-06.
+  credit_note_number?: number | null;
   status: PaymentStatus;
   cheque_number: string | null;
   cheque_bank: string | null;
@@ -285,6 +289,9 @@ export interface PaymentOrder {
   payment_id: string;
   order_id: string;
   allocated_amount: number; // this payment's slice of that invoice: cash + discount
+  // How much of that slice is the credit note (RUN-ME-34). Null on slices
+  // written before 2026-10-06.
+  discount_part?: number | null;
 }
 
 export interface PaymentDelayNote {
@@ -320,6 +327,9 @@ export interface GrvReturn {
   amount?: number | null;
   payment_id?: string | null;
   notes?: string | null;
+  // GRV100, GRV101 … given by the database on approval from 2026-10-06
+  // (scratchpad/RUN-ME-34). Null on returns approved before then.
+  grv_number?: number | null;
 }
 
 export interface GrvItem {

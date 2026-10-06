@@ -1,5 +1,28 @@
 # What changed, and what you need to do
 
+## 2026-10-06 — GRV and credit note numbers, and ticking a GRV when collecting
+
+**Run in Supabase:** `scratchpad/RUN-ME-34-grv-and-credit-note-numbers.sql`.
+The web needs a deploy, and the phone needs a new build: both collection
+screens on the phone (Payments → Add payment, and Collect from a customer)
+list and tick open GRVs the same way. Until every phone has the new build,
+an older phone will not show an open GRV when collecting.
+
+- **Every return approved from now on gets a number** — GRV100, GRV101 … —
+  shown in Payments → Returns and on statements. Returns approved before
+  today keep no number and keep coming off the oldest invoice as before.
+- **A numbered GRV stays open until it is used.** It appears on the
+  statement as its own line — date, GRV number, minus the amount — and the
+  total comes down by it.
+- **A discount given while collecting is now a credit note** — CN100,
+  CN101 … — and appears on the statement as its own minus line, instead of
+  being added into "Received". Only managers and admins can give one.
+- **Collecting a payment:** open GRVs are listed under the invoices with a
+  tick box. If one is left unticked, pressing Collect asks whether to use it
+  or continue without it.
+
+---
+
 ## 2026-10-06 — Pages open faster
 
 Nothing to run in Supabase. The web needs a deploy; the phone is unchanged.

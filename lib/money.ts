@@ -264,6 +264,51 @@ export function allocateFifo(
   return slices;
 }
 
+/**
+ * Which part of each slice is the credit note (the discount) rather than cash.
+ * The discount goes on the first slices — the ticked invoices, oldest first —
+ * the same invoices it has always come off. Counted in fils; never more than
+ * a slice holds, and never more than the discount.
+ */
+export function splitDiscount(
+  slices: { orderId: string; amount: number }[],
+  discount: number
+): { orderId: string; amount: number; discountPart: number }[] {
+  let left = toFils(Math.max(0, discount));
+  return slices.map((s) => {
+    const part = Math.min(left, toFils(s.amount));
+    left -= part;
+    return { ...s, discountPart: toAed(part) };
+  });
+}
+
+/**
+ * A collector ticked one or more numbered GRVs: use each, oldest first,
+ * against the ticked invoices oldest first, then the customer's others —
+ * the same rule cash follows. Returns what each GRV was used for and the
+ * invoices' balances afterwards, so the cash can then be cut against what is
+ * still owed. Whatever a GRV cannot use stays open on it.
+ */
+export function allocateCredits<T extends Allocatable>(
+  credits: { id: string; date: string; open: number }[],
+  preferred: T[],
+  others: T[]
+): { uses: { creditId: string; orderId: string; amount: number }[]; preferred: T[]; others: T[] } {
+  const room = new Map<string, number>();
+  for (const inv of [...preferred, ...others]) room.set(inv.orderId, toFils(inv.balance));
+  const uses: { creditId: string; orderId: string; amount: number }[] = [];
+  const oldestFirst = [...credits].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+  for (const c of oldestFirst) {
+    const withRoom = (list: T[]) => list.map((i) => ({ ...i, balance: toAed(room.get(i.orderId) ?? 0) }));
+    for (const s of allocateFifo(c.open, withRoom(preferred), withRoom(others))) {
+      uses.push({ creditId: c.id, orderId: s.orderId, amount: s.amount });
+      room.set(s.orderId, (room.get(s.orderId) ?? 0) - toFils(s.amount));
+    }
+  }
+  const after = (list: T[]) => list.map((i) => ({ ...i, balance: toAed(room.get(i.orderId) ?? 0) }));
+  return { uses, preferred: after(preferred), others: after(others) };
+}
+
 export interface Costable {
   unit_cost: number | null;
 }

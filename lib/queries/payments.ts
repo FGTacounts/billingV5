@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { invalidateAging, fetchOutstandingInvoices, type InvoiceAging } from "@/lib/queries/aging";
-import { allocateFifo, settledNow, money, toFils } from "@/lib/money";
+import { allocateFifo, settledNow, splitDiscount, money, toFils } from "@/lib/money";
 import { invalidateOrderFacts } from "@/lib/queries/dashboard";
 import type { Payment, Customer, PaymentExtensionRequest, AppUser, Order } from "@/lib/types/db";
 import { t } from "@/lib/i18n";
@@ -124,7 +124,8 @@ export async function createPayment(
     // multiple orders, §6) — the caller works out how much of the payment
     // applies to each selected order since only it has the per-invoice
     // balances to split against.
-    allocations: { orderId: string; amount: number }[];
+    // discountPart: how much of the slice is the credit note (RUN-ME-34).
+    allocations: { orderId: string; amount: number; discountPart?: number }[];
   }
 ): Promise<string> {
   const isCheque = !!(input.cheque_number || input.cheque_date || input.bank);
@@ -160,18 +161,34 @@ export async function createPayment(
   }
   if (error || !data) throw error ?? new Error(t("payments.failedToCreatePayment"));
 
-  if (input.allocations.length) {
-    const { error: linkErr } = await supabase.from("payment_orders").insert(
-      input.allocations.map((a) => ({
-        payment_id: data!.id,
-        order_id: a.orderId,
-        allocated_amount: a.amount,
-      }))
-    );
-    if (linkErr) throw linkErr;
-  }
+  await insertSlices(supabase, data.id as string, input.allocations);
   balancesChanged();
   return data.id as string;
+}
+
+/**
+ * A payment's per-invoice slices. Each carries its credit-note share when it
+ * has one; a database without discount_part (RUN-ME-34 not run) takes them
+ * without it, which is what it took before.
+ */
+async function insertSlices(
+  supabase: SupabaseClient,
+  paymentId: string,
+  slices: { orderId: string; amount: number; discountPart?: number }[]
+) {
+  if (slices.length === 0) return;
+  const rows = slices.map((s) => ({ payment_id: paymentId, order_id: s.orderId, allocated_amount: s.amount }));
+  const withParts = slices.some((s) => (s.discountPart ?? 0) > 0);
+  if (withParts) {
+    const { error } = await supabase
+      .from("payment_orders")
+      .insert(rows.map((r, i) => ({ ...r, discount_part: slices[i].discountPart ?? 0 })));
+    if (!error) return;
+    const code = (error as { code?: string }).code;
+    if (code !== "42703" && code !== "PGRST204") throw error;
+  }
+  const { error } = await supabase.from("payment_orders").insert(rows);
+  if (error) throw error;
 }
 
 // §Customers: "bank name and customer details should be saved/remembered
@@ -266,7 +283,7 @@ export async function updatePayment(
   if (error && discount !== undefined) ({ error } = await supabase.from("payments").update(core).eq("id", id));
   if (error) throw error;
 
-  await reallocatePayment(supabase, id, settledNow(patch.amount, discount ?? 0), patch.orderIds);
+  await reallocatePayment(supabase, id, settledNow(patch.amount, discount ?? 0), patch.orderIds, discount ?? 0);
   balancesChanged();
 }
 
@@ -288,7 +305,9 @@ export async function reallocatePayment(
   supabase: SupabaseClient,
   paymentId: string,
   settled: number,
-  preferredOrderIds?: string[]
+  preferredOrderIds?: string[],
+  // The credit note's share of `settled`, laid on the first slices.
+  discount = 0
 ) {
   const { data: payment, error: payErr } = await supabase
     .from("payments")
@@ -311,16 +330,11 @@ export async function reallocatePayment(
   const first = new Set(preferredOrderIds ?? ownSlice.keys());
   const preferred = room.filter((r) => first.has(r.orderId));
   const others = room.filter((r) => !first.has(r.orderId));
-  const slices = allocateFifo(settled, preferred, others);
+  const slices = splitDiscount(allocateFifo(settled, preferred, others), discount);
 
   const { error: delErr } = await supabase.from("payment_orders").delete().eq("payment_id", paymentId);
   if (delErr) throw delErr;
-  if (slices.length) {
-    const { error: insErr } = await supabase.from("payment_orders").insert(
-      slices.map((s) => ({ payment_id: paymentId, order_id: s.orderId, allocated_amount: s.amount }))
-    );
-    if (insErr) throw insErr;
-  }
+  await insertSlices(supabase, paymentId, slices);
 }
 
 /**

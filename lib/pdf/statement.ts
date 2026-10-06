@@ -206,11 +206,16 @@ export async function buildStatementPdf(
       y = drawTableHeader(ctx, y - 22);
       tableTops.push(y + HEADER_H);
     }
-    const isCredit = r.description === "GRV";
+    const isCredit = r.description !== "INVOICE";
     const values: Record<string, string> = {
       date: new Date(r.date).toLocaleDateString("en-GB"),
       inv: r.invNo,
-      desc: isCredit ? t("customers.stmtGoodsReturn") : t("customers.stmtInvoice"),
+      desc:
+        r.description === "GRV"
+          ? t("customers.stmtGoodsReturn")
+          : r.description === "CN"
+            ? t("customers.stmtCreditNote")
+            : t("customers.stmtInvoice"),
       amount: AED(r.invoiceAmount),
       vat: AED(r.vat),
       payable: AED(r.totalPayable),

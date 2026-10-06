@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Plus, Minus, Trash2 } from "lucide-react";
 import { supabaseBrowser } from "@/lib/supabase/client";
-import { fetchGrvs, fetchGrvItems, createGrv, approveGrv, saveGrv, deleteGrv, type GrvRow } from "@/lib/queries/grv";
+import { fetchGrvs, fetchGrvItems, createGrv, approveGrv, saveGrv, deleteGrv, grvLabel, type GrvRow } from "@/lib/queries/grv";
 import { toast } from "@/lib/toast";
 import { friendlyError } from "@/lib/errors";
 import { fetchCustomers } from "@/lib/queries/customers";
@@ -57,6 +57,7 @@ export default function GrvSection({ user }: { user: AppUser }) {
               <button className="text-left" onClick={() => setViewingId(g.id)}>
                 <div className="text-subhead font-medium hover:text-accent">{g.customer?.name ?? t("common.notSet")}</div>
                 <div className="text-caption text-secondary tabular-nums">
+                  {g.grv_number != null && `${grvLabel(g.grv_number)} · `}
                   {new Date(g.created_at).toLocaleDateString()} · {formatAed(g.creditValue)}
                   {g.lineCount === 0 && ` · ${t("payments.grvNeedsProducts")}`}
                 </div>

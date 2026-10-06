@@ -206,6 +206,35 @@ const sum = (slices) => m.toAed(slices.reduce((s, x) => s + m.toFils(x.amount), 
   check("a negative figure settles nothing", m.settledNow(-20, -5) === 0);
 }
 
+// ── Credit notes and numbered GRVs (2026-10-06) ─────────────────────────
+// The discount is the credit note, laid on the first slices; a ticked GRV is
+// used before the cash, oldest first, and what it cannot use stays open.
+console.log("\nCredit notes and GRVs at collection");
+{
+  const slices = m.splitDiscount(m.allocateFifo(m.settledNow(700, 100), [C, B], [A]), 100);
+  check("the credit note sits on the first slice", slices[0].orderId === "B" && slices[0].discountPart === 100);
+  check("no other slice carries any of it", slices.slice(1).every((s) => s.discountPart === 0));
+  const spread = m.splitDiscount([{ orderId: "X", amount: 30 }, { orderId: "Y", amount: 50 }], 45.5);
+  check("a credit note bigger than a slice runs on to the next",
+    spread[0].discountPart === 30 && spread[1].discountPart === 15.5);
+  check("no slice's credit note exceeds the slice", spread.every((s) => s.discountPart <= s.amount));
+}
+{
+  const grv = { id: "G1", date: "2026-10-01", open: 350 };
+  const r = m.allocateCredits([grv], [C, B], [A]);
+  check("a ticked GRV fills the oldest ticked invoice first",
+    r.uses[0].orderId === "B" && r.uses[0].amount === 350 && r.uses.length === 1);
+  check("the invoice owes less afterwards, so the cash cannot pay it twice",
+    r.preferred.find((i) => i.orderId === "B").balance === 150);
+  const cash = m.allocateFifo(400, r.preferred, r.others);
+  check("cash then pays what is still owed", cash[0].orderId === "B" && cash[0].amount === 150 && cash[1].amount === 250);
+}
+{
+  const r = m.allocateCredits([{ id: "G2", date: "2026-10-02", open: 900 }, { id: "G1", date: "2026-10-01", open: 100 }], [A], []);
+  check("the older GRV is used first", r.uses[0].creditId === "G1" && r.uses[0].amount === 100);
+  check("a GRV bigger than what is owed leaves the rest open", sum(r.uses) === 300);
+}
+
 // Conversions round-trip.
 check(
   "AED survives a round trip through fils",

@@ -8,10 +8,10 @@ import { supabaseBrowser } from "@/lib/supabase/client";
 import { fetchCustomers } from "@/lib/queries/customers";
 import { fetchOutstandingInvoices, type InvoiceAging } from "@/lib/queries/aging";
 import { createPayment, fetchLastChequeDetails } from "@/lib/queries/payments";
-import { createGrvRequest } from "@/lib/queries/grv";
+import { createGrvRequest, fetchNumberedGrvs, applyGrvCredits, grvLabel, type NumberedGrv } from "@/lib/queries/grv";
 import { InvoiceTemplate } from "@/lib/invoice-template";
 import type { AppUser, Customer } from "@/lib/types/db";
-import { formatAed, allocateFifo, settledNow } from "@/lib/money";
+import { formatAed, allocateFifo, allocateCredits, splitDiscount, settledNow } from "@/lib/money";
 import { t } from "@/lib/i18n";
 import Sheet from "@/components/ui/Sheet";
 import Button from "@/components/ui/Button";
@@ -45,6 +45,11 @@ export default function LogPaymentSheet({
   const [customer, setCustomer] = useState<Customer | null>(preselectedCustomer ?? null);
   const [invoices, setInvoices] = useState<InvoiceAging[]>([]);
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set(preselectedOrderIds ?? []));
+  // Numbered GRVs not yet used (owner, 2026-10-06): ticked like an invoice,
+  // and asked about at Collect when one is left unticked.
+  const [openGrvs, setOpenGrvs] = useState<NumberedGrv[]>([]);
+  const [tickedGrvs, setTickedGrvs] = useState<Set<string>>(new Set());
+  const [grvPrompt, setGrvPrompt] = useState(false);
 
   const [paymentType, setPaymentType] = useState<"cash" | "cheque">("cash");
   const [amount, setAmount] = useState("");
@@ -81,10 +86,12 @@ export default function LogPaymentSheet({
 
   async function loadInvoices(c: Customer) {
     const supabase = supabaseBrowser();
-    const inv = await fetchOutstandingInvoices(supabase, c.id);
+    const [inv, grvs] = await Promise.all([fetchOutstandingInvoices(supabase, c.id), fetchNumberedGrvs(supabase, [c.id])]);
     // Oldest to newest throughout, per spec.
     inv.sort((a, b) => new Date(a.invoiceDate).getTime() - new Date(b.invoiceDate).getTime());
     setInvoices(inv);
+    setOpenGrvs(grvs.filter((g) => g.open > 0.004).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()));
+    setTickedGrvs(new Set());
   }
 
   // §Customers: "bank name and customer details should be saved/remembered
@@ -126,10 +133,21 @@ export default function LogPaymentSheet({
   const amountNum = Number(amount) || 0;
   const grvNum = Number(grvAmount) || 0;
   const discountNum = isManager ? Number(discountAmount) || 0 : 0;
-  const covered = amountNum + grvNum + discountNum;
+  const creditOf = (ticked: Set<string>) => openGrvs.filter((g) => ticked.has(g.id)).reduce((s, g) => s + g.open, 0);
+  const tickedCredit = creditOf(tickedGrvs);
+  const coveredWith = (ticked: Set<string>) => amountNum + grvNum + discountNum + creditOf(ticked);
+  const covered = coveredWith(tickedGrvs);
   const balance = Math.max(0, displayTotal - covered);
-  const isPartial = covered > 0 && covered < displayTotal;
   const exceedsAll = covered > allOutstandingTotal + 0.01;
+
+  function toggleGrv(grvId: string) {
+    setTickedGrvs((prev) => {
+      const next = new Set(prev);
+      if (next.has(grvId)) next.delete(grvId);
+      else next.add(grvId);
+      return next;
+    });
+  }
 
   function toggleOrder(orderId: string) {
     setSelectedOrders((prev) => {
@@ -140,7 +158,7 @@ export default function LogPaymentSheet({
     });
   }
 
-  async function doSave() {
+  async function doSave(ticked: Set<string> = tickedGrvs) {
     if (!customer) return;
     setSaving(true);
     try {
@@ -158,23 +176,30 @@ export default function LogPaymentSheet({
         if (res.ok) chequePhotoRef = data.ref;
       }
 
-      // Cash AND discount come off the selected orders, oldest first, then —
-      // if there's still money left over — cascade into the customer's other
-      // outstanding orders (also oldest-first), per "if customer pays extra
-      // ... deducted from next oldest orders." The goods return is not in
-      // this: it is raised as a request below and only comes off once a
-      // manager approves it.
-      const settled = settledNow(amountNum, discountNum);
-      const allocations = allocateFifo(
-        settled,
+      // The ticked GRVs are used first, against the selected orders oldest
+      // first and then the customer's others — what they cannot use stays
+      // open on them. Then cash AND discount come off what is still owed, in
+      // the same order, per "if customer pays extra ... deducted from next
+      // oldest orders." The discount is the credit note, laid on the first
+      // slices. A goods return typed below is not in this: it is raised as a
+      // request and only comes off once a manager approves it.
+      const usedGrvs = openGrvs.filter((g) => ticked.has(g.id));
+      const credit = allocateCredits(
+        usedGrvs.map((g) => ({ id: g.id, date: g.date, open: g.open })),
         selectedInvoices,
         invoices.filter((i) => !selectedOrders.has(i.orderId))
       );
+      const settled = settledNow(amountNum, discountNum);
+      const allocations = splitDiscount(allocateFifo(settled, credit.preferred, credit.others), discountNum);
 
+      const grvUsedNote = credit.uses.length
+        ? t("payments.grvUsedNote", { grvs: usedGrvs.map((g) => grvLabel(g.grvNumber)).join(", ") })
+        : "";
       const grvNote = grvNum > 0 ? t("payments.grvRequestNote", { amount: formatAed(grvNum) }) : "";
       const discountNote = discountNum > 0 ? t("payments.discountNote", { user: user.full_name, amount: formatAed(discountNum) }) : "";
-      const partialNote = isPartial ? t("payments.partialReasonNote", { reason: partialReason.trim() }) : "";
-      const combinedNotes = [notes.trim(), grvNote, discountNote, partialNote].filter(Boolean).join(" ");
+      const partialNow = coveredWith(ticked) < displayTotal && partialReason.trim();
+      const partialNote = partialNow ? t("payments.partialReasonNote", { reason: partialReason.trim() }) : "";
+      const combinedNotes = [notes.trim(), grvUsedNote, grvNote, discountNote, partialNote].filter(Boolean).join(" ");
 
       // A collection that is nothing but a goods return has no payment to
       // write — the request is the whole of it.
@@ -193,6 +218,16 @@ export default function LogPaymentSheet({
           notes: combinedNotes || null,
           allocations,
         });
+      }
+
+      // The payment is already saved; a GRV that could not be used is said
+      // so, and stays open to be ticked again.
+      if (credit.uses.length) {
+        try {
+          await applyGrvCredits(supabase, credit.uses, paymentId);
+        } catch (e) {
+          toast.error(friendlyError(e, t("payments.grvUseFailed")));
+        }
       }
 
       if (grvNum > 0) {
@@ -216,14 +251,56 @@ export default function LogPaymentSheet({
     }
   }
 
-  function attemptCollect() {
-    if (!customer || covered <= 0) return;
-    if (isPartial && !confirmPartial) {
+  // `grvAsked` once the collector has answered the unticked-GRV question,
+  // so it is asked once per Collect.
+  function attemptCollect(ticked: Set<string> = tickedGrvs, grvAsked = false) {
+    const cover = coveredWith(ticked);
+    if (!customer || cover <= 0) return;
+    if (!grvAsked && openGrvs.some((g) => !ticked.has(g.id))) {
+      setGrvPrompt(true);
+      return;
+    }
+    if (cover < displayTotal && !confirmPartial) {
       setConfirmPartial(true);
       return;
     }
-    doSave();
+    doSave(ticked);
   }
+
+  function answerGrvPrompt(useThem: boolean) {
+    setGrvPrompt(false);
+    const ticked = useThem ? new Set(openGrvs.map((g) => g.id)) : tickedGrvs;
+    if (useThem) setTickedGrvs(ticked);
+    attemptCollect(ticked, true);
+  }
+
+  const untickedGrvs = openGrvs.filter((g) => !tickedGrvs.has(g.id));
+
+  // One open GRV, ticked like an invoice: its date, its number and what it
+  // takes off, as a minus.
+  const grvRow = (g: NumberedGrv) => (
+    <label
+      key={g.id}
+      className="flex items-center justify-between px-3 py-2.5 text-subhead cursor-pointer hover:bg-black/[0.02] dark:hover:bg-white/[0.03]"
+    >
+      <span className="flex items-center gap-2 min-w-0">
+        <input type="checkbox" checked={tickedGrvs.has(g.id)} onChange={() => toggleGrv(g.id)} />
+        <span className="truncate">
+          {new Date(g.date).toLocaleDateString()} · {grvLabel(g.grvNumber)}
+        </span>
+      </span>
+      <span className="tabular-nums text-accent shrink-0">−{formatAed(g.open)}</span>
+    </label>
+  );
+
+  const grvList = openGrvs.length > 0 && (
+    <>
+      <Label>{t("payments.grvsToUse")}</Label>
+      <div className="border border-hairline rounded-card divide-y divide-hairline max-h-48 overflow-y-auto">
+        {openGrvs.map(grvRow)}
+      </div>
+    </>
+  );
 
   if (step === "select") {
     return (
@@ -267,7 +344,7 @@ export default function LogPaymentSheet({
               </div>
               <button
                 className="text-caption text-accent font-medium"
-                onClick={() => { setCustomer(null); setInvoices([]); setSelectedOrders(new Set()); }}
+                onClick={() => { setCustomer(null); setInvoices([]); setSelectedOrders(new Set()); setOpenGrvs([]); setTickedGrvs(new Set()); }}
               >
                 {t("payments.change")}
               </button>
@@ -309,10 +386,11 @@ export default function LogPaymentSheet({
                     </label>
                   ))}
                 </div>
+                {grvList}
                 {selectedOrders.size > 0 && (
                   <div className="flex items-center justify-between mt-3 text-subhead font-semibold">
                     <span>{t("payments.selectedTotal")}</span>
-                    <span className="tabular-nums">{formatAed(selectedTotal)}</span>
+                    <span className="tabular-nums">{formatAed(Math.max(0, selectedTotal - tickedCredit))}</span>
                   </div>
                 )}
               </>
@@ -335,7 +413,7 @@ export default function LogPaymentSheet({
         <Button
           tier="primary"
           disabled={saving || covered <= 0}
-          onClick={attemptCollect}
+          onClick={() => attemptCollect()}
           className="!py-1.5 !px-3.5 text-caption"
         >
           {saving ? t("payments.ellipsis") : t("payments.collect")}
@@ -393,9 +471,10 @@ export default function LogPaymentSheet({
           </div>
         ))}
       </div>
+      {openGrvs.length > 0 && <div className="mb-2">{grvList}</div>}
       <div className="flex items-center justify-between mb-4 text-subhead font-semibold">
         <span>{t("common.total")}</span>
-        <span className="tabular-nums underline">{formatAed(displayTotal)}</span>
+        <span className="tabular-nums underline">{formatAed(Math.max(0, displayTotal - tickedCredit))}</span>
       </div>
 
       <Label>{t("payments.paymentType")}</Label>
@@ -549,11 +628,37 @@ export default function LogPaymentSheet({
           />
           <div className="flex gap-2 mt-3">
             <Button tier="plain" onClick={() => setConfirmPartial(false)}>{t("common.cancel")}</Button>
-            <Button tier="primary" disabled={saving || !partialReason.trim()} onClick={doSave}>
+            <Button tier="primary" disabled={saving || !partialReason.trim()} onClick={() => doSave()}>
               {saving ? t("common.saving") : t("payments.confirm")}
             </Button>
           </div>
         </div>
+      )}
+
+      {grvPrompt && (
+        <Sheet
+          open
+          onClose={() => setGrvPrompt(false)}
+          title={t("payments.grvPromptTitle")}
+          footer={
+            <div className="flex gap-2">
+              <Button tier="plain" onClick={() => answerGrvPrompt(false)}>{t("payments.grvPromptSkip")}</Button>
+              <Button tier="primary" onClick={() => answerGrvPrompt(true)}>{t("payments.grvPromptUse")}</Button>
+            </div>
+          }
+        >
+          <p className="text-subhead mb-3">{t("payments.grvPromptBody")}</p>
+          <div className="border border-hairline rounded-card divide-y divide-hairline">
+            {untickedGrvs.map((g) => (
+              <div key={g.id} className="flex items-center justify-between px-3 py-2.5 text-subhead">
+                <span className="truncate">
+                  {new Date(g.date).toLocaleDateString()} · {grvLabel(g.grvNumber)}
+                </span>
+                <span className="tabular-nums text-accent shrink-0">−{formatAed(g.open)}</span>
+              </div>
+            ))}
+          </div>
+        </Sheet>
       )}
 
       {scanning && (

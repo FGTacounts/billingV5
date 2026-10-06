@@ -4,6 +4,7 @@ import { t } from "@/lib/i18n";
 import { money } from "@/lib/money";
 import { fetchOutstandingInvoices } from "@/lib/queries/aging";
 import { fetchAllForIds, fetchAllPages } from "@/lib/paging";
+import { fetchGrvAllocations, fetchNumberedGrvs, grvLabel } from "@/lib/queries/grv";
 import { BILLED_STATUSES } from "@/lib/billedStatuses";
 
 // Which invoices a statement carries (owner, 2026-09-18).
@@ -25,10 +26,20 @@ export type StatementScope = "outstanding" | "paid" | "all";
 // AMOUNT/VAT/TOTAL PAYABLE/RECEIVED/BALANCE/DAYS, invoices and approved GRV
 // credits merged chronologically with a running balance — GRV rows carry
 // negative amounts, exactly as the reference shows.
+//
+// From 2026-10-06 (owner; scratchpad/RUN-ME-34) a numbered GRV and a credit
+// note are lines of their own: "GRV100" / "CN100", minus what they credit,
+// on every scope. A credit note is the discount given while collecting, so
+// "Received" on an invoice is what was paid, and the discount sits on its CN
+// line instead. A numbered GRV not yet ticked at collection is OPEN and still
+// comes off the total. Returns approved, and discounts given, before then are
+// shown exactly as they were.
+export type StatementLineKind = "INVOICE" | "GRV" | "CN";
+
 export interface StatementRow {
   date: string;
   invNo: string;
-  description: "INVOICE" | "GRV";
+  description: StatementLineKind;
   invoiceAmount: number;
   vat: number;
   totalPayable: number;
@@ -94,39 +105,74 @@ export async function buildStatement(
   // always has here; the scoped statements take their figures from aging
   // below, which does throw.
   const paidByOrder = new Map<string, number>();
+  // A credit note's share of each invoice: order → payment → part. Only for
+  // payments that carry a CN number; an older discount stays in "Received".
+  const cnPartByOrder = new Map<string, Map<string, number>>();
+  const creditNotes = new Map<string, { number: number; date: string }>();
   if (orderIds.length) {
-    type LinkRow = { payment_id: string; order_id: string; allocated_amount: number | null };
-    const links = await fetchAllForIds<LinkRow>(
-      orderIds,
-      (chunk, from, to) =>
-        supabase
-          .from("payment_orders")
-          .select("payment_id, order_id, allocated_amount")
-          .in("order_id", chunk)
-          .order("payment_id")
-          .order("order_id")
-          .range(from, to) as never,
-      { keyOf: (l) => `${l.payment_id}|${l.order_id}` }
-    ).catch(() => [] as LinkRow[]);
+    type LinkRow = { payment_id: string; order_id: string; allocated_amount: number | null; discount_part?: number | null };
+    const readLinks = (columns: string) =>
+      fetchAllForIds<LinkRow>(
+        orderIds,
+        (chunk, from, to) =>
+          supabase
+            .from("payment_orders")
+            .select(columns)
+            .in("order_id", chunk)
+            .order("payment_id")
+            .order("order_id")
+            .range(from, to) as never,
+        { keyOf: (l) => `${l.payment_id}|${l.order_id}` }
+      );
+    const links = await readLinks("payment_id, order_id, allocated_amount, discount_part")
+      .catch(() => readLinks("payment_id, order_id, allocated_amount"))
+      .catch(() => [] as LinkRow[]);
     const paymentIds = [...new Set(links.map((l) => l.payment_id))];
     const confirmedIds = new Set<string>();
     if (paymentIds.length) {
-      const payments = await fetchAllForIds<{ id: string }>(paymentIds, (chunk, from, to) =>
-        supabase
-          .from("payments")
-          .select("id, status")
-          .in("id", chunk)
-          .eq("status", "confirmed")
-          .order("id")
-          .range(from, to) as never
-      ).catch(() => [] as { id: string }[]);
-      for (const p of payments) confirmedIds.add(p.id);
+      type PaymentRow = { id: string; created_at?: string; credit_note_number?: number | null };
+      const readPayments = (columns: string) =>
+        fetchAllForIds<PaymentRow>(paymentIds, (chunk, from, to) =>
+          supabase
+            .from("payments")
+            .select(columns)
+            .in("id", chunk)
+            .eq("status", "confirmed")
+            .order("id")
+            .range(from, to) as never
+        );
+      const payments = await readPayments("id, status, created_at, credit_note_number")
+        .catch(() => readPayments("id, status"))
+        .catch(() => [] as PaymentRow[]);
+      for (const p of payments) {
+        confirmedIds.add(p.id);
+        if (p.credit_note_number != null && p.created_at) {
+          creditNotes.set(p.id, { number: p.credit_note_number, date: p.created_at });
+        }
+      }
     }
     for (const link of links) {
       if (!confirmedIds.has(link.payment_id)) continue;
       paidByOrder.set(link.order_id, (paidByOrder.get(link.order_id) ?? 0) + (link.allocated_amount ?? 0));
+      const part = Number(link.discount_part) || 0;
+      if (part > 0 && creditNotes.has(link.payment_id)) {
+        if (!cnPartByOrder.has(link.order_id)) cnPartByOrder.set(link.order_id, new Map());
+        const byPayment = cnPartByOrder.get(link.order_id)!;
+        byPayment.set(link.payment_id, (byPayment.get(link.payment_id) ?? 0) + part);
+      }
     }
   }
+
+  // Numbered GRVs, and what each was used against at collection: order →
+  // GRV → amount. Aging already counts these uses as paid on the invoice.
+  const numberedGrvs = await fetchNumberedGrvs(supabase, customerIds);
+  const grvUseByOrder = new Map<string, Map<string, number>>();
+  for (const use of await fetchGrvAllocations(supabase, { orderIds })) {
+    if (!grvUseByOrder.has(use.order_id)) grvUseByOrder.set(use.order_id, new Map());
+    const byGrv = grvUseByOrder.get(use.order_id)!;
+    byGrv.set(use.grv_id, (byGrv.get(use.grv_id) ?? 0) + use.amount);
+  }
+  const sumOf = (m: Map<string, number> | undefined) => [...(m?.values() ?? [])].reduce((a, b) => a + b, 0);
 
   // For a scoped statement the per-invoice position comes from aging, which
   // has already put approved returns against the oldest invoices. The return
@@ -143,7 +189,7 @@ export async function buildStatement(
 
   // `amount` arrives with scratchpad/RUN-ME-25; asked for, then asked again
   // without it, so a statement still prints on a database that lacks it.
-  type GrvRow = { id: string; created_at: string; amount?: number | null };
+  type GrvRow = { id: string; created_at: string; amount?: number | null; grv_number?: number | null };
   const readGrvs = (columns: string) =>
     fetchAllForIds<GrvRow>(customerIds, (chunk, from, to) =>
       supabase
@@ -154,9 +200,14 @@ export async function buildStatement(
         .order("id")
         .range(from, to) as never
     );
-  const grvRows = await readGrvs("id, created_at, amount").catch(() =>
-    readGrvs("id, created_at").catch(() => [] as GrvRow[])
-  );
+  // Only returns without a number — the numbered ones are lines of their own
+  // below, on every scope.
+  const grvRows = (
+    await readGrvs("id, created_at, amount, grv_number")
+      .catch(() => readGrvs("id, created_at, amount"))
+      .catch(() => readGrvs("id, created_at"))
+      .catch(() => [] as GrvRow[])
+  ).filter((g) => g.grv_number == null);
   const grvValueById = new Map<string, number>();
   if (grvRows.length) {
     type ItemRow = { id: string; grv_id: string; qty: number; unit_value: number };
@@ -171,15 +222,29 @@ export async function buildStatement(
     }
   }
 
-  type Entry = { date: string; invNo: string; description: "INVOICE" | "GRV"; invoiceAmount: number; vat: number; totalPayable: number; received: number };
+  type Entry = { date: string; invNo: string; description: StatementLineKind; invoiceAmount: number; vat: number; totalPayable: number; received: number };
   const entries: Entry[] = [];
+  // A credit split into ex-VAT and VAT rather than grossed up, so the
+  // statement comes down by exactly what aging took off.
+  const creditEntry = (date: string, invNo: string, description: StatementLineKind, credited: number): Entry => {
+    const total = money(credited);
+    const exVat = money(total / (1 + vatRate));
+    return { date, invNo, description, invoiceAmount: -exVat, vat: -money(total - exVat), totalPayable: -total, received: 0 };
+  };
+  const onStatement = new Set<string>();
   for (const o of orderRows) {
     const pos = position.get(o.id);
+    const grvUsed = sumOf(grvUseByOrder.get(o.id));
+    // Everything that has come off this invoice: payments with their
+    // discounts, numbered GRVs ticked against it and — on a scoped statement,
+    // from aging — its share of the older, unnumbered returns.
+    const settledOff = pos ? pos.paid : (paidByOrder.get(o.id) ?? 0) + grvUsed;
     if (scope !== "all") {
-      const owed = pos ? pos.balance : Math.max(0, (o.total ?? 0) - (paidByOrder.get(o.id) ?? 0));
+      const owed = pos ? pos.balance : Math.max(0, (o.total ?? 0) - settledOff);
       const settled = owed <= 0.01;
       if (scope === "outstanding" ? settled : !settled) continue;
     }
+    onStatement.add(o.id);
     entries.push({
       date: o.billed_at,
       invNo: o.invoice_number != null ? String(o.invoice_number) : t("common.notSet"),
@@ -187,8 +252,30 @@ export async function buildStatement(
       invoiceAmount: o.subtotal ?? 0,
       vat: o.vat_amount ?? 0,
       totalPayable: o.total ?? 0,
-      received: money(pos ? pos.paid : paidByOrder.get(o.id) ?? 0),
+      // The GRV and CN parts are on their own lines below.
+      received: money(settledOff - grvUsed - sumOf(cnPartByOrder.get(o.id))),
     });
+  }
+
+  // Each credit note, for the part of it on invoices this statement carries.
+  const cnOnStatement = new Map<string, number>();
+  for (const orderId of onStatement) {
+    for (const [paymentId, part] of cnPartByOrder.get(orderId) ?? []) {
+      cnOnStatement.set(paymentId, (cnOnStatement.get(paymentId) ?? 0) + part);
+    }
+  }
+  for (const [paymentId, part] of cnOnStatement) {
+    const cn = creditNotes.get(paymentId)!;
+    if (part > 0.004) entries.push(creditEntry(cn.date, `CN${cn.number}`, "CN", part));
+  }
+
+  // Each numbered GRV: what it was used for on invoices this statement
+  // carries, plus — unless this is the statement of what has been paid —
+  // whatever of it is still open, which comes off the total until ticked.
+  for (const g of numberedGrvs) {
+    let credited = scope === "paid" ? 0 : g.open;
+    for (const orderId of onStatement) credited += grvUseByOrder.get(orderId)?.get(g.id) ?? 0;
+    if (credited > 0.004) entries.push(creditEntry(g.date, grvLabel(g.grvNumber), "GRV", credited));
   }
   for (const g of scope === "all" ? grvRows : []) {
     // grv_items.unit_value is the ex-VAT credit per unit (same convention as

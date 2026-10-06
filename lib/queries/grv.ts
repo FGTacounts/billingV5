@@ -45,6 +45,13 @@ const BASE_COLUMNS = "id, customer_id, submitted_by, status, approved_by, create
 // refuses a whole request over one unknown column, so every read asks for
 // them and asks again without them.
 const COLUMNS = `${BASE_COLUMNS}, amount, payment_id, notes`;
+// grv_number arrives with scratchpad/RUN-ME-34, and is asked for the same way.
+const NUMBERED_COLUMNS = `${COLUMNS}, grv_number`;
+
+/** How a GRV is written on a statement and a collection: GRV100. */
+export function grvLabel(grvNumber: number | null | undefined): string {
+  return grvNumber != null ? `GRV${grvNumber}` : "GRV";
+}
 
 /** What one return is worth to the customer. */
 export function grvCredit(amount: number | null | undefined, linesValue: number): number {
@@ -93,7 +100,9 @@ export async function fetchGrvs(supabase: SupabaseClient): Promise<GrvRow[]> {
           .range(from, to) as never,
       { keyOf: (r) => r.id }
     );
-  const rows = await read(COLUMNS).catch(() => read(BASE_COLUMNS));
+  const rows = await read(NUMBERED_COLUMNS)
+    .catch(() => read(COLUMNS))
+    .catch(() => read(BASE_COLUMNS));
   if (rows.length === 0) return [];
 
   const [{ data: customers }, items] = await Promise.all([
@@ -244,11 +253,15 @@ export async function createGrvRequest(
 // customer's outstanding balance once approved. Consumed by aging.ts /
 // dashboard.ts to apply against the customer's oldest invoices first, the
 // same order confirmed payments already age off.
+//
+// Only returns WITHOUT a number. A numbered GRV (approved from 2026-10-06,
+// RUN-ME-34) is not spread over the oldest invoices: it stays open until a
+// collector ticks it, and then counts through grv_allocations instead.
 export async function fetchApprovedGrvCreditByCustomer(
   supabase: SupabaseClient,
   customerIds?: string[]
 ): Promise<Map<string, number>> {
-  type ApprovedRow = { id: string; customer_id: string; amount?: number | null };
+  type ApprovedRow = { id: string; customer_id: string; amount?: number | null; grv_number?: number | null };
   const page = (columns: string, ids: string[] | null) => (from: number, to: number) => {
     let query = supabase.from("grv_returns").select(columns).eq("status", "approved");
     if (ids) query = query.in("customer_id", ids);
@@ -260,7 +273,11 @@ export async function fetchApprovedGrvCreditByCustomer(
           keyOf: (g) => g.id,
         })
       : fetchAllPages<ApprovedRow>(page(columns, null), { keyOf: (g) => g.id });
-  const rows = await read("id, customer_id, amount").catch(() => read("id, customer_id"));
+  const rows = (
+    await read("id, customer_id, amount, grv_number")
+      .catch(() => read("id, customer_id, amount"))
+      .catch(() => read("id, customer_id"))
+  ).filter((g) => g.grv_number == null);
   if (rows.length === 0) return new Map();
 
   const items = await fetchItemsOfGrvs(supabase, rows.map((g) => g.id));
@@ -275,6 +292,127 @@ export async function fetchApprovedGrvCreditByCustomer(
     creditByCustomer.set(g.customer_id, (creditByCustomer.get(g.customer_id) ?? 0) + credit);
   }
   return creditByCustomer;
+}
+
+export interface GrvAllocationRow {
+  grv_id: string;
+  order_id: string;
+  amount: number;
+  payment_id: string | null;
+}
+
+/**
+ * What numbered GRVs have been used against, by invoice or by GRV. An empty
+ * list — not an error — when grv_allocations is not there yet (RUN-ME-34 not
+ * run), which is the same as nothing having been ticked.
+ */
+export async function fetchGrvAllocations(
+  supabase: SupabaseClient,
+  by: { orderIds?: string[]; grvIds?: string[] }
+): Promise<GrvAllocationRow[]> {
+  const column = by.orderIds ? "order_id" : "grv_id";
+  const ids = by.orderIds ?? by.grvIds ?? [];
+  if (ids.length === 0) return [];
+  type Row = GrvAllocationRow & { id: string };
+  const page = (chunk: string[] | null) => (from: number, to: number) => {
+    let query = supabase.from("grv_allocations").select("id, grv_id, order_id, amount, payment_id");
+    if (chunk) query = query.in(column, chunk);
+    return query.order("id").range(from, to) as never;
+  };
+  // The whole book's aging names thousands of invoices; the table is small,
+  // so past a hundred ids read all of it and match here — as aging does with
+  // payment_orders.
+  const wanted = new Set(ids);
+  const read =
+    ids.length > 100
+      ? fetchAllPages<Row>(page(null), { keyOf: (r) => r.id }).then((rows) =>
+          rows.filter((r) => wanted.has(column === "order_id" ? r.order_id : r.grv_id))
+        )
+      : fetchAllForIds<Row>(ids, (chunk, from, to) => page(chunk)(from, to), { keyOf: (r) => r.id });
+  return read
+    .then((rows) => rows.map((r) => ({ ...r, amount: Number(r.amount) || 0 })))
+    .catch(() => [] as GrvAllocationRow[]);
+}
+
+export interface NumberedGrv {
+  id: string;
+  customerId: string;
+  grvNumber: number;
+  /** The day the goods came back. */
+  date: string;
+  /** What the customer is credited, VAT included where it carries an amount. */
+  credit: number;
+  /** Used against invoices so far. */
+  used: number;
+  /** Still to be ticked: shows on the statement and at collection. */
+  open: number;
+}
+
+/**
+ * Every approved, numbered GRV of these customers, with how much of each is
+ * still open. Empty until RUN-ME-34 has been run.
+ */
+export async function fetchNumberedGrvs(supabase: SupabaseClient, customerIds: string[]): Promise<NumberedGrv[]> {
+  if (customerIds.length === 0) return [];
+  type Row = { id: string; customer_id: string; created_at: string; amount: number | null; grv_number: number | null };
+  const rows = await fetchAllForIds<Row>(
+    customerIds,
+    (chunk, from, to) =>
+      supabase
+        .from("grv_returns")
+        .select("id, customer_id, created_at, amount, grv_number")
+        .in("customer_id", chunk)
+        .eq("status", "approved")
+        .not("grv_number", "is", null)
+        .order("id")
+        .range(from, to) as never,
+    { keyOf: (g) => g.id }
+  ).catch(() => [] as Row[]);
+  if (rows.length === 0) return [];
+
+  const ids = rows.map((g) => g.id);
+  const [items, allocations] = await Promise.all([
+    fetchItemsOfGrvs(supabase, ids),
+    fetchGrvAllocations(supabase, { grvIds: ids }),
+  ]);
+  const linesValue = new Map<string, number>();
+  for (const it of items) linesValue.set(it.grv_id, (linesValue.get(it.grv_id) ?? 0) + it.qty * it.unit_value);
+  const usedBy = new Map<string, number>();
+  for (const a of allocations) usedBy.set(a.grv_id, (usedBy.get(a.grv_id) ?? 0) + a.amount);
+
+  return rows
+    .map((g) => {
+      const credit = grvCredit(g.amount, linesValue.get(g.id) ?? 0);
+      const used = money(usedBy.get(g.id) ?? 0);
+      return {
+        id: g.id,
+        customerId: g.customer_id,
+        grvNumber: g.grv_number as number,
+        date: g.created_at,
+        credit,
+        used,
+        open: money(Math.max(0, credit - used)),
+      };
+    })
+    .sort((a, b) => a.grvNumber - b.grvNumber);
+}
+
+/**
+ * The GRVs a collector ticked, written against the invoices they were used
+ * on. The database refuses a use bigger than what is left on the GRV, or on
+ * another customer's invoice (RUN-ME-34).
+ */
+export async function applyGrvCredits(
+  supabase: SupabaseClient,
+  uses: { creditId: string; orderId: string; amount: number }[],
+  paymentId: string | null
+) {
+  if (uses.length === 0) return;
+  const { error } = await supabase.from("grv_allocations").insert(
+    uses.map((u) => ({ grv_id: u.creditId, order_id: u.orderId, amount: money(u.amount), payment_id: paymentId }))
+  );
+  if (error) throw error;
+  returnsChanged();
 }
 
 async function moveStock(supabase: SupabaseClient, productId: string, delta: number) {

@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { billingDateColumn, billedAtSelect } from "@/lib/billingDate";
-import { fetchApprovedGrvCreditByCustomer } from "@/lib/queries/grv";
+import { fetchApprovedGrvCreditByCustomer, fetchGrvAllocations } from "@/lib/queries/grv";
 import { BILLED_STATUSES } from "@/lib/billedStatuses";
 import { fetchAllForIds, fetchAllPages } from "@/lib/paging";
 
@@ -209,6 +209,13 @@ async function buildOutstandingInvoices(
     paidByOrder.set(link.order_id, (paidByOrder.get(link.order_id) ?? 0) + (link.allocated_amount ?? 0));
   }
 
+  // A numbered GRV (RUN-ME-34) comes off the invoices it was ticked against
+  // at collection, and off nothing until then. The unnumbered returns below
+  // still go oldest-invoice-first, as they always have.
+  for (const use of await fetchGrvAllocations(supabase, { orderIds })) {
+    paidByOrder.set(use.order_id, (paidByOrder.get(use.order_id) ?? 0) + use.amount);
+  }
+
   // A per-order due-date extension (§Next Updates: "the manager can extend
   // the payment threshold for a specific order too") shifts the order's
   // effective "day zero" for aging purposes — still in the future = not
@@ -236,8 +243,9 @@ async function buildOutstandingInvoices(
     };
   });
 
-  // An approved GRV is a credit note — apply it against the customer's
-  // oldest outstanding invoices first, same as a payment would age off.
+  // An approved GRV approved before 2026-10-06 (no number) is applied against
+  // the customer's oldest outstanding invoices first, same as a payment would
+  // age off.
   const creditByCustomer = await fetchApprovedGrvCreditByCustomer(
     supabase,
     customerId ? [customerId] : undefined

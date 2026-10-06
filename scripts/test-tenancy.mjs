@@ -95,7 +95,7 @@ function required(env, key) {
  */
 const KNOWN_TABLES = [
   "app_settings", "customer_change_requests", "customer_discounts",
-  "customer_prices", "customers", "expenses", "grv_items", "grv_returns",
+  "customer_prices", "customers", "expenses", "grv_allocations", "grv_items", "grv_returns",
   "news_posts", "notifications", "order_items", "order_status_log", "orders",
   "payment_delay_notes", "payment_extension_requests", "payment_orders",
   "payments", "products", "purchases", "route_visits", "users",

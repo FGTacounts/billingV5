@@ -3564,3 +3564,122 @@ be torn down and re-subscribed on every render. Phone checked, nothing to
 mirror: its subscriptions (AppDataManager, NotificationsStore) call methods
 on long-lived stores that read their state when the event arrives, and it
 has no live subscription on payments.
+
+## 2026-10-06 — Numbered GRVs and credit notes on the statement, ticked at collection
+
+The owner asked for GRVs and credit notes as separate statement lines,
+numbered GRV100… and CN100…, each minus its amount off the total, and for a
+GRV to be ticked at collection like an invoice, with a pop-up when it is
+left unticked. Their answers to the follow-up questions are the spec:
+an approved GRV stays open until ticked (replacing, for new GRVs, the
+2026-09-18 "oldest invoice first" rule); a credit note is the discount typed
+at collection; only managers/admins give one; numbers are given on approval,
+to new returns only. SQL: scratchpad/RUN-ME-34. Both apps.
+
+2026-10-06 — Old and new returns live side by side — A return approved
+before RUN-ME-34 has no number and still comes off the customer's oldest
+invoices (aging, statement "all" scope as an unnumbered "GRV" line). A return
+approved after it gets a number and comes off nothing until it is ticked —
+Rejected: numbering and converting the existing approved returns, which the
+owner declined ("new ones only"); converting them would also have moved
+every existing balance from "settled" to "open GRV".
+
+2026-10-06 — Numbers are gap-free, given inside the database —
+`assign_grv_number` (on the status becoming approved, including a return
+created already approved by approve_return_without_approval) and
+`assign_credit_note_number` (on a discount being given or changed). Advisory
+lock + max()+1, the same as invoice numbers, because a sequence leaves gaps
+on rollback (rule 5). A payment discounted before today keeps no CN number
+when something else on it is edited; changing its discount numbers it.
+
+2026-10-06 — Where a ticked GRV is recorded: a new table, `grv_allocations`
+(grv, invoice, amount, payment if any) — Rejected: putting it inside the
+payment's `payment_orders` slices. Aging counts only CONFIRMED payments, so a
+GRV ticked alongside a pending cheque would have vanished from both the open
+list and the invoice until the cheque cleared; and a collection that is only
+a GRV writes no payment at all (2026-09-18). Aging adds the allocations to
+what an invoice has had off it. The database refuses an allocation on an
+unapproved or unnumbered return, on another customer's invoice, or beyond
+what is left on the GRV, and refuses lowering a GRV's amount below what has
+been used. RLS forced; read/insert for anyone signed in (anyone may
+collect), delete — un-ticking after the fact — manager only.
+
+2026-10-06 — A credit note's share of each invoice: `payment_orders.discount_part`
+— `allocated_amount` stays cash + discount, so every reader of a balance is
+unchanged (the reason given on 2026-09-18 still holds). The statement uses
+the part to move the discount out of "Received" and onto the CN line. Slices
+written before today have no part and keep the discount inside "Received".
+The discount goes on the first slices (ticked invoices, oldest first):
+`splitDiscount` in lib/money.ts, tested in test:money.
+
+2026-10-06 — Order of use at collection: ticked GRVs first (oldest GRV
+first, against ticked invoices oldest first, then the others), then cash +
+discount against what is still owed — `allocateCredits` in lib/money.ts.
+Whatever a GRV cannot use stays open on it.
+
+2026-10-06 — What a line shows on each statement scope — A CN or numbered GRV
+line shows the part of it used on the invoices that statement carries; the
+GRV line adds its still-open part on "outstanding" and "all", not on "paid".
+So on the outstanding statement a GRV used on an invoice that is now settled
+is gone with that invoice, and an open GRV with no invoice owed still shows,
+leaving the customer in credit. Credits are split into ex-VAT and VAT, not
+grossed up, so the statement comes down by exactly what aging takes off.
+
+2026-10-06 — A numbered GRV with no amount is valued as aging values it
+(`grvCredit`: its lines' ex-VAT value) on the statement too — so the open
+figure, the collection sheet and the statement agree. The older ex-VAT vs
+VAT-inclusive disagreement (2026-09-18) remains for unnumbered returns only.
+GRVs raised at collection carry an amount, so this only touches returns
+entered with products and no amount.
+
+2026-10-06 — The "unticked GRV" pop-up is asked at Collect, not at Continue
+— the sheet can open straight on the Collect step (from a customer's
+invoices), which never passes Continue. The open GRVs are listed, tickable,
+on both steps. "Use GRV" ticks all of them; "Continue without" leaves them
+open. Asked once per Collect press. A second Sheet is the pop-up — there is
+no dialog component, and Sheet already stacks (it portals to body).
+
+2026-10-06 — A GRV raised at the door is still a pending request; once
+approved and numbered it is open and is ticked on the next collection — not
+applied automatically to the invoices of the collection it was raised on.
+That is the flow the owner described. Say if a door GRV should instead come
+off that collection's invoices on approval.
+
+2026-10-06 — NOT changed, worth knowing: the Customers list, the aging report
+and route planning still show invoice balances. An open GRV is not on any
+invoice, so it lowers the statement total but not those figures until it is
+ticked. Making them subtract it would change the aging buckets too; not
+asked for.
+
+2026-10-06 — Discounts are refused by the database for anyone but a manager
+or admin (the trigger in RUN-ME-34). The web and phone already only offered
+the field to them; this makes the owner's "manager/admin only" true for an
+old app or a direct call as well.
+
+2026-10-06 — Money stays `numeric` AED here, not integer fils, matching every
+other money column (rule 6 is met in the app by counting in fils, as
+lib/money.ts already does).
+
+### The phone side (2026-10-06)
+
+2026-10-06 — Mirrored in the iPhone app: Grv.numbered / allocations /
+applyCredits (Grv.swift), Payments.splitDiscount / allocateCredits and the
+discount_part on every slice (Payments.swift), numbered GRVs out of the
+oldest-invoice credit and their allocations into "paid" (Aging.swift), and
+the CN / numbered GRV lines in CustomerStatementExporter.ledger. Same cases
+as test:money in BillingTests/PaymentAllocationTests, plus two ledger cases
+in StatementExportTests.
+
+2026-10-06 — Both collection screens on the phone list open GRVs with ticks:
+Payments → Add payment, and the customer sheet's Collect. On Add payment the
+unticked-GRV question is an alert on Save (Use GRV / Continue without /
+Cancel). The customer sheet already asked "Confirm Collection" in a
+confirmation dialog, so the question is folded into it — "Use GRV · Confirm
+AED x" or "Continue without · Confirm AED y" — rather than a second pop-up
+straight after the first. "Continue without" is not offered there when
+nothing else is being collected. Collect is enabled with no amount typed when
+the customer has an open GRV, so a GRV alone can be used.
+
+2026-10-06 — The phone's Returns list shows the GRV number beside the date,
+as the web's does. The GRV report in Reports is unchanged on both apps.
+

@@ -42,11 +42,22 @@ export async function middleware(request: NextRequest) {
     }
   );
 
+  // getSession(), not getUser(): this gate only decides whether to send the
+  // browser to /login, and keeps the session cookie fresh (an expired access
+  // token is refreshed here and written back, as before). It is not what
+  // protects a page. getUser() re-asks Supabase Auth over the network on
+  // every click, and the (app) layout and every page under it already do
+  // exactly that — verified, not merely decoded — through getAppUser(), and
+  // render nothing or redirect to /login when it fails. Paying for it twice,
+  // one after the other, made every page wait on two Auth round trips before
+  // rendering. A forged or stale cookie
+  // still gets past this line only to be refused by the page, and every
+  // read after that runs under RLS as whoever the token really belongs to.
   const {
-    data: { user },
-  } = await supabase.auth.getUser();
+    data: { session },
+  } = await supabase.auth.getSession();
 
-  if (!user) {
+  if (!session) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);

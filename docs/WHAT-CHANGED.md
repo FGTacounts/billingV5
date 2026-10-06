@@ -1,5 +1,31 @@
 # What changed, and what you need to do
 
+## 2026-10-06 — Pages open faster
+
+Nothing to run in Supabase. The web needs a deploy; the phone is unchanged.
+
+- **A loading screen appears the moment you click** a page, instead of the
+  old page sitting there until the new one is ready.
+- **One sign-in check per page instead of three.** Each page used to confirm
+  who you are with Supabase three times, one after another, before showing
+  anything.
+- **Six pages download 110 kB less** — Dashboard, Orders, Products,
+  Customers, Expense and Settings. The Excel reader behind the Import button
+  now loads only when you actually import a file.
+- **The Dashboard loads once, not twice**, when it opens, and a burst of live
+  changes (approving an order writes several rows) now causes one refresh
+  instead of one per row.
+- **The web server now runs in Mumbai**, next to the database
+  (`vercel.json`). If Vercel was already using Mumbai this changes nothing;
+  if it was using its default (Washington, USA), every database call was
+  crossing the world and back.
+
+Also fixed: on **Payments**, after switching "only what I collected" on or
+off, the next live payment could put the list back the way it was. It now
+keeps the setting you chose.
+
+---
+
 ## 2026-10-01 — Orders waiting for approval show their amount
 
 Nothing to run in Supabase. The web needs a deploy; the phone is unchanged.

@@ -1,4 +1,5 @@
 import "server-only";
+import { cache } from "react";
 import { headers } from "next/headers";
 import { createClient } from "@supabase/supabase-js";
 import { supabaseServer } from "./supabase/server";
@@ -54,7 +55,16 @@ async function callerFromBearerToken(): Promise<AppUser | null> {
 // The authenticated caller's `users` row (id, role, name, …), or null if not
 // logged in, not yet provisioned a users row, or deactivated. Always read
 // the role from here server-side — never trust a role the client claims.
-export async function getAppUser(): Promise<AppUser | null> {
+//
+// Wrapped in React's per-request cache: opening a page runs the (app) layout
+// and the page itself, and both ask who the caller is. Each ask was its own
+// round trip to Supabase Auth plus a read of `users`, one after the other,
+// before any of the page was sent. Now the second ask gets the first one's
+// answer. The cache lives for one request only — the next click asks again,
+// so a deactivated user or a changed role still takes effect at once.
+export const getAppUser = cache(readAppUser);
+
+async function readAppUser(): Promise<AppUser | null> {
   const fromToken = await callerFromBearerToken();
   if (fromToken) return fromToken;
 

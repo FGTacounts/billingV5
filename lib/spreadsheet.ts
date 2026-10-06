@@ -1,5 +1,8 @@
-import * as XLSX from "xlsx";
-
+// SheetJS is loaded only when a file is actually picked. Imported at the top
+// it rode along with every page that has an Import button — Dashboard (via the
+// new-order sheet), Orders, Products, Customers, Expense, Settings — and made
+// each of them about 110 kB heavier to open, for a button most visits never
+// press. Same treatment as tesseract.js in ScanCheque and jszip in Invoices.
 // One parser for csv/xls/xlsx alike (§Products: "support for all kinds of
 // spreadsheet formats, csv, xls, xlsx…") — SheetJS reads all three from the
 // same array-buffer entry point, so there's no format-specific branching.
@@ -7,7 +10,7 @@ import * as XLSX from "xlsx";
 // underscores) so a human-typed sheet ("Stock On Hand", "Rack") lines up
 // with the snake_case field names the import routes expect.
 export async function parseSpreadsheetFile(file: File): Promise<Record<string, string>[]> {
-  const buffer = await file.arrayBuffer();
+  const [XLSX, buffer] = await Promise.all([import("xlsx"), file.arrayBuffer()]);
   const workbook = XLSX.read(buffer, { type: "array" });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   if (!sheet) return [];

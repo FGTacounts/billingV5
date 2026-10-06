@@ -3496,3 +3496,71 @@ clearing the search, or tapping a tab, goes back to the tab and clears the
 term. Salesmen already search everything they have in one view; the
 warehouse's list is its queue. Phone: not changed — its All Orders tab
 searches the whole synced book in memory, with no 25-row page.
+
+## 2026-10-06 — Page speed
+
+2026-10-06 — `getAppUser()` is wrapped in React's per-request `cache()`. The
+(app) layout and the page both called it, and each call was a Supabase Auth
+round trip plus a read of `users`, in series, before any HTML was sent. The
+cache lasts one request, so a deactivated user or changed role still takes
+effect on the next click. Route handlers are unaffected (cache() simply calls
+through outside a render).
+
+2026-10-06 — middleware.ts uses `getSession()` instead of `getUser()`. It is
+a redirect-to-/login gate and the place the session cookie is refreshed;
+getSession() still refreshes an expired token and writes the cookie back.
+It is NOT the authorisation: every page under (app), and `/`, calls
+getAppUser(), which verifies the token with Supabase (getUser) and renders
+nothing or redirects when it fails, and every query runs under RLS as the
+token's real owner. A forged cookie therefore gets past middleware and no
+further. Rejected: keeping getUser() in both places — two Auth round trips
+per click for the same answer. /api/* was already outside the gate.
+
+2026-10-06 — `app/(app)/loading.tsx` added: a title bar and six skeleton rows
+(the existing Skeleton/SkeletonList), shown on every navigation while the
+server renders. Rule 9 (skeletons, never spinners). No new styles.
+
+2026-10-06 — SheetJS (`xlsx`) is imported dynamically inside
+`parseSpreadsheetFile`. Statically imported, it shipped with every page that
+has an Import button — Dashboard (through NewOrderSheet), Orders, Products,
+Customers, Expense, Settings — 110 kB each by `next build` (Dashboard
+384 → 274 kB first load). Same pattern as tesseract.js and jszip already use.
+
+2026-10-06 — `vercel.json` pins functions to `bom1` (Mumbai). The owner
+confirmed the Supabase project is in Mumbai; Vercel's default is iad1
+(Washington), which would put an ocean between every server-side query and
+the database. Free on every Vercel plan (one region).
+
+2026-10-06 — Dashboard: the sale chart (and its comparison line) loads on
+its own (`loadTrend`), out of the main `load`. The saved chart range arrives
+from preferences just after the page opens, and changing it re-ran all ten
+to twelve dashboard queries — every open loaded the dashboard twice. The
+chart reads the shared order fetch, so a range change is now two filters.
+A sequence number stops a slow answer for an old range overwriting the new.
+
+2026-10-06 — Dashboard live updates are coalesced: orders/payments events
+schedule one reload 400ms after the last event, through refs, and drop the
+shared order fetch first (`invalidateOrderFacts`) so the reload sees the
+change. Before, each row event started its own full reload, and the reload
+was the `load` from the first render — the month and chart range the page
+opened with, not the ones on screen.
+
+2026-10-06 — NOT done, deliberately: moving dashboard totals into database
+functions. The shared order fetch is ~535 rows, one page; the gain is
+smaller than the cost (RUN-ME SQL, cost-visibility rules on GP, and the same
+change on the phone). Revisit with Vercel Speed Insights numbers if the
+dashboard is still slow after this deploy.
+
+2026-10-06 — `useRealtimeTable` calls the latest `onChange` through a ref.
+The channel is rebuilt only when table or filter change, and it kept the
+handler from the render that built it. Live: Payments — its reload carries
+"only what I collected"; after turning the toggle, the next live payment
+reloaded the list under the old setting. Orders, the notifications bell and
+order detail were not affected (their reloads never change, or the filter
+in the channel name rebuilds it), but the hook is fixed rather than each
+caller, so a new page cannot reintroduce it. Rejected: putting `onChange` in
+the effect's dependencies — callers pass inline arrows, so the channel would
+be torn down and re-subscribed on every render. Phone checked, nothing to
+mirror: its subscriptions (AppDataManager, NotificationsStore) call methods
+on long-lived stores that read their state when the event arrives, and it
+has no live subscription on payments.

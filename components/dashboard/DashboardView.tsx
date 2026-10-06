@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo, type ReactNode } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef, type ReactNode } from "react";
 import { springLayout } from "@/lib/motion";
 import { motion } from "framer-motion";
 import { useRouter } from "next/navigation";
@@ -23,6 +23,7 @@ import {
   fetchExpenseBreakdown,
   fetchPaymentsSummary,
   fetchSalesByCategory,
+  invalidateOrderFacts,
   currentMonth,
   isCurrentMonth,
   gpPercent,
@@ -772,26 +773,24 @@ export default function DashboardView({ user }: { user: AppUser }) {
   const isSalesman = user.role === "salesman";
   const isWarehouse = user.role === "warehouse";
 
+  // Everything on the dashboard except the sale chart. The chart's range is
+  // kept apart (loadTrend below) because it changes on its own: the saved
+  // range arrives from preferences a moment after the page opens, and a
+  // range picked in the chart moves nothing else. With the chart inside this
+  // function, each of those re-ran all twelve queries — the dashboard loaded
+  // twice on every open — to redraw one line.
   const load = useCallback(async () => {
     const supabase = supabaseBrowser();
     const salesmanId = isSalesman ? user.id : undefined;
 
-    // Shifted-back range for the comparison line, same length as saleRange,
-    // ending the instant it starts.
-    const rangeMs = new Date(saleRange.to).getTime() - new Date(saleRange.from).getTime();
-    const prevTo = new Date(new Date(saleRange.from).getTime() - 24 * 60 * 60 * 1000);
-    const prevFrom = new Date(prevTo.getTime() - rangeMs);
-
     if (isManager) {
-      const [s, g, eb, p, w, pk, tr, ptr, pm, sm, lb, oc] = await Promise.all([
+      const [s, g, eb, p, w, pk, pm, sm, lb, oc] = await Promise.all([
         monthToDateSales(supabase, undefined, month),
         monthToDateGrossProfit(supabase, undefined, month),
         fetchExpenseBreakdown(supabase, month),
         countByStatus(supabase, ["pending"]),
         countByStatus(supabase, ["waiting", "accepted"]),
         countByStatus(supabase, ["packed"]),
-        fetchSaleTrend(supabase, { from: new Date(saleRange.from), to: new Date(saleRange.to) }),
-        fetchSaleTrend(supabase, { from: prevFrom, to: prevTo }),
         fetchPaymentsByMonthSegmented(supabase, { endMonth: month }),
         fetchSalesByMonth(supabase, { endMonth: month }),
         fetchLeaderboard(supabase, month),
@@ -804,8 +803,6 @@ export default function DashboardView({ user }: { user: AppUser }) {
       setPending(p);
       setWaiting(w);
       setPacked(pk);
-      setTrend(tr);
-      setPrevTrend(ptr);
       setPaymentsByMonth(pm);
       setLeaderboard(lb);
       setOrdersThisMonth(oc);
@@ -818,14 +815,12 @@ export default function DashboardView({ user }: { user: AppUser }) {
       const prevMonth = sm.length >= 2 ? sm[sm.length - 2].value : 0;
       setPrevSales(prevMonth);
     } else if (isSalesman) {
-      const [s, d, w, ap, rj, tr, ptr, pm, sm, oc] = await Promise.all([
+      const [s, d, w, ap, rj, pm, sm, oc] = await Promise.all([
         monthToDateSales(supabase, salesmanId, month),
         countByStatus(supabase, ["draft"], salesmanId),
         countByStatus(supabase, ["pending"], salesmanId),
         countByStatus(supabase, ["approved"], salesmanId),
         countByStatus(supabase, ["rejected"], salesmanId),
-        fetchSaleTrend(supabase, { salesmanId, from: new Date(saleRange.from), to: new Date(saleRange.to) }),
-        fetchSaleTrend(supabase, { salesmanId, from: prevFrom, to: prevTo }),
         fetchPaymentsByMonthSegmented(supabase, { collectedBy: user.id, endMonth: month }),
         fetchSalesByMonth(supabase, { salesmanId, endMonth: month }),
         countOrdersThisMonth(supabase, salesmanId, month),
@@ -835,8 +830,6 @@ export default function DashboardView({ user }: { user: AppUser }) {
       setWaiting(w);
       setApproved(ap);
       setRejected(rj);
-      setTrend(tr);
-      setPrevTrend(ptr);
       setPaymentsByMonth(pm);
       setSalesByMonth(sm);
       setOrdersThisMonth(oc);
@@ -859,14 +852,70 @@ export default function DashboardView({ user }: { user: AppUser }) {
       setResume(rp);
     }
     setLoading(false);
-  }, [isManager, isSalesman, isWarehouse, user.id, saleRange, month]);
+  }, [isManager, isSalesman, isWarehouse, user.id, month]);
+
+  // The sale chart, and the same-length stretch before it for the comparison
+  // line. Both come out of the shared order fetch (revenueIn), so a range
+  // change is two cheap filters, not a trip to the database. Numbered so a
+  // slow answer for a range the user has already moved away from cannot land
+  // on top of the one they are looking at.
+  const trendSeq = useRef(0);
+  const loadTrend = useCallback(async () => {
+    if (!isManager && !isSalesman) return;
+    const seq = ++trendSeq.current;
+    const supabase = supabaseBrowser();
+    const salesmanId = isSalesman ? user.id : undefined;
+    // Shifted-back range for the comparison line, same length as saleRange,
+    // ending the instant it starts.
+    const rangeMs = new Date(saleRange.to).getTime() - new Date(saleRange.from).getTime();
+    const prevTo = new Date(new Date(saleRange.from).getTime() - 24 * 60 * 60 * 1000);
+    const prevFrom = new Date(prevTo.getTime() - rangeMs);
+    const [tr, ptr] = await Promise.all([
+      fetchSaleTrend(supabase, { salesmanId, from: new Date(saleRange.from), to: new Date(saleRange.to) }),
+      fetchSaleTrend(supabase, { salesmanId, from: prevFrom, to: prevTo }),
+    ]);
+    if (seq !== trendSeq.current) return;
+    setTrend(tr);
+    setPrevTrend(ptr);
+  }, [isManager, isSalesman, user.id, saleRange]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  useRealtimeTable("orders", () => load());
-  useRealtimeTable("payments", () => load());
+  useEffect(() => {
+    loadTrend().catch(() => {});
+  }, [loadTrend]);
+
+  // A live change reloads the dashboard — once per burst, not once per row.
+  // Approving one order writes the order, its lines' stock and often a
+  // payment in quick succession, and each arrived as its own event that
+  // started a full reload of every figure, all racing each other. Waiting
+  // until the changes stop for a moment folds them into one reload. Read
+  // through refs so the reload uses the month and range on screen now, not
+  // the ones there were when the page opened.
+  const loadRef = useRef(load);
+  const loadTrendRef = useRef(loadTrend);
+  loadRef.current = load;
+  loadTrendRef.current = loadTrend;
+  const reloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleReload = useCallback(() => {
+    if (reloadTimer.current) clearTimeout(reloadTimer.current);
+    reloadTimer.current = setTimeout(() => {
+      reloadTimer.current = null;
+      // Drop the shared order fetch so the reload reads the change rather
+      // than the copy held from a moment ago.
+      invalidateOrderFacts();
+      loadRef.current();
+      loadTrendRef.current().catch(() => {});
+    }, 400);
+  }, []);
+  useEffect(() => () => {
+    if (reloadTimer.current) clearTimeout(reloadTimer.current);
+  }, []);
+
+  useRealtimeTable("orders", scheduleReload);
+  useRealtimeTable("payments", scheduleReload);
 
   const changePct = prevSales > 0 ? (sales - prevSales) / prevSales : null;
 

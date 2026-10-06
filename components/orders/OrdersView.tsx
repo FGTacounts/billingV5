@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Plus, FileText, ChevronDown, ChevronRight, Search, SlidersHorizontal, PackageCheck, Trash2, XCircle } from "lucide-react";
 import { supabaseBrowser } from "@/lib/supabase/client";
@@ -187,6 +187,13 @@ export default function OrdersView({ user }: { user: AppUser }) {
   // customer name or invoice number, applied regardless of which subtab is
   // active so it works everywhere the request asked for.
   const [search, setSearch] = useState("");
+  // What the paged Approved / Past list asks the database for — a moment
+  // after typing stops, not once per keystroke.
+  const [serverSearch, setServerSearch] = useState("");
+  useEffect(() => {
+    const timer = setTimeout(() => setServerSearch(search.trim()), 250);
+    return () => clearTimeout(timer);
+  }, [search]);
   const [sort, setSort] = useState<OrderSort>("newest");
   const { preferences, update: updatePrefs } = usePreferences();
   const activeOrderColumns = (preferences.ordersColumns as OrderColumnKey[] | undefined) ?? [];
@@ -372,6 +379,15 @@ export default function OrdersView({ user }: { user: AppUser }) {
   // shape for the person actually doing the work.
   const isWarehouse = user.role === "warehouse";
   const showsWarehouseStages = isWarehouse;
+  // A manager's search covers every order, whichever tab is open (owner,
+  // 2026-10-06: searching 4503 from New orders found nothing, because that
+  // tab only holds orders waiting for review). Clearing the search, or
+  // picking a tab, goes back to the tab.
+  const shownView = isManager && search.trim() ? "all" : managerView;
+  function pickView(view: typeof managerView) {
+    setManagerView(view);
+    setSearch("");
+  }
 
   const warehouseRows = useMemo(() => {
     if (!isManager && !showsWarehouseStages) return [];
@@ -493,20 +509,20 @@ export default function OrdersView({ user }: { user: AppUser }) {
                   <SwitchButton
                     label={t("orders.newOrdersSwitch")}
                     count={switcherStats.newOrders}
-                    active={managerView === "new"}
-                    onClick={() => setManagerView("new")}
+                    active={shownView === "new"}
+                    onClick={() => pickView("new")}
                   />
                   <SwitchButton
                     label={t("orders.rejectedSwitch")}
                     count={switcherStats.rejected}
-                    active={managerView === "rejected"}
-                    onClick={() => setManagerView("rejected")}
+                    active={shownView === "rejected"}
+                    onClick={() => pickView("rejected")}
                   />
                   <SwitchButton
                     label={t("orders.allOrdersSwitch")}
                     count={switcherStats.all}
-                    active={managerView === "all"}
-                    onClick={() => setManagerView("all")}
+                    active={shownView === "all"}
+                    onClick={() => pickView("all")}
                   />
                   <span className="text-caption text-secondary ms-auto tabular-nums">
                     {t("orders.thisMonthCount", { n: switcherStats.thisMonth })}
@@ -515,7 +531,7 @@ export default function OrdersView({ user }: { user: AppUser }) {
 
                 <div
                   className={`rounded-card border p-3 transition-colors ${
-                    managerView === "warehouse" ? "border-accent/40 bg-accent/[0.04]" : "border-hairline"
+                    shownView === "warehouse" ? "border-accent/40 bg-accent/[0.04]" : "border-hairline"
                   }`}
                 >
                   <div className="flex items-baseline justify-between mb-2">
@@ -524,12 +540,12 @@ export default function OrdersView({ user }: { user: AppUser }) {
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
                     {WAREHOUSE_STAGES.map((stage) => {
-                      const isActive = managerView === "warehouse" && warehouseStage === stage;
+                      const isActive = shownView === "warehouse" && warehouseStage === stage;
                       return (
                         <button
                           key={stage}
                           onClick={() => {
-                            setManagerView("warehouse");
+                            pickView("warehouse");
                             setWarehouseStage(stage);
                           }}
                           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-card text-caption font-semibold border transition-colors ${
@@ -557,21 +573,21 @@ export default function OrdersView({ user }: { user: AppUser }) {
         </ScrollAwayTabs>
       )}
 
-      {isManager && managerView === "new" && (
+      {isManager && shownView === "new" && (
         <Section title={t("orders.newOrdersToReview")} rows={sections.pending ?? []} onOpen={setOpenId} />
       )}
       {/* Every rejected order in one place (owner, 2026-10-03), rather than
           only at the foot of All Orders or folded into the Trash — both of
           those stay as they were. Rejected orders are purged after 30 days,
           so the list stays short; opening one gives the usual resubmit. */}
-      {isManager && managerView === "rejected" && (
+      {isManager && shownView === "rejected" && (
         rejectedRows.length > 0 ? (
           <Section title={t("orders.rejected")} rows={rejectedRows} onOpen={setOpenId} />
         ) : (
           <EmptyState icon={XCircle} title={t("orders.noRejectedOrders")} />
         )
       )}
-      {isManager && managerView === "warehouse" && (
+      {isManager && shownView === "warehouse" && (
         <Section title={WAREHOUSE_STAGE_LABEL[warehouseStage]} rows={warehouseRows} onOpen={setOpenId} />
       )}
 
@@ -619,7 +635,7 @@ export default function OrdersView({ user }: { user: AppUser }) {
         </>
       )}
 
-      {(!isManager || managerView === "all") && !showsWarehouseStages && (
+      {(!isManager || shownView === "all") && !showsWarehouseStages && (
         <>
           {isManager && (
             <div className="mb-4 flex items-center gap-2">
@@ -679,7 +695,7 @@ export default function OrdersView({ user }: { user: AppUser }) {
               salesmanId={user.id}
               onOpen={setOpenId}
               refreshKey={refreshKey}
-              search={search}
+              search={serverSearch}
               sort={sort}
             />
           )}
@@ -689,7 +705,7 @@ export default function OrdersView({ user }: { user: AppUser }) {
               statusOnly={BILLED_STATUSES}
               onOpen={setOpenId}
               refreshKey={refreshKey}
-              search={search}
+              search={serverSearch}
               columns={activeOrderColumns}
               sort={sort}
             />
@@ -978,14 +994,20 @@ function PaginatedOrderSection({
   const [loaded, setLoaded] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
 
+  // Searched in the database, so an order older than the first page is
+  // found too. Only the newest request may fill the list: an answer to
+  // "45" arriving after the one to "4503" must not replace it.
+  const latest = useRef(0);
   const reset = useCallback(async () => {
+    const ask = ++latest.current;
     const supabase = supabaseBrowser();
-    const page = await fetchOrdersPage(supabase, { status: statusOnly, salesmanId, pageSize: 25 });
+    const page = await fetchOrdersPage(supabase, { status: statusOnly, salesmanId, pageSize: 25, search });
+    if (ask !== latest.current) return;
     setRows(page.rows);
     setCursor(page.nextCursor);
     setHasMore(page.nextCursor !== null);
     setLoaded(true);
-  }, [statusOnly.join(","), salesmanId]);
+  }, [statusOnly.join(","), salesmanId, search]);
 
   // Parent owns the single "orders" Realtime subscription (two
   // useRealtimeTable("orders") calls with no filter collide on the same
@@ -998,25 +1020,19 @@ function PaginatedOrderSection({
     if (!cursor) return;
     setLoadingMore(true);
     const supabase = supabaseBrowser();
-    const page = await fetchOrdersPage(supabase, { status: statusOnly, salesmanId, cursor, pageSize: 25 });
+    const ask = latest.current;
+    const page = await fetchOrdersPage(supabase, { status: statusOnly, salesmanId, cursor, pageSize: 25, search });
+    if (ask !== latest.current) { setLoadingMore(false); return; }
     setRows((prev) => [...prev, ...page.rows]);
     setCursor(page.nextCursor);
     setHasMore(page.nextCursor !== null);
     setLoadingMore(false);
   }
 
-  const term = (search ?? "").trim().toLowerCase();
-  const matchedRows = term
-    ? rows.filter((o) => {
-        const name = (o.customer?.name ?? o.new_customer_note ?? "").toLowerCase();
-        const invoice = (o.invoice_number ?? "").toLowerCase();
-        return name.includes(term) || invoice.includes(term);
-      })
-    : rows;
-  // This archive is paged from the server newest-first, so the chosen order
-  // applies to what has been loaded. Pressing "Load more" brings in older
-  // rows and re-sorts them in with the rest.
-  const visibleRows = sortOrders(matchedRows, sort ?? "newest");
+  // This archive is paged from the server newest-first (already searched
+  // there), so the chosen order applies to what has been loaded. Pressing
+  // "Load more" brings in older rows and re-sorts them in with the rest.
+  const visibleRows = sortOrders(rows, sort ?? "newest");
 
   if (!loaded || rows.length === 0) return null;
   return (

@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { invalidateAging, fetchOutstandingInvoices } from "@/lib/queries/aging";
-import { allocateFifo, settledNow, money } from "@/lib/money";
+import { invalidateAging, fetchOutstandingInvoices, type InvoiceAging } from "@/lib/queries/aging";
+import { allocateFifo, settledNow, money, toFils } from "@/lib/money";
 import { invalidateOrderFacts } from "@/lib/queries/dashboard";
 import type { Payment, Customer, PaymentExtensionRequest, AppUser, Order } from "@/lib/types/db";
 import { t } from "@/lib/i18n";
@@ -227,11 +227,25 @@ export async function updatePayment(
     cheque_number?: string | null;
     cheque_date?: string | null;
     notes?: string | null;
+    // Only when changed. Moving a payment to another customer takes its
+    // slices with it: the re-cut below runs against the new customer's
+    // invoices, and the old customer's are released.
+    customer_id?: string;
+    // The day the money was received (manager/admin only, only when changed).
+    // It is the payment's created_at — the date every list, chart, month
+    // total and export already reads — so nothing else has to learn a new
+    // column. See DECISIONS 2026-10-05.
+    created_at?: string;
+    // The invoices to pay first, oldest first, as ticked on the edit sheet.
+    // Left out, the invoices the payment was already on go first.
+    orderIds?: string[];
   }
 ) {
   const isCheque = !!(patch.cheque_number || patch.cheque_date || patch.bank);
   const core: Record<string, unknown> = {
     ...(patch.status ? { status: patch.status } : {}),
+    ...(patch.customer_id ? { customer_id: patch.customer_id } : {}),
+    ...(patch.created_at ? { created_at: patch.created_at } : {}),
     amount: money(patch.amount),
     cheque_number: patch.cheque_number || null,
     cheque_bank: patch.bank || null,
@@ -252,7 +266,7 @@ export async function updatePayment(
   if (error && discount !== undefined) ({ error } = await supabase.from("payments").update(core).eq("id", id));
   if (error) throw error;
 
-  await reallocatePayment(supabase, id, settledNow(patch.amount, discount ?? 0));
+  await reallocatePayment(supabase, id, settledNow(patch.amount, discount ?? 0), patch.orderIds);
   balancesChanged();
 }
 
@@ -263,12 +277,19 @@ export async function updatePayment(
  * payments.amount and left them alone changed nothing anybody ages against —
  * which is what editing a payment did until 2026-09-18.
  *
- * The invoices the payment was already against stay first in line (they are
- * the ones the collector ticked), oldest first, then the customer's other
- * outstanding invoices. Each invoice's room is what it owes WITHOUT this
- * payment, so the payment's own old slices do not crowd out its new ones.
+ * The invoices ticked on the edit sheet go first, oldest first — or, when
+ * nothing was passed, the ones the payment was already against — then the
+ * customer's other outstanding invoices. Each invoice's room is what it owes
+ * WITHOUT this payment, so the payment's own old slices do not crowd out its
+ * new ones. It reads the payment as saved, so a customer or status changed in
+ * the same edit is already the one it works against.
  */
-export async function reallocatePayment(supabase: SupabaseClient, paymentId: string, settled: number) {
+export async function reallocatePayment(
+  supabase: SupabaseClient,
+  paymentId: string,
+  settled: number,
+  preferredOrderIds?: string[]
+) {
   const { data: payment, error: payErr } = await supabase
     .from("payments")
     .select("id, customer_id, status")
@@ -286,17 +307,10 @@ export async function reallocatePayment(supabase: SupabaseClient, paymentId: str
   for (const l of oldLinks ?? []) ownSlice.set(l.order_id as string, Number(l.allocated_amount) || 0);
 
   invalidateAging();
-  const invoices = await fetchOutstandingInvoices(supabase, payment.customer_id as string, true);
-  // Aging only counts confirmed payments, so a confirmed payment's own slices
-  // are already inside each balance and have to be handed back first.
-  const counted = payment.status === "confirmed";
-  const room = invoices.map((inv) => ({
-    orderId: inv.orderId,
-    invoiceDate: inv.invoiceDate,
-    balance: inv.balance + (counted ? ownSlice.get(inv.orderId) ?? 0 : 0),
-  }));
-  const preferred = room.filter((r) => ownSlice.has(r.orderId));
-  const others = room.filter((r) => !ownSlice.has(r.orderId));
+  const room = await invoiceRoom(supabase, payment.customer_id as string, payment.status === "confirmed", ownSlice);
+  const first = new Set(preferredOrderIds ?? ownSlice.keys());
+  const preferred = room.filter((r) => first.has(r.orderId));
+  const others = room.filter((r) => !first.has(r.orderId));
   const slices = allocateFifo(settled, preferred, others);
 
   const { error: delErr } = await supabase.from("payment_orders").delete().eq("payment_id", paymentId);
@@ -307,6 +321,50 @@ export async function reallocatePayment(supabase: SupabaseClient, paymentId: str
     );
     if (insErr) throw insErr;
   }
+}
+
+/**
+ * Each of a customer's invoices with what it owes WITHOUT one payment — the
+ * room that payment has on it. Aging only counts confirmed payments, so a
+ * confirmed payment's own slices are already inside each balance and are
+ * handed back. A slice on another customer's invoice simply matches nothing.
+ */
+async function invoiceRoom(
+  supabase: SupabaseClient,
+  customerId: string,
+  counted: boolean,
+  ownSlice: Map<string, number>
+): Promise<InvoiceAging[]> {
+  const invoices = await fetchOutstandingInvoices(supabase, customerId, true);
+  return invoices.map((inv) => ({
+    ...inv,
+    balance: inv.balance + (counted ? ownSlice.get(inv.orderId) ?? 0 : 0),
+  }));
+}
+
+/**
+ * For the edit sheet: a customer's invoices this payment could go against,
+ * oldest first, each with its room, and the ones the payment is on now.
+ * An invoice already settled by someone else (room 0) is left out unless
+ * this payment is on it.
+ */
+export async function fetchPaymentInvoiceChoices(
+  supabase: SupabaseClient,
+  payment: Pick<Payment, "id" | "status">,
+  customerId: string
+): Promise<{ invoices: InvoiceAging[]; currentOrderIds: string[] }> {
+  const { data: links, error } = await supabase
+    .from("payment_orders")
+    .select("order_id, allocated_amount")
+    .eq("payment_id", payment.id);
+  if (error) throw error;
+  const ownSlice = new Map<string, number>();
+  for (const l of links ?? []) ownSlice.set(l.order_id as string, Number(l.allocated_amount) || 0);
+  const room = await invoiceRoom(supabase, customerId, payment.status === "confirmed", ownSlice);
+  const invoices = room
+    .filter((r) => toFils(r.balance) > 0 || ownSlice.has(r.orderId))
+    .sort((a, b) => new Date(a.invoiceDate).getTime() - new Date(b.invoiceDate).getTime());
+  return { invoices, currentOrderIds: invoices.filter((r) => ownSlice.has(r.orderId)).map((r) => r.orderId) };
 }
 
 /** What a customer owes has changed — drop the briefly-held copies. */

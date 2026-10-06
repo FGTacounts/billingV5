@@ -3424,3 +3424,75 @@ differs from what was loaded, and never when cost could not be read.
 Noticed, not changed: every Data tab cell edit rebuilds the article without
 its category and the four Additional Details figures, so a grid edit writes
 an empty category and resets them — worth its own fix.
+
+### Editing a payment: customer, date, invoices (2026-10-05)
+
+2026-10-05 — Supersedes two "NOT built" calls of 2026-09-18, at the owner's
+request ("add ability to edit payments", then picking these three): a payment
+can now be moved to another customer, and the invoices it pays can be ticked
+by hand. Web first; the phone follows as its own step.
+
+2026-10-05 — Moving a payment to another customer is a re-cut, not a copy —
+`updatePayment` writes the new `customer_id`, then `reallocatePayment` reads
+the payment back and cuts its slices against the NEW customer's invoices; the
+old slices are deleted, so the old customer's invoices owe again. Allowed to
+whoever may already edit the payment (the collector for their own, and the
+manager is told; managers and admins for any) — it is the same correction
+right as the amount. NOT moved with it: a goods return raised in the same
+collection (`grv_returns.payment_id`). An approved return has moved stock and
+credited a customer; moving it belongs on the return, and the return is
+editable on its own.
+
+2026-10-05 — The ticked invoices go first, oldest first, then the customer's
+other invoices, oldest first — the same rule as logging a payment
+(`allocateFifo`). Nothing ticked means oldest first across all of them. The
+sheet shows each invoice's room WITHOUT this payment (a confirmed payment's
+own slices handed back), and leaves out invoices someone else has settled
+unless this payment is on one. If the list could not be read, saving falls
+back to the old behaviour (the invoices it was already on go first) rather
+than silently dropping them.
+
+2026-10-05 — "Date received" is the payment's `created_at`, edited in place;
+no new column — Every reader of a payment's date — the Payments list, the
+monthly chart, month-to-date collected, the Excel export, and the same
+screens on the phone — already reads `created_at`, so changing it moves the
+payment everywhere at once with no RUN-ME file and no phone release. Lost:
+the moment the payment was typed in, once a manager re-dates it. Kept: the
+time of day (only the day changes, and never into the future), and the
+"Edited" pill, which compares `updated_at` with `created_at`. Manager/admin
+only, like the discount, because it moves money between months. Rejected: a
+`received_at` column like `orders.billed_at` — that one existed because a
+trigger re-stamps `updated_at`; nothing re-stamps `payments.created_at`.
+
+2026-10-05 — Phone: the same three on PaymentDetailSheet (Payments.swift
+`reallocate(preferredOrderIds:)` and `invoiceChoices`, the web's
+`reallocatePayment` and `fetchPaymentInvoiceChoices`; same strings word for
+word). Customer comes from the existing CustomerPickerSheet; "Date received"
+replaces the read-only date and keeps the time of day. One difference, not
+new: on the phone only a manager or admin can edit a payment at all (a
+collector sees it read-only), so on the phone the customer and the invoices
+are manager/admin only too. Left as it was — the owner chose "keep access as
+is".
+
+### Orders search finds every order (2026-10-06)
+
+2026-10-06 — The Approved / Past list on Orders searches the database, not
+the page it has loaded — The owner searched 4503 and 4504 on Orders and got
+nothing, while Invoices showed them. Invoices loads every billed order and
+filters; Orders pages billed orders 25 at a time and filtered only those 25,
+and 4503 was the 32nd newest. `fetchOrdersPage` now takes `search` and
+matches the same three fields the page always did (invoice number, customer
+name, a not-yet-on-file customer's name), via a customer-name lookup and one
+`or()` that PostgREST ANDs with the cursor's (checked live, read-only).
+Typing is debounced 250ms, and a late answer to an earlier term cannot
+replace a newer one. The live pipeline lists (pending, in progress, the
+warehouse stages) were already complete in memory and still filter there.
+
+2026-10-06 — A manager's search covers all orders whichever tab is open —
+The manager lands on "New orders", which holds only orders awaiting review,
+so an approved invoice could not match there whatever the archive did. With
+a search term the page shows the All orders view (the All tile lights up);
+clearing the search, or tapping a tab, goes back to the tab and clears the
+term. Salesmen already search everything they have in one view; the
+warehouse's list is its queue. Phone: not changed — its All Orders tab
+searches the whole synced book in memory, with no 25-row page.

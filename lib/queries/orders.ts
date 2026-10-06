@@ -299,9 +299,15 @@ export async function fetchOrdersPage(
     salesmanId?: string;
     pageSize?: number;
     cursor?: OrderCursor | null;
+    // Customer name or invoice number, matched in the DATABASE. Filtering the
+    // loaded page instead found nothing older than the first 25: on
+    // 2026-10-06 invoice 4503 was the 32nd newest billed order and searching
+    // for it on Orders came back empty.
+    search?: string;
   } = {}
 ): Promise<OrderPage> {
   const pageSize = opts.pageSize ?? 25;
+  const searchFilter = await orderSearchFilter(supabase, opts.search);
   const build = (select: string, filterDeleted: boolean) => {
     let q = supabase
       .from("orders")
@@ -313,6 +319,8 @@ export async function fetchOrdersPage(
     if (opts.status?.length) q = q.in("status", opts.status);
     if (opts.excludeStatus?.length) q = q.not("status", "in", `(${opts.excludeStatus.join(",")})`);
     if (opts.salesmanId) q = q.eq("salesman_id", opts.salesmanId);
+    // A second or() is ANDed with the cursor's, not merged into it.
+    if (searchFilter) q = q.or(searchFilter);
     if (opts.cursor) {
       q = q.or(
         `created_at.lt.${opts.cursor.createdAt},and(created_at.eq.${opts.cursor.createdAt},id.lt.${opts.cursor.id})`
@@ -332,6 +340,23 @@ export async function fetchOrdersPage(
     ? { createdAt: pageRows[pageRows.length - 1].created_at, id: pageRows[pageRows.length - 1].id }
     : null;
   return { rows: await attachRelations(supabase, pageRows), nextCursor };
+}
+
+// The or() filter for an order search — the same three fields the page has
+// always matched on the client: invoice number, the customer's name, and the
+// name typed for a customer not yet on file. Null when there is nothing to
+// search for. Characters that mean something inside an or() are dropped from
+// the term rather than escaped; nobody searches for a comma.
+async function orderSearchFilter(supabase: SupabaseClient, search?: string): Promise<string | null> {
+  const term = (search ?? "").replace(/[,()*%\\:"]/g, " ").trim();
+  if (!term) return null;
+  const { data: customers } = await supabase.from("customers").select("id").ilike("name", `%${term}%`).limit(200);
+  const ids = (customers ?? []).map((c) => c.id as string);
+  return [
+    `invoice_number.ilike.*${term}*`,
+    `new_customer_note.ilike.*${term}*`,
+    ...(ids.length ? [`customer_id.in.(${ids.join(",")})`] : []),
+  ].join(",");
 }
 
 // The Trash in Orders (§Orders: "ability to delete orders… it should be in

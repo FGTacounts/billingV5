@@ -12,10 +12,10 @@ export const runtime = "nodejs";
 // number, and stores the total/subtotal/vat_amount on the order (there's no
 // DB trigger doing this — see plan/README — so it's computed here from the
 // picked quantities, matching "exports/invoice always use the picked qty").
-// No RPC/transaction access, so this does its best with sequential
-// read-then-write calls under the caller's own RLS session — acceptable at
-// this app's concurrency (a Manager approves serially), not perfectly
-// race-proof under simultaneous approvals of the same SKU.
+// The stock and the status move together inside the database
+// (approve_order_take_stock, RUN-ME-35), with the order locked, so a second
+// approval of the same order — a double click, or the phone working from a
+// list it had not refreshed — finds it approved and takes nothing.
 // The screen turns a database refusal into "You don't have permission to do
 // that", which hides which step refused and why. The real reply goes to the
 // server log (Vercel → Logs), so the next failure names itself.
@@ -74,100 +74,11 @@ export async function POST(req: NextRequest) {
     .order("id");
   if (itemsErr) return failed("reading the lines", itemsErr);
 
-  // The order is billed for what was packed, whatever the shelf count says
-  // (owner, 2026-09-27: "I want the order to hold the original … 6>6 and not
-  // 3"). Lines are never cut here; only a manager's own edit changes a
-  // quantity after packing. When the shelf count is lower than the order
-  // takes, nothing is written and the manager is shown the short lines
-  // first; approving anyway (`allowShort`) takes the shelf to zero, never
-  // below. Products that share a shelf (RUN-ME-18) draw from one pool.
-  //
-  // This replaces cutting each line to the shelf (2026-09-12), which rewrote
-  // invoice 4480's lines the first time approval worked.
-  //
-  // A product with no count kept (stock_on_hand null) is not checked and not
-  // written: there is no figure to check against or to deduct from.
-  type StockRow = { id: string; sku: string; stock_on_hand: number | null; stock_group_id?: string | null };
-  const productIds = [...new Set((items ?? []).map((it) => it.product_id).filter(Boolean))];
-  let stockRows: StockRow[] = [];
-  if (productIds.length) {
-    // Read with the server key. Staff are granted products column by column
-    // (RUN-ME-4), and stock_group_id arrived later (RUN-ME-18) without a
-    // grant, so asking for it as the manager was refused outright —
-    // "permission denied for table products", which names no column and so
-    // never reached the fallback below. That was every approval failing with
-    // "You don't have permission to do that" (2026-09-27). lib/products-server
-    // reads the column the same way.
-    let res: { data: unknown[] | null; error: { message: string } | null } = await admin
-      .from("products")
-      .select("id, sku, stock_on_hand, stock_group_id")
-      .in("id", productIds);
-    // Before RUN-ME-18 has been run there is no group column: every product
-    // is its own shelf.
-    if (res.error && res.error.message.includes("stock_group_id")) {
-      res = await admin.from("products").select("id, sku, stock_on_hand").in("id", productIds);
-    }
-    if (res.error) return failed("reading the shelf", res.error);
-    stockRows = (res.data ?? []) as StockRow[];
-  }
-  const productById = new Map(stockRows.map((r) => [r.id, r]));
-
-  const remainingByPool = new Map<string, number>();
-  const anyProductInPool = new Map<string, string>();
-  const needByPool = new Map<string, { sku: string; need: number; have: number }>();
   // Counted in fils, so the billed figures cannot carry a float artefact
   // into the invoice. See lib/money.ts.
   let subtotalFils = 0;
   for (const it of items ?? []) {
-    const qty = it.picked_qty ?? it.ordered_qty ?? 0;
-    const product = productById.get(it.product_id);
-    if (product && product.stock_on_hand != null) {
-      const pool = product.stock_group_id ?? product.id;
-      if (!needByPool.has(pool)) {
-        needByPool.set(pool, { sku: product.sku, need: 0, have: Math.max(0, product.stock_on_hand) });
-        anyProductInPool.set(pool, product.id);
-      }
-      needByPool.get(pool)!.need += qty;
-    }
-    subtotalFils += Math.round(toFils(it.unit_price) * qty);
-  }
-  const short = [...needByPool.values()].filter((p) => p.need > p.have);
-  if (short.length > 0 && allowShort !== true) {
-    return NextResponse.json({ short }, { status: 409 });
-  }
-  for (const [pool, p] of needByPool) remainingByPool.set(pool, Math.max(0, p.have - p.need));
-
-  // One write per shelf. For a shared shelf the database copies the figure
-  // to the other products in the group, so writing any one member is enough.
-  //
-  // With the server key, as /api/products/stock writes the shelf, and
-  // checked: this used to be a caller write whose result was ignored, and a
-  // write the database quietly declines reports no error — the order would
-  // have been billed with its stock still on the shelf.
-  for (const [pool, left] of remainingByPool) {
-    const productId = anyProductInPool.get(pool);
-    if (!productId) continue;
-    const { error } = await admin.from("products").update({ stock_on_hand: left }).eq("id", productId);
-    if (error) return failed("taking the stock off the shelf", error);
-  }
-
-  // §Orders: "the customer's last-billed price for that item should be the
-  // saved/suggested default" — the sticky-price table this feeds
-  // (customer_prices, read by NewOrderSheet's useLastPrices/addProduct) had
-  // no write side at all until now, so it was always empty and "Use last
-  // prices" never had anything to apply.
-  if (order.customer_id) {
-    const priceByProduct = new Map<string, number>();
-    for (const it of items ?? []) priceByProduct.set(it.product_id, it.unit_price);
-    const rows = [...priceByProduct.entries()].map(([product_id, price]) => ({
-      customer_id: order.customer_id,
-      product_id,
-      price,
-      updated_at: new Date().toISOString(),
-    }));
-    if (rows.length) {
-      await supabase.from("customer_prices").upsert(rows, { onConflict: "customer_id,product_id" });
-    }
+    subtotalFils += Math.round(toFils(it.unit_price) * (it.picked_qty ?? it.ordered_qty ?? 0));
   }
 
   const { data: settings } = await supabase
@@ -194,15 +105,74 @@ export async function POST(req: NextRequest) {
   // lines on the invoice add up to the total printed on it.
   const { subtotal, vatAmount, total } = billed(toAed(Math.max(0, subtotalFils - discountFils)), vatRate);
 
-  const { error: approveErr } = await supabase
-    .from("orders")
-    .update({ status: "approved", subtotal, vat_amount: vatAmount, total })
-    .eq("id", orderId);
-  if (approveErr) return failed("marking it approved", approveErr);
+  // The order is billed for what was packed, whatever the shelf count says
+  // (owner, 2026-09-27: "I want the order to hold the original … 6>6 and not
+  // 3"). Lines are never cut here; only a manager's own edit changes a
+  // quantity after packing. When the shelf count is lower than the order
+  // takes, nothing is written and the manager is shown the short lines
+  // first; approving anyway (`allowShort`) takes the shelf to zero, never
+  // below. Products that share a shelf (RUN-ME-18) draw from one pool.
+  //
+  // This replaces cutting each line to the shelf (2026-09-12), which rewrote
+  // invoice 4480's lines the first time approval worked.
+  //
+  // A product with no count kept (stock_on_hand null) is not checked and not
+  // written: there is no figure to check against or to deduct from.
+  //
+  // The database does the check, the taking and the status in one go and
+  // reports which happened. `already_approved` means another approval got
+  // there first: nothing was taken, and this call only makes sure the order
+  // has its number.
+  const { data: outcome, error: takeErr } = await supabase.rpc("approve_order_take_stock", {
+    p_order_id: orderId,
+    p_allow_short: allowShort === true,
+    p_subtotal: subtotal,
+    p_vat_amount: vatAmount,
+    p_total: total,
+  });
+  let approvedNow = true;
+  if (takeErr && (takeErr.code === "PGRST202" || /approve_order_take_stock/.test(takeErr.message ?? ""))) {
+    // RUN-ME-35 has not been run yet: the rules approval had before it.
+    const legacy = await legacyTakeStockAndApprove(admin, supabase, orderId, items ?? [], allowShort === true, {
+      subtotal,
+      vatAmount,
+      total,
+    });
+    if (legacy) return legacy;
+  } else if (takeErr) {
+    return failed("taking the stock and approving", takeErr);
+  } else {
+    const result = outcome as { result: string; short?: { sku: string; need: number; have: number }[] };
+    if (result.result === "short") {
+      return NextResponse.json({ short: result.short ?? [] }, { status: 409 });
+    }
+    approvedNow = result.result === "approved";
+  }
 
-  await supabase
-    .from("order_status_log")
-    .insert({ order_id: orderId, changed_by: user.id, changed_at: new Date().toISOString() });
+  if (approvedNow) {
+    // §Orders: "the customer's last-billed price for that item should be the
+    // saved/suggested default" — the sticky-price table this feeds
+    // (customer_prices, read by NewOrderSheet's useLastPrices/addProduct) had
+    // no write side at all until now, so it was always empty and "Use last
+    // prices" never had anything to apply.
+    if (order.customer_id) {
+      const priceByProduct = new Map<string, number>();
+      for (const it of items ?? []) priceByProduct.set(it.product_id, it.unit_price);
+      const rows = [...priceByProduct.entries()].map(([product_id, price]) => ({
+        customer_id: order.customer_id,
+        product_id,
+        price,
+        updated_at: new Date().toISOString(),
+      }));
+      if (rows.length) {
+        await supabase.from("customer_prices").upsert(rows, { onConflict: "customer_id,product_id" });
+      }
+    }
+
+    await supabase
+      .from("order_status_log")
+      .insert({ order_id: orderId, changed_by: user.id, changed_at: new Date().toISOString() });
+  }
 
   // The invoice number is issued here, at approval, and nowhere else. Only
   // orders that actually become invoices consume a number, so the series has
@@ -263,7 +233,7 @@ export async function POST(req: NextRequest) {
   // Approval is the moment the order becomes an invoice, so it is the one
   // the salesman most needs to hear about. Best-effort: a failed bell must
   // not undo an approval that has already deducted stock.
-  if (order.salesman_id && order.salesman_id !== user.id) {
+  if (approvedNow && order.salesman_id && order.salesman_id !== user.id) {
     await supabase
       .from("notifications")
       .insert({
@@ -277,4 +247,88 @@ export async function POST(req: NextRequest) {
   }
 
   return NextResponse.json({ ok: true, invoiceNumber });
+}
+
+type Line = { id: string; product_id: string; unit_price: number; ordered_qty: number | null; picked_qty: number | null };
+type Caller = ReturnType<typeof supabaseCaller>;
+type Admin = ReturnType<typeof supabaseAdmin>;
+
+// How approval took stock before RUN-ME-35: read the shelves, check, write
+// each one, then mark the order approved — separate calls, so not proof
+// against two approvals at once. Kept only until RUN-ME-35 has been run.
+// Returns a response to send when it stops, null when the order is approved.
+async function legacyTakeStockAndApprove(
+  admin: Admin,
+  supabase: Caller,
+  orderId: string,
+  items: Line[],
+  allowShort: boolean,
+  figures: { subtotal: number; vatAmount: number; total: number }
+): Promise<NextResponse | null> {
+  type StockRow = { id: string; sku: string; stock_on_hand: number | null; stock_group_id?: string | null };
+  const productIds = [...new Set(items.map((it) => it.product_id).filter(Boolean))];
+  let stockRows: StockRow[] = [];
+  if (productIds.length) {
+    // Read with the server key. Staff are granted products column by column
+    // (RUN-ME-4), and stock_group_id arrived later (RUN-ME-18) without a
+    // grant, so asking for it as the manager was refused outright —
+    // "permission denied for table products", which names no column and so
+    // never reached the fallback below. That was every approval failing with
+    // "You don't have permission to do that" (2026-09-27). lib/products-server
+    // reads the column the same way.
+    let res: { data: unknown[] | null; error: { message: string } | null } = await admin
+      .from("products")
+      .select("id, sku, stock_on_hand, stock_group_id")
+      .in("id", productIds);
+    // Before RUN-ME-18 has been run there is no group column: every product
+    // is its own shelf.
+    if (res.error && res.error.message.includes("stock_group_id")) {
+      res = await admin.from("products").select("id, sku, stock_on_hand").in("id", productIds);
+    }
+    if (res.error) return failed("reading the shelf", res.error);
+    stockRows = (res.data ?? []) as StockRow[];
+  }
+  const productById = new Map(stockRows.map((r) => [r.id, r]));
+
+  const remainingByPool = new Map<string, number>();
+  const anyProductInPool = new Map<string, string>();
+  const needByPool = new Map<string, { sku: string; need: number; have: number }>();
+  for (const it of items) {
+    const qty = it.picked_qty ?? it.ordered_qty ?? 0;
+    const product = productById.get(it.product_id);
+    if (product && product.stock_on_hand != null) {
+      const pool = product.stock_group_id ?? product.id;
+      if (!needByPool.has(pool)) {
+        needByPool.set(pool, { sku: product.sku, need: 0, have: Math.max(0, product.stock_on_hand) });
+        anyProductInPool.set(pool, product.id);
+      }
+      needByPool.get(pool)!.need += qty;
+    }
+  }
+  const short = [...needByPool.values()].filter((p) => p.need > p.have);
+  if (short.length > 0 && !allowShort) {
+    return NextResponse.json({ short }, { status: 409 });
+  }
+  for (const [pool, p] of needByPool) remainingByPool.set(pool, Math.max(0, p.have - p.need));
+
+  // One write per shelf. For a shared shelf the database copies the figure
+  // to the other products in the group, so writing any one member is enough.
+  //
+  // With the server key, as /api/products/stock writes the shelf, and
+  // checked: this used to be a caller write whose result was ignored, and a
+  // write the database quietly declines reports no error — the order would
+  // have been billed with its stock still on the shelf.
+  for (const [pool, left] of remainingByPool) {
+    const productId = anyProductInPool.get(pool);
+    if (!productId) continue;
+    const { error } = await admin.from("products").update({ stock_on_hand: left }).eq("id", productId);
+    if (error) return failed("taking the stock off the shelf", error);
+  }
+
+  const { error: approveErr } = await supabase
+    .from("orders")
+    .update({ status: "approved", subtotal: figures.subtotal, vat_amount: figures.vatAmount, total: figures.total })
+    .eq("id", orderId);
+  if (approveErr) return failed("marking it approved", approveErr);
+  return null;
 }

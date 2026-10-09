@@ -3739,3 +3739,34 @@ View popover (nobody asked for it there); it exists only for this list. The
 figures are the same per-order GP the GP column already draws (gpFilsByOrder),
 so the "—" for an order with no cost and the "*" for a partly-costed one
 carry over. The view is manager-only, as GP is. Web only, as the view is.
+
+2026-10-07 — Approval and taking it back are one database step each
+(approve_order_take_stock and unapprove_order_give_stock, RUN-ME-35). Owner
+asked to check that a 12-piece order takes 12 (it did) and then to fix what
+was found. Each locks the order row, checks its status, moves the stock and
+the status, and reports what happened; whichever call comes second finds the
+order already moved and touches no stock. Before this the phone approved
+from its own list without asking the database, so an order already approved
+elsewhere could be approved again and its stock taken twice.
+- The billed figures are still worked out by each app (zone VAT, the order
+  discount on the web) and handed in. Moving them into the function would
+  have changed what the phone bills; not asked.
+- A second approval is not an error: it comes back `already_approved`, and
+  the app goes on to make sure the order has its invoice number (the
+  numbering is already idempotent). Prices, the status log and the
+  salesman's bell happen only on the approval that did the work.
+- Taking back still gives back what the order holds now, not a record of
+  what approval took. Considered and rejected: after "approve anyway" a
+  shelf counted 5 for a 12-piece order goes to 0, and undoing it gives back
+  12. That is right under the 2026-09-27 rule (bill what was packed): the
+  12 pieces were really there and really come back, so giving back only 5
+  would make the count more wrong. A record would also have had to follow
+  every manager edit after approval.
+- A shelf with no count (stock_on_hand null) is never checked, taken from or
+  given back to. The web's unapprove used to give back onto one.
+- Until RUN-ME-35 is run, both apps fall back to the old path when the
+  function is missing (PGRST202), as with manager_edit_order.
+- Left as they were, same shape, not asked: grant-edit, delete/restore and
+  reopen_order_without_approval still read-then-write (or coalesce a null
+  shelf to 0) when they give stock back.
+

@@ -1,5 +1,29 @@
 # What changed, and what you need to do
 
+## 2026-10-07 — An order's stock is taken once, however many times Approve is pressed
+
+**Run in Supabase:** `scratchpad/RUN-ME-35-approve-takes-stock-once.sql`.
+The web needs a deploy, and the phone needs a new build. Until the SQL has
+been run, both apps keep approving exactly as they did, so nothing stops
+working in between.
+
+- **Checked: a 12-piece order takes 12 pieces off the shelf** — the picked
+  quantity, or what was ordered if it was never picked — on the web and on
+  the phone. That was already right.
+- **An order can no longer be approved twice.** A phone whose list had not
+  refreshed could approve an order the web had already approved, and take
+  its stock a second time (24 instead of 12); "approve again to issue a
+  number" on the phone did the same, and two clicks on the web within the
+  same second could too. The database now checks the order, takes the stock
+  and marks it approved in one step, so the second press finds it approved
+  and takes nothing.
+- **Taking an approval back gives the stock back once**, the same way.
+- **Taking an approval back on the web no longer puts stock on a product
+  that keeps no count.** Approval never takes from one, so giving back
+  turned "not counted" into a number. The phone already did this right.
+
+---
+
 ## 2026-10-06 — GRV and credit note numbers, and ticking a GRV when collecting
 
 **Run in Supabase:** `scratchpad/RUN-ME-34-grv-and-credit-note-numbers.sql`.

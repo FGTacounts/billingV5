@@ -44,45 +44,33 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { data: items, error: itemsErr } = await supabase
-    .from("order_items")
-    .select("product_id, ordered_qty, picked_qty")
-    .eq("order_id", orderId);
-  if (itemsErr) return NextResponse.json({ error: itemsErr.message }, { status: 500 });
-
-  // What was actually fulfilled is what was deducted — the picked quantity
-  // where there is one, the ordered quantity where picking was skipped.
-  const qtyByProduct = new Map<string, number>();
-  for (const it of items ?? []) {
-    const qty = it.picked_qty ?? it.ordered_qty ?? 0;
-    if (!it.product_id || qty <= 0) continue;
-    qtyByProduct.set(it.product_id, (qtyByProduct.get(it.product_id) ?? 0) + qty);
-  }
-
-  // Read-then-write per product, the same shape as grant-edit. Each product
-  // is re-read inside the loop, so two SKUs sharing one shelf (RUN-ME-18)
-  // accumulate correctly rather than the second write overwriting the first.
+  // The stock and the status move together inside the database
+  // (unapprove_order_give_stock, RUN-ME-35), with the order locked, so a
+  // second click — or the phone undoing the same approval from a list it had
+  // not refreshed — finds the order already back at packed and gives nothing
+  // back twice. Only shelves that keep a count get stock back: approval never
+  // took anything from an uncounted one.
   let stockRestored = 0;
-  for (const [productId, qty] of qtyByProduct) {
-    const { data: product } = await supabase
-      .from("products")
-      .select("stock_on_hand")
-      .eq("id", productId)
-      .maybeSingle();
-    if (!product) continue;
-    const { error: stockErr } = await supabase
-      .from("products")
-      .update({ stock_on_hand: (product.stock_on_hand ?? 0) + qty })
-      .eq("id", productId);
-    if (stockErr) return NextResponse.json({ error: stockErr.message }, { status: 500 });
-    stockRestored += qty;
+  const { data: outcome, error: giveErr } = await supabase.rpc("unapprove_order_give_stock", {
+    p_order_id: orderId,
+  });
+  if (giveErr && (giveErr.code === "PGRST202" || /unapprove_order_give_stock/.test(giveErr.message ?? ""))) {
+    // RUN-ME-35 has not been run yet: the way it was done before.
+    const legacy = await legacyGiveStockBack(supabase, orderId);
+    if ("error" in legacy) return NextResponse.json({ error: legacy.error }, { status: 500 });
+    stockRestored = legacy.restored;
+  } else if (giveErr) {
+    return NextResponse.json({ error: giveErr.message }, { status: 500 });
+  } else {
+    const result = outcome as { result: string; restored?: number; status?: string };
+    if (result.result !== "unapproved") {
+      return NextResponse.json(
+        { error: t("orders.onlyApprovedCanBeTakenBack", { status: result.status ?? "" }) },
+        { status: 409 }
+      );
+    }
+    stockRestored = result.restored ?? 0;
   }
-
-  const { error: statusErr } = await supabase
-    .from("orders")
-    .update({ status: "packed", subtotal: 0, vat_amount: 0, total: 0 })
-    .eq("id", orderId);
-  if (statusErr) return NextResponse.json({ error: statusErr.message }, { status: 500 });
 
   await supabase.from("order_status_log").insert({
     order_id: orderId,
@@ -115,4 +103,53 @@ export async function POST(req: NextRequest) {
     invoiceNumber: order.invoice_number ?? null,
     stockRestored,
   });
+}
+
+// How an approval was taken back before RUN-ME-35: separate reads and writes
+// per product, then the status. Kept only until RUN-ME-35 has been run.
+async function legacyGiveStockBack(
+  supabase: ReturnType<typeof supabaseCaller>,
+  orderId: string
+): Promise<{ restored: number } | { error: string }> {
+  const { data: items, error: itemsErr } = await supabase
+    .from("order_items")
+    .select("product_id, ordered_qty, picked_qty")
+    .eq("order_id", orderId);
+  if (itemsErr) return { error: itemsErr.message };
+
+  // What was actually fulfilled is what was deducted — the picked quantity
+  // where there is one, the ordered quantity where picking was skipped.
+  const qtyByProduct = new Map<string, number>();
+  for (const it of items ?? []) {
+    const qty = it.picked_qty ?? it.ordered_qty ?? 0;
+    if (!it.product_id || qty <= 0) continue;
+    qtyByProduct.set(it.product_id, (qtyByProduct.get(it.product_id) ?? 0) + qty);
+  }
+
+  // Read-then-write per product, the same shape as grant-edit. Each product
+  // is re-read inside the loop, so two SKUs sharing one shelf (RUN-ME-18)
+  // accumulate correctly rather than the second write overwriting the first.
+  let stockRestored = 0;
+  for (const [productId, qty] of qtyByProduct) {
+    const { data: product } = await supabase
+      .from("products")
+      .select("stock_on_hand")
+      .eq("id", productId)
+      .maybeSingle();
+    if (!product || product.stock_on_hand == null) continue;
+    const { error: stockErr } = await supabase
+      .from("products")
+      .update({ stock_on_hand: product.stock_on_hand + qty })
+      .eq("id", productId);
+    if (stockErr) return { error: stockErr.message };
+    stockRestored += qty;
+  }
+
+  const { error: statusErr } = await supabase
+    .from("orders")
+    .update({ status: "packed", subtotal: 0, vat_amount: 0, total: 0 })
+    .eq("id", orderId);
+  if (statusErr) return { error: statusErr.message };
+
+  return { restored: stockRestored };
 }

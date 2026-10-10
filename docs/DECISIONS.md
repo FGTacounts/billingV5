@@ -3862,3 +3862,27 @@ already about and nothing that needs a new kind of data.
   being cut off with "…", and the list is one grid so the amounts line up
   and the small detail (date, days) gives its room to the name.
 - Web only, as the Products card is.
+
+2026-10-10 — The Products summary card is on the phone too (owner: "Add to
+the phone app too"). Same four figures and the same five most-sold, for
+managers and admins; the warehouse opens the same screen and does not get it.
+- The phone does not add anything up. It asks the web app's
+  /api/products/summary with the signed-in token, as it already does for
+  staff logins and photos, and sends the month where the phone is. One set of
+  rules (lib/products-summary-server.ts), so the two apps cannot show two
+  stock values. Rejected: working it out on the phone from its own article
+  and order lists — a second copy of the shared-shelf and billing-date rules
+  to keep in step, and the phone's order list is not every order.
+- It needs WEB_APP_URL and the web deployed with the route. Without either
+  the card says it couldn't load and offers Retry; nothing else on the
+  screen depends on it.
+- WebAPI.request gained a `query` argument: a `?` inside the path was being
+  escaped into the path. Nothing else used one.
+- Where it sits: above the category folders on an iPhone and above the
+  table on an iPad, scrolling away with them. Not shown inside a category or
+  while searching — it is the whole catalogue's figures, and the web card
+  does not follow a search either. On an iPhone the four tiles stay two to a
+  row and a long figure shrinks to fit instead of being cut; the web puts
+  them one to a row.
+- Read when the screen opens, and again after an import, an added article,
+  or closing an article's sheet (it may have been edited there).

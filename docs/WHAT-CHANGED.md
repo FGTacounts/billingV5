@@ -40,9 +40,11 @@ want it changed.
 
 ## 2026-10-10 — Products has a summary card
 
-Nothing to run in Supabase. The web needs a deploy. The phone is unchanged.
+Nothing to run in Supabase. The web needs a deploy, and the phone needs a
+new build. **Deploy the web first**: the phone's card reads its figures from
+the web app, and until the web is live it says it couldn't load.
 
-At the top of Products, for managers and admins:
+At the top of Products, for managers and admins, on the web and the phone:
 
 - **Stock value** — what is on the shelves, at cost. If some articles in
   stock have no cost, it says how many, because they add nothing to it.
@@ -55,7 +57,8 @@ At the top of Products, for managers and admins:
   with the value of each.
 
 Salesmen and the warehouse do not see the card. Inactive articles are not
-counted in it.
+counted in it. On the phone it sits above the category folders (above the
+table on an iPad), not inside a category or a search.
 
 ---
 

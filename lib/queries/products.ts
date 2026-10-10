@@ -110,6 +110,44 @@ export async function unlinkStock(productId: string): Promise<void> {
   if (!res.ok) throw new Error(data.error ?? t("products.stopSharingStockFailed"));
 }
 
+export interface TopSeller {
+  productId: string | null;
+  sku: string;
+  name: string;
+  units: number;
+  value: number; // AED, before VAT
+}
+
+// The summary card at the top of Products. Manager-only: `valueAtCost` is
+// every article's cost added up.
+export interface ProductSummary {
+  stock: {
+    articles: number; // active articles
+    inStock: number;
+    outOfStock: number;
+    units: number; // pieces on the shelves, a shared shelf counted once
+    valueAtCost: number;
+    valueAtPrice: number; // at list price, before VAT
+    inStockNoCost: number; // in stock with no cost, so missing from valueAtCost
+  };
+  month: {
+    units: number;
+    value: number; // AED, before VAT
+    articlesSold: number;
+    top: TopSeller[]; // by pieces
+  };
+}
+
+// `from` / `to` are the month where the person is, the way Orders' "This
+// month" and Sales work it out (monthBounds) — the server runs in UTC.
+export async function fetchProductSummary(window: { from: Date; to: Date }): Promise<ProductSummary> {
+  const params = new URLSearchParams({ from: window.from.toISOString(), to: window.to.toISOString() });
+  const res = await fetch(`/api/products/summary?${params.toString()}`);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? t("products.summaryFailed"));
+  return data.summary as ProductSummary;
+}
+
 export interface ProductInsight {
   vac: number | null; // landing cost, from the most recent purchase (GRN)
   vacChina: number | null; // china cost (¥), pre-landing, most recent purchase

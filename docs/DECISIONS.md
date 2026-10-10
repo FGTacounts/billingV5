@@ -3770,3 +3770,44 @@ elsewhere could be approved again and its stock taken twice.
   reopen_order_without_approval still read-then-write (or coalesce a null
   shelf to 0) when they give stock back.
 
+
+2026-10-10 — Products: a summary card above the list (owner: "add a summary
+type widget. show the value of the products. most selling product this month
+and things like that"). Four figures and a list: stock value at cost, the
+same stock at selling price, how many articles are in stock, what sold this
+month, and the five most-sold articles this month. "Things like that" was
+read narrowly — nothing is in the card that is not one of those.
+- Manager and admin only. The stock value is every article's cost added up,
+  and staff may not read cost (docs/why-cost-prices-are-hidden.md). The
+  figures come from a new route, GET /api/products/summary, which checks the
+  role, reads under the admin key and sends totals only — never a cost per
+  article. Rejected: adding it up in the browser from the list already
+  loaded; that list is whatever the search box has narrowed it to.
+- "The value of the products" is shown both ways, at cost and at list price
+  before VAT, since either could be meant. Cost is the headline.
+- Active articles only — the ones the page lists. On the day: 1,555 active,
+  1,447 in stock, 228,859 pieces, AED 849,128.76 at cost. The 172 inactive
+  articles still hold 14,511 pieces (AED 15,398.20 at cost, 116 of the 160
+  in stock with no cost); they are not in the figure. The Reports stock
+  snapshot counts inactive ones and values at price, and was not changed.
+- Articles in stock with no cost add nothing to the value at cost, so the
+  tile says how many there are (7 today) rather than looking complete.
+- A shared shelf (stock_group_id) is counted once, at the lowest cost and
+  the lowest price among its SKUs. Every SKU on a shelf carries the shelf's
+  whole figure, so a row-by-row sum counts it once per SKU — the consequence
+  accepted for the Reports snapshot on 2026-09-12, where "which price" was
+  left unanswered. The lowest was chosen because the stock is worth at least
+  that. It changes nothing today: one shelf exists, two SKUs, same cost,
+  and it is empty.
+- "Most selling" is by pieces, with the sale value beside each; the value
+  breaks a tie. By value the list would be different (SMS150 first rather
+  than TPDMIX this month). Picked quantity when there is one, as invoiced.
+- "This month" is the orders Sales and Orders count: billed statuses, by the
+  billing date. The browser sends the month's start and end, because the
+  server runs in UTC and would start the month four hours late for the UAE.
+  The lines add up to the same AED 20,786.74 as those orders' subtotals.
+  Goods returns are not taken off, as they are not on the Dashboard's sales.
+- The card is read once when the page opens and again after a save, an
+  import, a scan or a stock link on this page. Searching does not re-read it.
+- Web only so far. The phone's Products screen has no such card; it can call
+  the same route with its token when asked for.

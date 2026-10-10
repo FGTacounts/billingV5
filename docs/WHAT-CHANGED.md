@@ -1,5 +1,26 @@
 # What changed, and what you need to do
 
+## 2026-10-10 — Products has a summary card
+
+Nothing to run in Supabase. The web needs a deploy. The phone is unchanged.
+
+At the top of Products, for managers and admins:
+
+- **Stock value** — what is on the shelves, at cost. If some articles in
+  stock have no cost, it says how many, because they add nothing to it.
+- **At selling price** — the same stock at list price, before VAT.
+- **In stock** — how many of the active articles have stock, how many pieces
+  that is, and how many are out of stock.
+- **Sold this month** — the sale value, pieces and number of different
+  articles on this month's invoices. It is the same total Sales shows.
+- **Most sold this month** — the five articles that sold the most pieces,
+  with the value of each.
+
+Salesmen and the warehouse do not see the card. Inactive articles are not
+counted in it.
+
+---
+
 ## 2026-10-07 — An order's stock is taken once, however many times Approve is pressed
 
 **Run in Supabase:** `scratchpad/RUN-ME-35-approve-takes-stock-once.sql`.

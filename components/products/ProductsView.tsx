@@ -22,6 +22,7 @@ import { usePreferences } from "@/lib/hooks/usePreferences";
 import type { AppUser } from "@/lib/types/db";
 import NewOrderSheet from "@/components/orders/NewOrderSheet";
 import DrivePhotoBrowser from "./DrivePhotoBrowser";
+import ProductsSummary from "./ProductsSummary";
 import PinnableOptionsButton from "@/components/ui/PinnableOptions";
 import { usePagination, Pagination } from "@/components/ui/Pagination";
 import SegmentedControl from "@/components/ui/SegmentedControl";
@@ -337,6 +338,15 @@ export default function ProductsView({ isManager, user }: { isManager: boolean; 
     return () => clearTimeout(t);
   }, [load]);
 
+  // After this page changes the catalogue — a save, an import, a stock link —
+  // the summary card is read again along with the list. A search only
+  // narrows the list, so it goes through `load` and leaves the summary be.
+  const [summaryKey, setSummaryKey] = useState(0);
+  const reload = useCallback(() => {
+    setSummaryKey((k) => k + 1);
+    return load();
+  }, [load]);
+
   const visibleProducts = useMemo(() => {
     let base = products;
     if (sortKey === "lowStock") {
@@ -441,7 +451,7 @@ export default function ProductsView({ isManager, user }: { isManager: boolean; 
           {isManager && (
             <ImportCsvButton
               endpoint="/api/products/import"
-              onImported={load}
+              onImported={reload}
               askStockMode
               aliases={PRODUCT_ALIASES}
               sample={{
@@ -457,7 +467,7 @@ export default function ProductsView({ isManager, user }: { isManager: boolean; 
         {isManager && <ExportLink type="products" />}
           {/* A supplier invoice read straight into the catalogue, so a
               delivery of new lines doesn't have to be typed twice. */}
-          {isManager && <ScanArticlesButton onAdded={load} isAdmin={user.role === "admin"} />}
+          {isManager && <ScanArticlesButton onAdded={reload} isAdmin={user.role === "admin"} />}
           {isManager && (
             <Button tier="primary" onClick={() => setEditing("new")} className="flex items-center gap-1.5">
               <Plus size={16} /> {t("products.addProduct")}
@@ -465,6 +475,8 @@ export default function ProductsView({ isManager, user }: { isManager: boolean; 
           )}
         </div>
       </div>
+
+      {isManager && <ProductsSummary refreshKey={summaryKey} />}
 
       <div className="flex items-center gap-2 mb-4 flex-wrap">
         <div className="relative flex-1 min-w-[200px]">
@@ -776,12 +788,12 @@ export default function ProductsView({ isManager, user }: { isManager: boolean; 
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);
-            load();
+            reload();
           }}
           // Sharing stock is written the moment it's picked, not on Save, so
           // the list behind the sheet is refreshed straight away — Cancel
           // afterwards must not leave it showing the old grouping.
-          onLinksChanged={load}
+          onLinksChanged={reload}
         />
       )}
 

@@ -3886,3 +3886,40 @@ managers and admins; the warehouse opens the same screen and does not get it.
   them one to a row.
 - Read when the screen opens, and again after an import, an added article,
   or closing an article's sheet (it may have been edited there).
+
+2026-10-10 — Dead code removed from the web app (owner: "remove any dead
+code") — Only code nothing can reach: no screen, route, script or string
+lookup refers to it. Nothing a user can see or do changes. Found with `knip`
+(run once through npx, not installed) and `tsc --noUnusedLocals`, then each
+candidate checked by hand, including against the phone's sources for routes.
+- Files: `components/ui/Expandable.tsx` (no importer; the dashboard's
+  ExpandableWidget is a different, live component) with its `.enlargeable`
+  CSS and the unused `slideUp` keyframe; `lib/csv.ts` (no importer);
+  `app/api/maps/token` (a browser-only MapKit
+  token route with no caller — the map asks /api/planning/mapkit-token, and
+  the phone never called it).
+- Functions with no caller: ChequeStatusPill, CardHeader, StatCard,
+  customerRequestsSupported, orderTrashSupported, addDelayNote, logPurchase,
+  updateZone, resolveCurrency, money.ts grossProfit, the old upper-case
+  amountInWords (invoices use amountInWordsInvoice). logPurchase also read
+  stock and wrote it back in two steps, so it was not safe to wire up as it
+  stood.
+- 15 unused imports and variables, one of them `showDetails` in the product
+  form: set when a photo was picked, never read, because Additional Details
+  is always shown.
+- 19 catalogue strings nothing looks up, two of them only used by the
+  removed route. `t()` is typed on the catalogue, so a missed use would have
+  failed the type check.
+- Left alone on purpose: `scripts/backup.mjs` and `restore.mjs` (run by hand
+  from BACKUP-RUNBOOK.md); the row types in `lib/types/db.ts` for tables the
+  web does not read yet (they describe the database); the unused entries in
+  `lib/motion.ts` and `tapWarn` (the motion and haptic vocabulary — the
+  design rules forbid inventing a new curve, so the set stays whole);
+  exports that are only used inside their own file (not dead, just exported).
+- NOT removed, needs the owner's word: `/api/drive/upload`. The web does not
+  call it and neither does the current phone source, but it was written for
+  the phone and an older installed build may still post photos to it. The
+  tables `payment_delay_notes` and the purchases write path now have no
+  writer in the web app; the tables are untouched.
+- The phone was not swept. `ArticleDetailSheet.swift` is the one known dead
+  file there (2026-09-12); a Swift sweep is a separate step.

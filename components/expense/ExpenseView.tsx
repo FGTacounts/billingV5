@@ -21,7 +21,6 @@ import { Pill } from "@/components/ui/Badge";
 import ImportCsvButton from "@/components/ui/ImportCsvButton";
 import { EXPENSE_ALIASES } from "@/lib/importAliases";
 import ExportLink from "@/components/ui/ExportLink";
-import PageFooterActions from "@/components/ui/PageFooterActions";
 import { usePreferences } from "@/lib/hooks/usePreferences";
 import SegmentedControl from "@/components/ui/SegmentedControl";
 import { EXPENSE_SAMPLE_HEADERS, expenseSampleExample } from "@/lib/importSamples";

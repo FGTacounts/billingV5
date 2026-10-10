@@ -43,10 +43,6 @@ let salesmanPhoneMissing = false;
 // rather than every order query failing over a column that isn't there yet.
 let trashColumnsMissing = false;
 
-export function orderTrashSupported(): boolean {
-  return !trashColumnsMissing;
-}
-
 // Runs a query that filters out deleted orders, and quietly runs it again
 // without that filter on a database that has no such column.
 async function withoutDeleted<R extends { error: { code?: string } | null }>(

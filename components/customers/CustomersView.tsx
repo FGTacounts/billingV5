@@ -31,7 +31,6 @@ import { usePagination, Pagination } from "@/components/ui/Pagination";
 import { Pill, StatusSquare } from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
 import ExportLink from "@/components/ui/ExportLink";
-import PageFooterActions from "@/components/ui/PageFooterActions";
 import ImportCsvButton from "@/components/ui/ImportCsvButton";
 import { CUSTOMER_ALIASES } from "@/lib/importAliases";
 import Sheet from "@/components/ui/Sheet";

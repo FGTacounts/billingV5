@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { billingDateColumn, billedAtSelect } from "@/lib/billingDate";
+import { billingDateColumn } from "@/lib/billingDate";
 import { BILLED_STATUSES } from "@/lib/billedStatuses";
 
 function startOfMonthIso(): string {

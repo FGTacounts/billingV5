@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Camera, X, Loader2 } from "lucide-react";
 import { t } from "@/lib/i18n";
-import Button from "@/components/ui/Button";
 
 const UAE_BANKS = [
   "ENBD", "EMIRATES NBD", "ADCB", "ABU DHABI COMMERCIAL", "FAB", "FIRST ABU DHABI",

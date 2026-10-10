@@ -31,26 +31,3 @@ export async function fetchPurchases(supabase: SupabaseClient, limit = 100): Pro
 
   return rows.map((r) => ({ ...r, sku: byId.get(r.product_id)?.sku ?? null, name: byId.get(r.product_id)?.description ?? null }));
 }
-
-// Logs a GRN (goods received) entry and adds the received qty to
-// stock_on_hand — the stock-replenishment counterpart to GRV's return path.
-export async function logPurchase(
-  supabase: SupabaseClient,
-  input: { product_id: string; qty: number; grn_date: string; total_cost: number }
-): Promise<void> {
-  const { error: insertErr } = await supabase.from("purchases").insert(input);
-  if (insertErr) throw insertErr;
-
-  const { data: product, error: fetchErr } = await supabase
-    .from("products")
-    .select("stock_on_hand")
-    .eq("id", input.product_id)
-    .maybeSingle();
-  if (fetchErr) throw fetchErr;
-
-  const { error: updateErr } = await supabase
-    .from("products")
-    .update({ stock_on_hand: (product?.stock_on_hand ?? 0) + input.qty })
-    .eq("id", input.product_id);
-  if (updateErr) throw updateErr;
-}

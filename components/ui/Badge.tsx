@@ -1,4 +1,4 @@
-import type { OrderStatus, ChequeStatus } from "@/lib/types/db";
+import type { OrderStatus } from "@/lib/types/db";
 import { t } from "@/lib/i18n";
 
 type Tone = "accent" | "warning" | "danger" | "info" | "neutral";
@@ -81,15 +81,4 @@ const ORDER_STATUS_LABEL: Record<OrderStatus, string> = {
 
 export function OrderStatusPill({ status }: { status: OrderStatus }) {
   return <Pill tone={ORDER_STATUS_TONE[status]}>{ORDER_STATUS_LABEL[status]}</Pill>;
-}
-
-const CHEQUE_TONE: Record<ChequeStatus, Tone> = {
-  pending: "warning",
-  cleared: "accent",
-  bounced: "danger",
-  returned: "danger",
-};
-
-export function ChequeStatusPill({ status }: { status: ChequeStatus }) {
-  return <Pill tone={CHEQUE_TONE[status]}>{status[0].toUpperCase() + status.slice(1)}</Pill>;
 }

@@ -6,7 +6,7 @@ import { motion } from "framer-motion";
 import { useRouter } from "next/navigation";
 import { Plus, TrendingUp, TrendingDown, ArrowRight, ArrowDownUp } from "lucide-react";
 import Sheet from "@/components/ui/Sheet";
-import { WidgetAdjustPopover, resolveOrder, SIZE_SPAN, type WidgetSize } from "@/components/ui/WidgetArrange";
+import { WidgetAdjustPopover, resolveOrder, type WidgetSize } from "@/components/ui/WidgetArrange";
 import { ArrangeGrid } from "@/components/ui/ArrangeGrid";
 import { CATALOG_BY_KEY, isCatalogKey } from "@/components/widgets/catalog";
 import { supabaseBrowser } from "@/lib/supabase/client";
@@ -51,7 +51,7 @@ import Button from "@/components/ui/Button";
 import PageFooterActions from "@/components/ui/PageFooterActions";
 import { TrendLineChart, MonthlyBarChart, DonutChart } from "@/components/ui/charts";
 import NewOrderSheet from "@/components/orders/NewOrderSheet";
-import { DateRangePicker, presetToRange, rangeLabel, type SaleRange } from "@/components/ui/DateRangePicker";
+import { DateRangePicker, presetToRange, type SaleRange } from "@/components/ui/DateRangePicker";
 import { MonthPicker, monthAsRange, monthLabel } from "@/components/ui/MonthPicker";
 
 function StatTile({

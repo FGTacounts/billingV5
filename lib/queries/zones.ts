@@ -44,15 +44,6 @@ export async function createZone(
   if (error) throw error;
 }
 
-export async function updateZone(
-  supabase: SupabaseClient,
-  id: string,
-  patch: Partial<Pick<Zone, "name" | "vat_rate" | "currency_code">>
-): Promise<void> {
-  const { error } = await supabase.from("zones").update(patch).eq("id", id);
-  if (error) throw error;
-}
-
 // Setting a zone as default clears the previous default first — the
 // zones_only_one_default partial unique index only allows one is_default
 // row at a time, so a straight update would conflict.
@@ -105,26 +96,4 @@ export async function resolveVatRate(
   }
   const defaultZone = zones.find((z) => z.is_default) ?? zones[0];
   return defaultZone?.vat_rate ?? fallbackRate;
-}
-
-// A customer's effective currency: their country's override, else their
-// zone's currency, else 'AED'.
-export async function resolveCurrency(
-  supabase: SupabaseClient,
-  countryCode: string | null | undefined
-): Promise<string> {
-  if (countryCode) {
-    const { data: zc } = await supabase
-      .from("zone_countries")
-      .select("currency_code, zone_id")
-      .eq("country_code", countryCode)
-      .maybeSingle();
-    if (zc?.currency_code) return zc.currency_code;
-    if (zc?.zone_id) {
-      const { data: zone } = await supabase.from("zones").select("currency_code").eq("id", zc.zone_id).maybeSingle();
-      if (zone?.currency_code) return zone.currency_code;
-    }
-  }
-  const { data: defaultZone } = await supabase.from("zones").select("currency_code").eq("is_default", true).maybeSingle();
-  return defaultZone?.currency_code ?? "AED";
 }

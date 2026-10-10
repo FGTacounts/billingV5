@@ -1,7 +1,5 @@
 "use client";
 
-import { useId } from "react";
-
 // Lightweight, dependency-free SVG charts themed off the design tokens in
 // globals.css. Kept intentionally simple (no library) since these are small
 // internal dashboards, not a general charting surface.

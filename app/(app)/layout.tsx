@@ -1,7 +1,6 @@
 import { redirect } from "next/navigation";
 import { getAppUser } from "@/lib/auth";
 import { navFor, primaryNavFor, secondaryNavFor, PLANNING_NAV_ITEM } from "@/lib/nav";
-import { supabaseAdmin } from "@/lib/supabase/admin";
 import { appleMapsConfigured } from "@/lib/apple-maps";
 import Sidebar from "@/components/nav/Sidebar";
 import MobileNav from "@/components/nav/MobileNav";

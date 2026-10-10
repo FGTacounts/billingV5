@@ -15,36 +15,3 @@ export function Card({
     : "";
   return <div className={`glass rounded-card ${motionClasses} ${className}`} {...props} />;
 }
-
-export function CardHeader({
-  title,
-  action,
-}: {
-  title: string;
-  action?: React.ReactNode;
-}) {
-  return (
-    <div className="flex items-center justify-between px-5 py-4 border-b border-hairline">
-      <div className="text-headline font-semibold">{title}</div>
-      {action}
-    </div>
-  );
-}
-
-export function StatCard({
-  label,
-  value,
-  sub,
-}: {
-  label: string;
-  value: string;
-  sub?: string;
-}) {
-  return (
-    <Card className="p-5">
-      <div className="text-caption text-secondary">{label}</div>
-      <div className="text-title font-bold mt-1.5 tabular-nums">{value}</div>
-      {sub && <div className="text-caption text-secondary mt-1">{sub}</div>}
-    </Card>
-  );
-}

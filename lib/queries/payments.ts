@@ -451,18 +451,6 @@ export async function decideExtension(
   }
 }
 
-export async function addDelayNote(
-  supabase: SupabaseClient,
-  orderId: string,
-  note: string,
-  addedBy: string
-) {
-  const { error } = await supabase
-    .from("payment_delay_notes")
-    .insert({ order_id: orderId, note, added_by: addedBy });
-  if (error) throw error;
-}
-
 export interface ExtensionRequestRow extends PaymentExtensionRequest {
   order: Pick<Order, "id" | "invoice_number" | "customer_id"> | null;
   customerName: string | null;

@@ -31,7 +31,7 @@ import { formatAed, formatCompact } from "@/lib/money";
 import { SkeletonList, EmptyState } from "@/components/ui/Empty";
 import { Card } from "@/components/ui/Card";
 import { TrendLineChart } from "@/components/ui/charts";
-import { DateRangePicker, presetToRange, rangeLabel, type SaleRange } from "@/components/ui/DateRangePicker";
+import { DateRangePicker, presetToRange, type SaleRange } from "@/components/ui/DateRangePicker";
 import { usePreferences } from "@/lib/hooks/usePreferences";
 import { WidgetAdjustPopover, resolveOrder, SIZE_SPAN, type WidgetSize } from "@/components/ui/WidgetArrange";
 import { SalesmanDrilldown } from "@/components/sales/SalesmanDrilldown";

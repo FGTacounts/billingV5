@@ -101,15 +101,6 @@ function spellOut(num: number): string {
   return parts.join(" ");
 }
 
-// "ONE THOUSAND EIGHTY FOUR AED AND TWENTY THREE FILLS"
-export function amountInWords(amount: number): string {
-  const dirhams = Math.floor(amount);
-  const fils = Math.round((amount - dirhams) * 100);
-  let text = spellOut(dirhams) + " AED";
-  if (fils > 0) text += " AND " + spellOut(fils) + " FILLS";
-  return text;
-}
-
 // Template wording, e.g. "forty-eight UAE Dirham eighty-three fils".
 export function amountInWordsInvoice(amount: number): string {
   const dirhams = Math.floor(amount);

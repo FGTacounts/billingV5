@@ -11,7 +11,6 @@ import { formatAed } from "@/lib/money";
 import { EmptyState, SkeletonList } from "@/components/ui/Empty";
 import Button from "@/components/ui/Button";
 import ExportLink from "@/components/ui/ExportLink";
-import PageFooterActions from "@/components/ui/PageFooterActions";
 import Sheet from "@/components/ui/Sheet";
 import { Label, TextInput } from "@/components/ui/Field";
 import BarcodeScanButton from "@/components/ui/BarcodeScanButton";
@@ -961,10 +960,9 @@ function ProductEditor({
   // §Products: "when adding a new image during product creation, the
   // Additional Details section doesn't show — should follow the design."
   // The photo is uploaded on save (it's filed in Drive under the SKU, so it
-  // needs the final SKU), and picking one reveals Additional Details.
+  // needs the final SKU). Additional Details is always shown.
   const [photo, setPhoto] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
-  const [showDetails, setShowDetails] = useState(!!product);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const [categories, setCategories] = useState<string[]>([]);
   // VAC / VAC (China) / stock arrival + holding days are computed from
@@ -1080,7 +1078,6 @@ function ProductEditor({
   function choosePhoto(file: File) {
     setPhoto(file);
     setPhotoPreview(URL.createObjectURL(file));
-    setShowDetails(true);
   }
 
   async function save(confirmNoCost = false) {

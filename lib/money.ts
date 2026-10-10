@@ -309,18 +309,6 @@ export function allocateCredits<T extends Allocatable>(
   return { uses, preferred: after(preferred), others: after(others) };
 }
 
-export interface Costable {
-  unit_cost: number | null;
-}
-
-export function grossProfit(items: (Priceable & Costable)[]): number {
-  const costFils = items.reduce(
-    (sum, it) => sum + Math.round(toFils(it.unit_cost ?? 0) * effectiveQty(it)),
-    0
-  );
-  return toAed(subtotalFils(items) - costFils);
-}
-
 const AED_FORMATTER = new Intl.NumberFormat("en-AE", {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,

@@ -33,10 +33,6 @@ function isMissingTable(code?: string): boolean {
   return code === "42P01" || code === "PGRST205";
 }
 
-export function customerRequestsSupported(): boolean {
-  return !tableMissing;
-}
-
 /** Raise a change for a manager to review. `customerId` null means a new customer. */
 export async function requestCustomerChange(
   supabase: SupabaseClient,

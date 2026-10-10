@@ -6,7 +6,7 @@ import { springLayout } from "@/lib/motion";
 import { motion } from "framer-motion";
 import { Minus, Plus, GripVertical, Check } from "lucide-react";
 import { SIZE_SPAN, type WidgetSize } from "./WidgetArrange";
-import { WIDGET_CATALOG, isCatalogKey } from "@/components/widgets/catalog";
+import { WIDGET_CATALOG } from "@/components/widgets/catalog";
 import { WidgetContextMenu } from "./WidgetContextMenu";
 import { t } from "@/lib/i18n";
 

@@ -1,5 +1,19 @@
 # What changed, and what you need to do
 
+## 2026-10-10 — Dead code removed from the web app
+
+Nothing to run in Supabase. Nothing looks or behaves differently. The web
+needs a deploy for it to take effect; the phone is unchanged.
+
+Code that no screen or route could reach was deleted: two unused files, one
+unused route (`/api/maps/token` — the map uses a different one), eleven
+functions nothing called, some unused imports, and 19 strings nothing showed.
+The list, and what was deliberately left, is in docs/DECISIONS.md.
+
+One thing is waiting on you: `/api/drive/upload` looks unused, but it was
+written for the phone and an older installed build may still use it, so it
+was left in place.
+
 ## 2026-10-10 — Expenses and Customers have a summary card
 
 Nothing to run in Supabase. The web needs a deploy. The phone is unchanged.

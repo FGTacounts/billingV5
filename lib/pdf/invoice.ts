@@ -471,7 +471,6 @@ export async function buildInvoicePdf(
   }
 
   const sigX = MARGIN + footerTotalW + 20;
-  const sigW = CONTENT_W - footerTotalW - 20;
   let sy = y - 18;
   ctx.page.drawText(t("documents.customerSignatureLine1"), { x: sigX, y: sy, size: 8, font: bold, color: INK });
   sy -= 10;

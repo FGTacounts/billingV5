@@ -1,6 +1,5 @@
 import { redirect } from "next/navigation";
 import { getAppUser } from "@/lib/auth";
-import { supabaseAdmin } from "@/lib/supabase/admin";
 import { appleMapsConfigured } from "@/lib/apple-maps";
 import PlanningView from "@/components/planning/PlanningView";
 

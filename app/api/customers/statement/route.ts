@@ -10,8 +10,6 @@ import { t } from "@/lib/i18n";
 
 export const runtime = "nodejs";
 
-const AED = (n: number) => n.toFixed(2);
-
 // Statement of Account (Order Flow & Additions §2/§12 — matches the
 // attached FGT_Statement_of_Account.xlsx). Defaults to Excel for Manager,
 // PDF for Salesman/Warehouse (the same everyone-gets-PDF-except-Manager

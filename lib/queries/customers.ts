@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Customer } from "@/lib/types/db";
+import { fetchAllPages } from "@/lib/paging";
 
 const SELECT =
   "id, code, name, group_name, address, phone, district, vat_number, overdue_threshold_days, is_active, created_at, updated_at, salesman_id";
@@ -15,6 +16,26 @@ export async function fetchCustomers(
   const { data, error } = await q;
   if (error) throw error;
   return data ?? [];
+}
+
+// Every customer, active or not, with only what the Customers summary card
+// needs. Inactive ones are here because a customer taken off the list can
+// still owe money, and the card has to be able to name them.
+export type CustomerDirectoryRow = Pick<
+  Customer,
+  "id" | "code" | "name" | "is_active" | "created_at" | "overdue_threshold_days"
+>;
+
+export async function fetchCustomerDirectory(supabase: SupabaseClient): Promise<CustomerDirectoryRow[]> {
+  return fetchAllPages<CustomerDirectoryRow>(
+    (from, to) =>
+      supabase
+        .from("customers")
+        .select("id, code, name, is_active, created_at, overdue_threshold_days")
+        .order("id")
+        .range(from, to) as never,
+    { keyOf: (c) => c.id }
+  );
 }
 
 // Next code = highest existing numeric code + 1 (§Customers: "make sure the

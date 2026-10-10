@@ -25,6 +25,7 @@ import PageFooterActions from "@/components/ui/PageFooterActions";
 import { usePreferences } from "@/lib/hooks/usePreferences";
 import SegmentedControl from "@/components/ui/SegmentedControl";
 import { EXPENSE_SAMPLE_HEADERS, expenseSampleExample } from "@/lib/importSamples";
+import ExpenseSummary from "./ExpenseSummary";
 
 const TYPE_TONE: Record<ExpenseType, "info" | "warning" | "danger"> = {
   fixed: "info",
@@ -62,6 +63,9 @@ export default function ExpenseView({ user }: { user: AppUser }) {
   const [sortOpen, setSortOpen] = useState(false);
   const { preferences, update: updatePrefs } = usePreferences();
   const subTabsVisible = preferences.expenseSubTabsVisible !== false;
+  // Bumped whenever this page changes an expense, so the summary card follows.
+  const [summaryKey, setSummaryKey] = useState(0);
+  const expensesChanged = useCallback(() => setSummaryKey((n) => n + 1), []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -139,11 +143,12 @@ export default function ExpenseView({ user }: { user: AppUser }) {
       // again after a reload. Deliberately after the success, not instead
       // of the optimistic removal.
       load();
+      expensesChanged();
     } catch (e) {
       setExpenses(previous);
       toast.error(friendlyError(e, t("expense.deleteFailed")));
     }
-  }, [expenses, load]);
+  }, [expenses, load, expensesChanged]);
 
   return (
     <div className="p-4 md:p-6 max-w-[1600px] mx-auto">
@@ -152,7 +157,7 @@ export default function ExpenseView({ user }: { user: AppUser }) {
         <div className="flex items-center gap-4 flex-wrap">
           <ImportCsvButton
             endpoint="/api/expenses/import"
-            onImported={load}
+            onImported={() => { load(); expensesChanged(); }}
             aliases={EXPENSE_ALIASES}
             sample={{
               // Header labels match V5.0 Reports.xlsx's FIXED/VARIABLE
@@ -170,6 +175,8 @@ export default function ExpenseView({ user }: { user: AppUser }) {
           </Button>
         </div>
       </div>
+
+      <ExpenseSummary refreshKey={summaryKey} />
 
       {/* Salesman / Overview (§Expense: "separate views for both salesman
           and overview expense — two tabs inside of expense") */}
@@ -357,7 +364,7 @@ export default function ExpenseView({ user }: { user: AppUser }) {
       {showNew && (
         <ExpenseEditor
           onClose={() => setShowNew(false)}
-          onSaved={() => { setShowNew(false); load(); }}
+          onSaved={() => { setShowNew(false); load(); expensesChanged(); }}
           user={user}
           salesmen={salesmen}
           defaultSalesmanId={topTab === "salesman" ? selectedSalesman : ""}
@@ -369,7 +376,7 @@ export default function ExpenseView({ user }: { user: AppUser }) {
           user={user}
           salesmen={salesmen}
           onClose={() => setEditing(null)}
-          onSaved={() => { setEditing(null); load(); }}
+          onSaved={() => { setEditing(null); load(); expensesChanged(); }}
           onDelete={(e) => { setEditing(null); removeExpense(e); }}
         />
       )}

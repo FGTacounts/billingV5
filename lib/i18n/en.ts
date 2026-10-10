@@ -895,6 +895,18 @@ export const en = {
   "customers.stmtPageOf": "Page {page} of {total}",
   "customers.amountDue": "AMOUNT DUE: {amount} AED",
   "customers.paymentTerms": "PAYMENT TERMS: {terms}",
+  "customers.summaryCustomers": "Customers",
+  "customers.summaryNewThisMonth": "{n} new this month",
+  "customers.summaryOutstanding": "Outstanding",
+  "customers.summaryCustomersOwe": "{n} customers owe",
+  "customers.summaryOverdue": "Overdue",
+  "customers.summaryPastTerms": "{n} customers past their terms",
+  "customers.summaryBoughtThisMonth": "Bought this month",
+  "customers.summaryInvoices": "{n} invoices",
+  "customers.summaryOwesMost": "Owes the most",
+  "customers.summaryOldestDays": "{n} days",
+  "customers.summaryNobodyOwes": "Nobody owes anything.",
+  "customers.summaryFailed": "Couldn't load the customer summary.",
 
   // ---- payments ---------------------------------------------------------
   "payments.mineOnly": "Mine only",
@@ -1088,6 +1100,12 @@ export const en = {
   "expense.importRowRequirements": "Every row needs type (fixed/variable/purchase), category, amount, and date",
   "expense.unknownStaffNames": "No staff member named {names} — those rows were left unattributed.",
   "expense.attributionNeedsMigration": "Salesman attribution needs scratchpad/RUN-ME-8-stock-floor-and-salesman-expenses.sql to be run.",
+  "expense.summarySpentThisMonth": "Spent this month",
+  "expense.summaryLastMonth": "Last month {amount}",
+  "expense.summaryLogged": "{n} logged",
+  "expense.summaryBiggest": "Biggest this month",
+  "expense.summaryNothingLogged": "Nothing logged this month yet.",
+  "expense.summaryFailed": "Couldn't load the expense summary.",
 
   // ---- sales ------------------------------------------------------------
   "sales.widgetStats": "Sale summary",

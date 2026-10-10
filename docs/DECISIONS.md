@@ -3811,3 +3811,54 @@ read narrowly — nothing is in the card that is not one of those.
   import, a scan or a stock link on this page. Searching does not re-read it.
 - Web only so far. The phone's Products screen has no such card; it can call
   the same route with its token when asked for.
+
+2026-10-10 — Expenses and Customers: a summary card each, on the Products
+pattern (owner: "in the products page, add a summary type widget for the
+expenses page: shows some key information. and for the customers page" —
+read as "like the one on Products"). Four tiles and a five-row list, the same
+shape. The owner named no figures, so each card holds what its page is
+already about and nothing that needs a new kind of data.
+- Expenses: spent this month (last month under it), this month by type —
+  Fixed, Variable, Purchase, each with how many were logged — and the five
+  biggest single entries. The card sits above the Overview/Salesman tabs and
+  does not follow them, the type filter or the search; its total is the
+  donut's. The donut card was left where it was: it is by category, this is
+  by type, and removing it was not asked.
+- Worked out on the server (/api/expenses/summary), manager-gated and under
+  the admin key like every other expense read. It reads two months of rows,
+  not the whole table the page already downloads twice. The browser says
+  which month it is (month=YYYY-MM): `expenses.date` is a calendar date, so
+  the only clock involved is "which month is it now", and the server's is UTC.
+- Customers: how many (and new this month), Outstanding, Overdue, how many
+  bought this month, and the five who owe the most with the age of their
+  oldest unpaid invoice. Outstanding and Overdue are the Dashboard's
+  arithmetic (fetchPaymentsSummary): only invoices still owed, aged against
+  the customer's own threshold or app_settings' when they have none, in fils.
+  Checked against the live ledger on the day: Outstanding AED 1,279,814.65 =
+  the Dashboard's Remaining + Overdue exactly; Overdue AED 819,814.44, the
+  same.
+- The Customers card is worked out in the browser from the ledger the page
+  already walks for its Balance column — no second pass, no new route. It
+  reads its own customer list (every customer, inactive too, six columns)
+  because the page's list is whatever the search box has narrowed it to, and
+  a customer taken off the list can still owe. "Customers" counts active
+  ones; the money counts everyone, as the Dashboard does.
+- Manager and admin only, as on Products. A salesman can already see each
+  row's balance, so this hides nothing they could not add up; but the
+  business's whole receivable on one tile for every role is a wider thing
+  than was asked for. Easy to widen.
+- "Bought this month" is a count of customers and invoices, not money: the
+  ledger's totals include VAT and Sales shows the month before VAT, and two
+  different "this month" figures would be worse than none.
+- NOT changed, and it now shows: the list's Overdue pill and Condition go by
+  a customer's oldest invoice whether or not it has been paid
+  (summarizeByCustomer over settled invoices too). On the day the list marks
+  113 customers overdue and the card 108; one of the 113 owes nothing. Left
+  for the owner to decide (rule 1).
+- components/ui/SummaryTile.tsx holds the tile and the list for both cards.
+  The Products card keeps its own copy for now — it was another session's
+  work in progress when this was written. Two differences from it, both for
+  a phone: the figure is set a size down and wraps after "AED" instead of
+  being cut off with "…", and the list is one grid so the amounts line up
+  and the small detail (date, days) gives its room to the name.
+- Web only, as the Products card is.

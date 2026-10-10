@@ -1,5 +1,43 @@
 # What changed, and what you need to do
 
+## 2026-10-10 — Expenses and Customers have a summary card
+
+Nothing to run in Supabase. The web needs a deploy. The phone is unchanged.
+
+**Expenses**, at the top of the page:
+
+- **Spent this month** — everything logged this month, with last month's
+  total under it. It is the same figure as the centre of the donut.
+- **Fixed / Variable / Purchase** — this month's total of each type and how
+  many were logged.
+- **Biggest this month** — the five largest single expenses.
+
+It counts every expense, whatever tab, type or search is chosen underneath.
+Today it reads zero: the only expenses in the system are three from August.
+
+**Customers**, at the top of the page, for managers and admins:
+
+- **Customers** — how many are on the list, and how many were added this month.
+- **Outstanding** — everything customers owe, and how many owe it. It is the
+  Dashboard's Remaining and Overdue added together (AED 1,279,814.65 today,
+  from 151 customers).
+- **Overdue** — the part of that which is past the customer's terms. It is the
+  Dashboard's Overdue (AED 819,814.44 today, 108 customers).
+- **Bought this month** — how many customers were invoiced this month, and
+  how many invoices.
+- **Owes the most** — the five customers with the largest balance, and how
+  old their oldest unpaid invoice is.
+
+Salesmen and the warehouse do not see the Customers card.
+
+One thing you may notice: the card says 108 customers are overdue, and the
+list's Overdue filter shows 113. The list goes by a customer's oldest
+invoice even when that invoice has been paid; the card (like the Dashboard)
+only counts invoices still owed. The list was left as it is — say if you
+want it changed.
+
+---
+
 ## 2026-10-10 — Products has a summary card
 
 Nothing to run in Supabase. The web needs a deploy. The phone is unchanged.

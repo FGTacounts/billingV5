@@ -1,6 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Expense, ExpenseType } from "@/lib/types/db";
 import { fetchSellers, type Seller } from "@/lib/queries/sales";
+import type { Month } from "@/lib/queries/dashboard";
+import { t } from "@/lib/i18n";
 
 // For the Expense page's "Salesman" tab (§Expense: "separate views for
 // both salesman and overview expense") and for the Manager's order-detail
@@ -54,4 +56,35 @@ export async function deleteExpense(_supabase: unknown, id: string) {
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error ?? "Failed to delete expense");
+}
+
+export interface ExpenseSummaryRow {
+  id: string;
+  type: ExpenseType;
+  category: string | null;
+  description: string | null;
+  amount: number;
+  date: string;
+}
+
+// The summary card at the top of Expenses. Every expense counts — the card
+// does not follow the page's tabs, type filter or search.
+export interface ExpenseSummary {
+  month: {
+    total: number;
+    count: number;
+    byType: Record<ExpenseType, { total: number; count: number }>;
+    top: ExpenseSummaryRow[]; // the biggest single entries
+  };
+  lastMonth: { total: number; count: number };
+}
+
+// `month` is the month where the person is (currentMonth()) — the server
+// runs in UTC and is told rather than left to work it out.
+export async function fetchExpenseSummary(month: Month): Promise<ExpenseSummary> {
+  const key = `${month.year}-${String(month.month + 1).padStart(2, "0")}`;
+  const res = await fetch(`/api/expenses/summary?month=${key}`);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? t("expense.summaryFailed"));
+  return data.summary as ExpenseSummary;
 }

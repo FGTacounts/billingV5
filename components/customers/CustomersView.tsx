@@ -21,6 +21,7 @@ import {
   summarizeByCustomer,
   conditionForDays,
   type Condition,
+  type InvoiceAging,
 } from "@/lib/queries/aging";
 import type { AppUser, Customer } from "@/lib/types/db";
 import { formatAed } from "@/lib/money";
@@ -36,6 +37,7 @@ import { CUSTOMER_ALIASES } from "@/lib/importAliases";
 import Sheet from "@/components/ui/Sheet";
 import { Label, TextInput } from "@/components/ui/Field";
 import CustomerDetailView from "./CustomerDetailView";
+import CustomersSummary from "./CustomersSummary";
 import { DEFAULT_OVERDUE_DAYS } from "@/lib/queries/aging";
 import { CUSTOMER_SAMPLE_HEADERS, customerSampleExample } from "@/lib/importSamples";
 
@@ -152,6 +154,12 @@ export default function CustomersView({ user, isManager }: { user: AppUser; isMa
   const writesDirectly = isManager || !approvals.customerChanges;
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [aging, setAging] = useState<Map<string, { totalDue: number; totalSale: number; totalPaid: number; oldestDays: number }>>(new Map());
+  // The ledger the balances are built from, kept for the summary card so it
+  // does not walk it a second time. Null until the first walk comes back.
+  const [invoices, setInvoices] = useState<InvoiceAging[] | null>(null);
+  const [ledgerFailed, setLedgerFailed] = useState(false);
+  // Bumped whenever this page changes a customer, so the summary card follows.
+  const [summaryKey, setSummaryKey] = useState(0);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Customer | "new" | null>(null);
@@ -182,8 +190,17 @@ export default function CustomersView({ user, isManager }: { user: AppUser; isMa
 
     // includeSettled=true — the Sale/Payment columns need lifetime totals,
     // not just what's still outstanding.
-    const invoices = await fetchOutstandingInvoices(supabase, undefined, true).catch(() => []);
-    setAging(summarizeByCustomer(invoices));
+    // A walk that fails leaves the list's figures blank, as it always has;
+    // the summary card keeps whatever it last had.
+    try {
+      const rows = await fetchOutstandingInvoices(supabase, undefined, true);
+      setInvoices(rows);
+      setLedgerFailed(false);
+      setAging(summarizeByCustomer(rows));
+    } catch {
+      setLedgerFailed(true);
+      setAging(new Map());
+    }
   }, [search]);
 
   useEffect(() => {
@@ -245,7 +262,7 @@ export default function CustomersView({ user, isManager }: { user: AppUser; isMa
         {isManager && (
             <ImportCsvButton
               endpoint="/api/customers/import"
-              onImported={load}
+              onImported={() => { load(); setSummaryKey((n) => n + 1); }}
               aliases={CUSTOMER_ALIASES}
               sample={{
                 // Header labels match Billing Customers.xlsx (Code, CUSTOMER
@@ -266,6 +283,15 @@ export default function CustomersView({ user, isManager }: { user: AppUser; isMa
           </Button>
         </div>
       </div>
+
+      {isManager && (
+        <CustomersSummary
+          invoices={invoices}
+          ledgerFailed={ledgerFailed}
+          onRetry={load}
+          refreshKey={summaryKey}
+        />
+      )}
 
       <div className="flex items-center gap-2 mb-4 flex-wrap">
         <div className="relative flex-1 min-w-[200px]">
@@ -473,6 +499,7 @@ export default function CustomersView({ user, isManager }: { user: AppUser; isMa
             setEditing(null);
             setViewing(null);
             load();
+            setSummaryKey((n) => n + 1);
           }}
         />
       )}
@@ -483,7 +510,7 @@ export default function CustomersView({ user, isManager }: { user: AppUser; isMa
           user={user}
           onClose={() => setViewing(null)}
           onEdit={() => { setEditing(viewing); setViewing(null); }}
-          onDeleted={() => { setViewing(null); load(); }}
+          onDeleted={() => { setViewing(null); load(); setSummaryKey((n) => n + 1); }}
         />
       )}
     </div>

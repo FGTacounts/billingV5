@@ -1,5 +1,40 @@
 # What changed, and what you need to do
 
+## 2026-10-11 — The iPhone widgets were redesigned
+
+Nothing to run in Supabase. The phone needs a new build. The web is
+unchanged. Widgets already on a home screen update themselves — nobody has
+to remove and re-add them.
+
+The four widgets now look like the ones that come with the iPhone: one big
+figure, a line under it, and one chart, in type you can read at arm's
+length.
+
+- **Sales** (small, medium, large) — your sales this month, how far that is
+  towards your target, your drafts / waiting / approved orders, and on the
+  large one the last six months and the last thirty days. Medium and large
+  keep the New order button.
+- **Team sales** (small, medium, large) — the team's month, orders pending
+  approval, the last six months and the top sellers. Gross profit shows only
+  to a manager.
+- **Warehouse** (small, medium) — orders in the queue, today's progress, and
+  pending / picking / packed.
+- **Lock screen** — the one figure for whoever is signed in.
+
+Three things on the old widgets were wrong and are fixed:
+
+- **Top sellers was always empty.** It now lists them.
+- **The Expense ring and the Payments charts were not real.** The ring was
+  drawn three-quarters full whatever the figure, and the Payments charts
+  were the sales bars with a different label; the app has never sent the
+  widget payments or expenses. They are gone. If you want payments or
+  expenses on a widget, say so and the app will be made to send them.
+- **"+102%" next to sales** compared this month so far with all of last
+  month. It now simply says "Last month 91K".
+
+After signing out, the widgets ask you to sign in instead of showing the
+last person's figures.
+
 ## 2026-10-11 — Dead code removed from the phone app
 
 Nothing to run in Supabase. Nothing looks or behaves differently. The phone
@@ -12,6 +47,9 @@ deliberately left, is in docs/DECISIONS.md.
 
 The customer sheet on the phone also carried a "Delete customer"
 confirmation that no button could open. You asked for it to go, and it has.
+
+The unused Core Data model file (`Billing.xcdatamodeld`, Xcode's template)
+is removed too. The app never stored anything in it.
 
 ## 2026-10-10 — Dead code removed from the web app
 

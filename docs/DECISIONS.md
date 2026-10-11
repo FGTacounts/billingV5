@@ -3973,3 +3973,72 @@ Delete button only closed the sheet without deleting anything. Removed: the
 state, the dialog, and the two strings only it used. No delete button was
 added — none was asked for. `AppDataManager.deleteCustomer` and its one
 caller were left as they are. `Billing.xcdatamodeld` is still there.
+
+2026-10-11 — The iPhone widgets were redrawn in the system's own style
+(owner: "make widgets for the iOS app. like normal widgets … the current
+widgets don't look good") — Same four widgets, same `kind` strings and the
+same configuration intent, so one already on a home screen stays there; only
+how they look, and what they are honest about, changed. The app's side
+(`AppDataManager.writeWidgetData`) was not touched: the figures still follow
+the 2026-09-18 rule that the widget and the dashboard count the same orders.
+- The look: one headline figure, one supporting line, one chart at most,
+  drawn straight on the widget background with the system's margins. The old
+  ones put four to six grey boxes inside each widget and set type at 7–9pt.
+  Sizes now come from the type scale (12 / 14 / 20 / 32 / 40) in three
+  weights, with tabular figures on every number. Brand teal is used for
+  graphics only; text is primary or secondary, because teal text on white
+  does not meet AA.
+- Files, all in the widget extension: `WidgetViews.swift` (how they look),
+  `WidgetData.swift` (what the app wrote, read once), `WidgetStrings.swift`
+  (a `WS` catalogue in the shape of the app's `S`, which an extension cannot
+  reach), `widgets.swift` (the declarations). Each view takes its size as a
+  value instead of reading the environment, so a test can draw one with
+  `ImageRenderer` — that is how these were checked, in light and dark.
+- Removed because they showed things that were not true, not because they
+  were unwanted: the Expense donut (drawn at a fixed 75% whatever the
+  figure, beside a hard-coded list of five categories), and the "Payments"
+  tiles and charts (the app has never written payments or expense figures to
+  the widget, so the tiles read zero and the "Payments" charts were the sales
+  bars under another name). Bringing payments or expenses back means the app
+  sending real figures first — the owner's call, not done here.
+- "Top sellers" works for the first time. The app writes each seller as
+  `{label, value}` and the widget was decoding `{name, sale, pct}`, so the
+  list had always been empty.
+- "+102% vs last month" became "Last month 91K". The old figure compared
+  this month so far with the whole of last month, so it read as a collapse
+  for the first three weeks of every month. Rejected: a like-for-like
+  month-to-date comparison, which needs a figure the app does not send.
+- Gross profit shows only when the signed-in role is manager or admin
+  (docs/why-cost-prices-are-hidden.md). The Team widget can be added by
+  anyone, and on a salesman's phone the costs are blank, so the figure was
+  both not theirs to see and wrong. Team sales and top sellers stay visible
+  to everyone, as the salesman's own dashboard already shows a leaderboard.
+- Signed out, a widget says "Sign in to FGT Billing to see your figures"
+  instead of the last user's numbers — the same rule the watch got on
+  2026-09-15. The widget reads `widget.currentRole`, which the app already
+  clears on sign-out; the figures themselves are still left in the App
+  Group.
+- The lock-screen ring for a manager is gone: it was fixed at 60% of
+  nothing. A manager gets the figure without a ring; salesman (target) and
+  warehouse (today) keep theirs, because those are real.
+- The warehouse's small widget says "in queue", not "to pick": the number
+  is orders being picked plus orders packed, which is what the medium one
+  already called "Total in queue".
+- Gallery names are now Sales / Team sales / Warehouse / FGT Billing
+  (were "Salesman Dashboard", "Manager Dashboard", "Warehouse Dashboard",
+  "Famlist Billing"), and the descriptions no longer promise payments and
+  expense.
+- Left alone: the Live Activity, the two Control Centre buttons (New Order,
+  Scan Order), and the widget's "Metric" setting, which no widget has ever
+  read — removing a setting is a removal, so it waits for the owner.
+- Money reaches the widget as `Double` AED, as before; it is only ever
+  shortened for display there (125K, 1.25M), never added up.
+
+2026-10-11 — The phone's Core Data model is removed (owner: "remove the
+Billing.xcdatamodeld") — It was Xcode's template: a single `Item` entity with
+a timestamp. `Persistence.swift`, the only thing that could load it, went in
+the dead-code sweep, and no Swift file imports Core Data. The app's data is
+in Supabase and its own caches, none of which use this model, so there is no
+stored data to migrate. The folder is a file-system-synchronised group, so
+deleting it needed no project edit; a clean build passes and no longer
+bundles a compiled model.

@@ -1,5 +1,19 @@
 # What changed, and what you need to do
 
+## 2026-10-11 — Dead code removed from the phone app
+
+Nothing to run in Supabase. Nothing looks or behaves differently. The phone
+needs a new build for it to take effect; the web is unchanged.
+
+Code that no screen could reach was deleted from the iPhone app: five unused
+files, 31 functions and 10 types nothing called, 57 unused properties, and 45
+strings nothing showed — about 1,500 lines. The list, and what was
+deliberately left, is in docs/DECISIONS.md.
+
+One thing is waiting on you: the customer sheet on the phone carries a
+"Delete customer" confirmation that no button opens. Say whether a delete
+button was meant to be there, or the leftover dialog should be removed.
+
 ## 2026-10-10 — Dead code removed from the web app
 
 Nothing to run in Supabase. Nothing looks or behaves differently. The web

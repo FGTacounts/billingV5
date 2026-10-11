@@ -3923,3 +3923,44 @@ candidate checked by hand, including against the phone's sources for routes.
   writer in the web app; the tables are untouched.
 - The phone was not swept. `ArticleDetailSheet.swift` is the one known dead
   file there (2026-09-12); a Swift sweep is a separate step.
+
+2026-10-11 — Dead code removed from the phone app (owner: "do the same for
+the phone app") — The same rule as the web sweep the day before: only code
+nothing can reach, nothing a person can see or do changes. About 1,500 lines.
+- Found with Periphery 3.8 (installed on this Mac with Homebrew; it is not a
+  project dependency) reading the compiler's own index of the Billing scheme,
+  tests included, so anything a test exercises counts as used. Checked by
+  building, re-scanning for what the removals orphaned (two strings), and the
+  BillingTests suite.
+- Whole files: `ArticleDetailSheet.swift` (the one noted on 2026-09-12),
+  `DashboardTabPicker.swift`, `HeaderBar.swift`, `TopTabBar.swift`,
+  `Persistence.swift` (Xcode's Core Data template; the app has never opened
+  the store).
+- 31 functions and 10 types nobody calls, among them the old phone-layout
+  dashboard tiles and panels in ManagerDashboardView, SalesView and
+  WarehouseDashboardView, `AppDataManager.deductStock` (approval takes stock
+  in the database now), `Grv.create`, `DriveClient.file(forSKU:)` and the
+  `LocalDataCache` search helpers.
+- 57 unused properties (view fragments, formatters, state nothing reads) and
+  45 strings nothing shows.
+- The scanner is wrong about one thing and the build caught it: a `@State`
+  that is only handed on as `$binding` is reported unused. Nine such lines
+  were put back (the three `sidebarExpanded`, `approvedExpanded`,
+  `rejectedExpanded`, `rejectedWindow`, `warehouseSearchVisible`,
+  `showDeleteConfirm`, and the watch's `selectedPage`). Do not trust
+  "Unused property" on a property wrapper without building.
+- Left alone on purpose, as on the web: every field Periphery calls
+  "assign-only" (153 — they are the rows written to the database and the
+  payloads sent to the watch and the widgets, so they are read, just not by
+  Swift); `SupabaseModels.swift` (the database's row shapes, `SBPayment`
+  included); the unused design helpers in `Constants.swift` and
+  `InteractionEffects.swift` (concentricStroke, interactivePress,
+  tapFeedback, parallaxMotion — the phone's side of the motion vocabulary);
+  `description` on the App Intents and the Quick Look `PreviewProvider`
+  (read by iOS, not by our code); unused function parameters (changing a
+  signature is not a deletion); `PriceReason.discount` (mirrors the web).
+- NOT removed, needs the owner's word: the customer sheet has a "Delete
+  customer" confirmation that nothing can open (`showDeleteConfirm` is never
+  set), and its Delete button only closes the sheet. Either a delete button
+  was meant to exist or the dialog should go; both are the owner's call.
+  `Billing.xcdatamodeld` is now a resource with no code behind it.

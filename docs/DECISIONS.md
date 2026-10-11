@@ -3964,3 +3964,12 @@ nothing can reach, nothing a person can see or do changes. About 1,500 lines.
   set), and its Delete button only closes the sheet. Either a delete button
   was meant to exist or the dialog should go; both are the owner's call.
   `Billing.xcdatamodeld` is now a resource with no code behind it.
+
+2026-10-11 — The phone's leftover "Delete customer" confirmation is gone
+(owner: "remove the leftover delete dialogue") — Answers the question left
+open in the entry above. In CustomerDetailView the dialog's switch,
+`showDeleteConfirm`, was never turned on, so it could not appear, and its
+Delete button only closed the sheet without deleting anything. Removed: the
+state, the dialog, and the two strings only it used. No delete button was
+added — none was asked for. `AppDataManager.deleteCustomer` and its one
+caller were left as they are. `Billing.xcdatamodeld` is still there.

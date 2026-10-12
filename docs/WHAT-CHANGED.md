@@ -1,34 +1,166 @@
 # What changed, and what you need to do
 
-## 2026-10-11 — The iPhone widgets were redesigned
+## 2026-10-12 — The Mac app is being brought level with the web
+
+You asked for everything on the web to be in the Mac app and to work the
+same. The Mac app is the iPhone app built for the Mac, so every change here
+reaches the iPhone and iPad too. **Nothing to run in Supabase. The app needs
+a new build.** The web is unchanged.
+
+I read both apps side by side, screen by screen. The full list of what
+differs is in `docs/MAC-PARITY.md` — about seventy items. This is the first
+batch: the places where the two apps showed **different numbers**.
+
+- **Gross profit** is now the web's: imported invoices (which have no cost)
+  no longer drag GP % down, a line with no cost is no longer counted as all
+  profit, and an order discount comes off. GP % reads "—" when nothing has a
+  cost behind it.
+- **Dashboard:** Profit is gross profit less the month's expenses (it showed
+  gross profit twice). Pending / Waiting / Packed count every open order,
+  not only this month's. Expenses no longer take in the last day of the
+  month before.
+- **Orders:** each row shows what was actually billed — imported invoices
+  read AED 0.00 before. On the Mac's table, Received and Balance are real
+  (from confirmed payments); they were placeholders.
+- **Order discount — the important one.** A discount you give on the web
+  ("Order discount" inside an order) was invisible to the app. Approving
+  that order on the Mac billed it at full price, and saving it from the Mac
+  put the total back up. The app now reads the discount, shows it, and bills
+  with it. You still set it on the web for now.
+- **Reports:** Sales is month to date before VAT (it was all-time with VAT).
+  The Balance sheet uses sales before VAT. Aging and Statement Summary take
+  goods returns off, as the Customers page does.
+- **Invoices** lists billed invoices only, by billing date, and can be
+  sorted. It used to include orders still in the warehouse.
+- **Expenses:** shows the type and category you actually saved, has a Notes
+  field, has the summary card from the web, and no longer changes "Fuel" to
+  "fuel" when you edit one. An imported expense no longer lands a day early.
+- **Signing in:** a deactivated login is refused and told why — it used to
+  get in. Return works in the login form. The sidebar stays pinned.
+
+**For you to decide** (matching the web here would take something away from
+the app, so I left them):
+
+1. Logging a payment: the app takes a discount as a percentage out of the
+   amount typed; the web takes an AED amount on top of it. Which one?
+2. Expenses: the app lists one month at a time and blocks future dates; the
+   web lists everything and allows them.
+3. A salesman can edit an order that is being picked on the app, and not on
+   the web.
+
+**Two faults I found on the web while matching it**, not fixed: the Reports
+balance sheet counts expenses dated the last day of the previous month in
+this month, and it can under-count cost of goods in a busy month. Say if you
+want them fixed.
+
+**Checked how:** built for the Mac; the money and gross-profit tests pass
+(20 of 20). Not watched running — I cannot sign in to the app — so please
+open Dashboard, Orders, Reports and Expenses on the Mac and compare a few
+figures with the web before it goes to everyone.
+
+## 2026-10-12 — The iPhone, iPad and Mac app is faster
+
+Nothing to run in Supabase. The app needs a new build (it is one app, so one
+build covers all three). The web is unchanged — it had its own speed pass on
+6 October, and this brings the app level with it.
+
+No screen looks or works differently. What changed is how the app keeps
+itself up to date:
+
+- **Saving an order no longer makes every other device reload again and
+  again.** A twenty-line order used to make each open phone, iPad and Mac
+  download the whole order book twenty times, one after another, redrawing
+  the screen each time. It is now once. This is the stutter you would have
+  felt while someone else was entering or picking orders.
+- **A sync is about three times quicker.** The app asked the database ten
+  questions one after the other; it now asks them together.
+- **A sync that finds nothing new no longer redraws anything.** Opening the
+  app, or clicking back into the Mac window, used to redraw every screen
+  eight or more times even when nothing had changed.
+- **Saving the offline copy no longer freezes the screen.** After every
+  sync the app stopped for about an eighth of a second to write its offline
+  copy. That now happens in the background.
+
+One thing you might notice: a change made on another device can take up to
+half a second longer to appear, because the app now waits a moment to
+collect a burst of changes into one reload. The web does the same.
+
+**One bug closed along the way.** At launch the app could, by bad timing,
+read the product list before it knew you were a manager. Editing a product
+straight after that could have blanked that product's VAC, VAC China, stock
+arrival and holding days. I did not see it happen — I found it reading the
+code — and it can no longer happen. If any product is missing those four
+figures and you remember entering them, this is the likely reason.
+
+Not tested on a real device, only in the simulator: I cannot sign in to the
+app. Worth a few minutes of normal use on a phone and on the Mac before it
+goes to everyone — sign in, take an order, pick it on a second device, and
+check both follow each other.
+
+## 2026-10-12 — Two fixes on the phone: the leaderboard's size, and "Picked by"
 
 Nothing to run in Supabase. The phone needs a new build. The web is
-unchanged. Widgets already on a home screen update themselves — nobody has
-to remove and re-add them.
+unchanged.
 
-The four widgets now look like the ones that come with the iPhone: one big
-figure, a line under it, and one chart, in type you can read at arm's
-length.
+- **The Sale leaderboard on the manager's dashboard was too big.** The
+  names and amounts were more than twice the size of everything around
+  them, so "AED 7006.40" broke onto two lines and "Shamseer" was cut to
+  "Shams…". It is now the size of the Payments and Expense cards beside
+  it: each salesman is one line, name on the left, amount on the right.
+  Nothing else about it changed — same order, same figures, and tapping a
+  name still opens that salesman.
+- **"Picked by" followed by a long code instead of a name.** This was
+  already fixed in the code on 10 October, so a build made since then
+  shows the name; the screenshot came from an older build. The code in the
+  screenshot belongs to the warehouse login Sandeep, and it will read
+  "Picked by Sandeep".
+- **One more thing found while checking:** after that fix a picker's own
+  lines would have said "Picked by" with their own name, in someone else's
+  colour, as if a colleague had picked them. Your own picks now stay
+  yours: no label, and the colour you chose in Settings.
 
-- **Sales** (small, medium, large) — your sales this month, how far that is
-  towards your target, your drafts / waiting / approved orders, and on the
-  large one the last six months and the last thirty days. Medium and large
-  keep the New order button.
-- **Team sales** (small, medium, large) — the team's month, orders pending
-  approval, the last six months and the top sellers. Gross profit shows only
-  to a manager.
-- **Warehouse** (small, medium) — orders in the queue, today's progress, and
-  pending / picking / packed.
-- **Lock screen** — the one figure for whoever is signed in.
+## 2026-10-12 — The iPhone widgets were redesigned, and there is now one
 
-Three things on the old widgets were wrong and are fixed:
+Nothing to run in Supabase. The phone needs a new build. The web is
+unchanged.
+
+**One thing for people to do on their phones:** a manager's widget carries
+over by itself. Anyone who had the old Salesman or Warehouse widget on their
+home screen will find it blank after updating — hold it, remove it, and add
+"FGT Billing" from the widget list. Lock-screen widgets carry over.
+
+There used to be three home-screen widgets (Salesman, Manager, Warehouse)
+and anyone could add any of them; for a manager two showed the same number.
+There is now **one, called FGT Billing**, in small, medium and large. It
+shows whoever is signed in their own figures:
+
+- **A salesman** — sales this month, how far that is towards the target,
+  what they have collected, their draft / waiting / approved orders, and on
+  the large one the last six months of sales beside payments and the last
+  thirty days. Medium and large have the New order button.
+- **A manager** — the team's sales this month, payments collected, expense,
+  gross profit, orders pending approval, and on the large one the last six
+  months and the top sellers.
+- **Warehouse** — orders in the queue, today's progress, and pending /
+  picking / packed.
+
+The **lock-screen** widget is still there and shows the one headline figure.
+
+It looks like the widgets that come with the iPhone: one big figure, a line
+under it, and one chart, in type you can read at arm's length.
+
+Things on the old widgets that were wrong and are fixed:
 
 - **Top sellers was always empty.** It now lists them.
-- **The Expense ring and the Payments charts were not real.** The ring was
-  drawn three-quarters full whatever the figure, and the Payments charts
-  were the sales bars with a different label; the app has never sent the
-  widget payments or expenses. They are gone. If you want payments or
-  expenses on a widget, say so and the app will be made to send them.
+- **The Expense ring was not real.** It was drawn three-quarters full
+  whatever the figure, next to a made-up list of categories. Expense is now
+  a plain figure.
+- **Payments and expense went stale.** They only updated when someone
+  opened the Payments or the Expense screen. For a manager they now update
+  every time the dashboard opens. A salesman's "Collected" still updates
+  when they open Payments.
+- **A new month no longer shows last month's payments or expense.** Until
+  the app has this month's figure the widget leaves the space empty.
 - **"+102%" next to sales** compared this month so far with all of last
   month. It now simply says "Last month 91K".
 

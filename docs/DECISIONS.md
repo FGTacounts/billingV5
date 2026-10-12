@@ -3994,13 +3994,16 @@ the 2026-09-18 rule that the widget and the dashboard count the same orders.
   reach), `widgets.swift` (the declarations). Each view takes its size as a
   value instead of reading the environment, so a test can draw one with
   `ImageRenderer` — that is how these were checked, in light and dark.
-- Removed because they showed things that were not true, not because they
-  were unwanted: the Expense donut (drawn at a fixed 75% whatever the
-  figure, beside a hard-coded list of five categories), and the "Payments"
-  tiles and charts (the app has never written payments or expense figures to
-  the widget, so the tiles read zero and the "Payments" charts were the sales
-  bars under another name). Bringing payments or expenses back means the app
-  sending real figures first — the owner's call, not done here.
+- Removed: the Expense donut (drawn at a fixed 75% whatever the figure,
+  beside a hard-coded list of five categories) and the "Payments" tiles and
+  charts. CORRECTED the same day: this entry first said the app had never
+  written payments or expense figures to the widget. That was wrong — only
+  AppDataManager and BillingApp had been searched. PaymentsView writes
+  `widget.paymentsTotal` and `widget.monthlyPayments`, and ExpenseView
+  writes `widget.expenseMTD`, so those figures were real whenever those
+  screens had been opened; only the donut's fill, its category list, and
+  the sales bars drawn under "Payments" when no payments had been written
+  were not. The figures are back — see the next entry.
 - "Top sellers" works for the first time. The app writes each seller as
   `{label, value}` and the widget was decoding `{name, sale, pct}`, so the
   list had always been empty.
@@ -4042,3 +4045,364 @@ in Supabase and its own caches, none of which use this model, so there is no
 stored data to migrate. The folder is a file-system-synchronised group, so
 deleting it needed no project edit; a clean build passes and no longer
 bundles a compiled model.
+
+2026-10-11 — Payments and expense are on the widgets (owner: "add payments
+and expenses to the widget") — Puts back what the redesign above took off,
+on a wrong premise (see the correction in that entry), in the new style.
+- Words: "Collected" and "Expense", the app's own (S.payments.collected,
+  S.expense.title). Collected is confirmed payments this calendar month —
+  `Aging.fetchPaymentsSummary().received`, the figure the Payments screen
+  and the manager's dashboard already show.
+- Sales widget: "Collected 50.2K" under the headline on small and medium
+  (on medium it takes the "Last month" line's place); on large a Collected
+  figure beside Draft / Waiting / Approved, and the six-month chart becomes
+  pairs of bars, sales in teal and collected in blue, with a legend. Blue
+  is what the old widget used for payments. For a salesman these are their
+  own collections; for a manager, everyone's — the scope the Payments
+  screen already applied.
+- Team widget: Collected and Expense as rows on medium and, on large, in a
+  two-by-two block with Gross profit and Pending at the top right (the
+  "orders pending approval" line at the foot moved up into it). On medium
+  the Top seller row gives way when both figures are present — four rows
+  is what fits — and stays on the large widget's list. The Team small
+  widget is unchanged: one figure and the pending count.
+- On the Team widget both show to a manager or admin only. On a salesman's
+  phone "collected" is their own collections, which would be wrong under
+  "Team", and what the business spends is not theirs to see. The old
+  manager widget showed its expense tile to anyone who added it.
+- No expense on the Sales widget and none on the lock screen: neither had
+  one before.
+- New: `Billing/WidgetFeed.swift`, one place that writes these figures.
+  PaymentsView and ExpenseView now call it instead of each writing to the
+  App Group themselves, and ManagerDashboardView calls it too, from the
+  payments and expense loads it already runs on every open. Before, the
+  figures only refreshed when someone opened the Payments or the Expense
+  screen. A salesman's still refresh only from the Payments screen — the
+  salesman's dashboard does not load a payments total, and adding a fetch
+  there was not asked for.
+- Each figure is stamped with its month (`widget.paymentsMonth`,
+  `widget.expenseMonth`, "2026-10") and the widget draws it only while
+  that is the current month. Otherwise on the 1st it would show last
+  month's total under "this month" until the right screen was opened.
+  With no figure for this month the widget shows nothing in its place —
+  the Sales medium falls back to "Last month", the chart to single bars.
+  Rejected: showing zero, which reads as "nothing collected".
+- The dashboard's six bars leave out bounced and returned cheques
+  (`monthlyPaymentsData.confirmed`); the Payments screen's count every
+  confirmed payment. Whichever screen loaded last wins. Left as it is —
+  making them agree is a change to one of those screens, not to the widget.
+- No expense breakdown by category. The old donut's category list was the
+  made-up part; a real one would need the app to send categories, which
+  was not asked for.
+
+2026-10-12 — Three home-screen widgets became one that follows the signed-in
+role (owner: "There are many widgets. most of them just show the same thing.
+remove the unnecessary widgets" — asked which, the owner chose one role-based
+widget, in small, medium and large, and to keep the lock-screen one) —
+Sales, Team sales and Warehouse are no longer separate entries in the widget
+gallery. One widget, "FGT Billing", shows the warehouse its queue, a manager
+or admin the team, and anyone else their own sales (`HomeWidgetContent`).
+The three views are the ones designed on 2026-10-11, unchanged.
+- Why they looked the same: for a manager the Sales widget counted every
+  order, so it led with the same figure as Team sales, and the lock-screen
+  widget with it again.
+- What each role no longer has, both told to the owner before the choice: a
+  manager has no New order button, draft / waiting / approved counts,
+  target bar or 30-day line on a widget (those are the salesman's view);
+  a salesman has no team view. Nothing was added to either view to make up
+  for it.
+- This supersedes two lines of the 2026-10-11 entries. "Team sales and top
+  sellers stay visible to everyone" — no longer, only a manager sees the
+  team view. And the role checks on gross profit, collected and expense
+  were taken out of the team view, because it is now only ever drawn for a
+  manager or admin; the comment on `TeamWidgetContent` says to put them
+  back before showing it to anyone else.
+- The widget keeps the `kind` "ManagerDashboardWidget", so one already on a
+  manager's home screen carries on as the new widget. Widgets placed from
+  the Salesman or Warehouse entries have no kind to belong to any more and
+  have to be removed and added again, once. Rejected: a new kind, which
+  would have made everyone re-add. Keeping all three kinds alive and
+  hiding two from the gallery is not something WidgetKit offers.
+- The warehouse view gained a large size, because one widget comes in one
+  set of sizes. It shows the same six figures as the medium (in queue,
+  today's progress, pending / picking / packed) with a bar for each stage —
+  nothing new is sent or counted.
+- The lock-screen widget is unchanged; it already followed the role.
+- Still left alone: the Live Activity, the two Control Centre buttons, and
+  the "Metric" setting no widget reads.
+
+2026-10-12 — The phone's dashboard leaderboard is drawn at the size of the
+cards around it (owner, with a screenshot: "the salesman leaderboard widget
+text is too big") — on a phone the Sale card's title was 28pt, the team
+total 42pt and every row 30pt, all in the black weight, while the Payments
+and Expense cards beside it title themselves at 14pt bold. At that size
+"AED 7006.40" broke onto two lines and "Shamseer" was cut to "Shams…".
+Now: title 14 bold, total 24 bold, each row 16 (name semibold, amount
+bold), all from the type scale. Same capsule rows, colours, order, tap to
+open the salesman, and the same figures.
+- The amount is held to one line and a long name gives way first, because
+  the amount is the thing being read.
+- Rows are a fixed 44pt, the touch-target minimum, since each one is a
+  button. The list is as tall as its rows up to the 270pt it was capped at
+  before, then scrolls; left at "up to 270" a short list would have kept
+  empty space under it now that the rows are smaller.
+- Only the phone layout changed. The iPad/Mac table in the same card and
+  the leaderboard on the Sales screen were not complained about and are as
+  they were.
+
+2026-10-12 — "Picked by" names the picker, and a picker's own lines are no
+longer labelled as a colleague's (owner, with a screenshot of "Picked by
+69A31176-6B2B-…": "it shows the user UUID instead of their name. (check if
+fixed)") — Checked. The id in the screenshot is the warehouse login
+"Sandeep." (full name Sandeep), read from the live users table. The name
+fix was already in the phone's code, committed 2026-10-10 (45dab4d), and
+does resolve it: `picked_by_id` is `users.id` from every writer (the phone,
+the web's update-picked-qty, manager_edit_order), and the phone looks it up
+in the users it already fetches. A build made before that date shows the
+id; the next build shows "Picked by Sandeep".
+- One thing that fix left wrong, corrected today: it turned the signed-in
+  user's own picks into their full name too, while the pick screen decides
+  "mine" by comparing with the username (which is what a tick writes
+  locally). So after a refresh Sandeep's own lines read "Picked by Sandeep"
+  in a colleague's colour instead of showing the description in the colour
+  he chose in Settings. A user's own picks now keep the username; "mine" is
+  decided by id at the one place orders are read (`fetchOrdersAsync`).
+- Left as it is: the order cards on the warehouse and manager dashboards
+  list who is picking an order by the same value, so the signed-in user
+  appears there under their username and colleagues under their full name.
+  Changing that means carrying the picker's id through the Order model,
+  which was not asked for.
+- Two logins share the full name "Bilal Ajnaz" (bilal, bilalwh) and two
+  share "Sandeep" (one a deactivated salesman), so a full name does not say
+  which login picked. Nothing was changed for this; it is data.
+
+## 2026-10-12 — Everything on the web is owed to the Mac app
+
+Owner: "Make everything in the web app appear in the macOS catalyst app. it
+should function same. Always remember to do this."
+
+2026-10-12 — The Mac app is the iPhone app built for Mac Catalyst (the
+`Billing` target already had it switched on, and it builds), so "the Mac app"
+means the Swift app: one change serves iPhone, iPad and Mac. It was read
+against the web one screen at a time and the differences are listed in
+docs/MAC-PARITY.md, most serious first — figures that disagree before
+features that are missing. That file is the running list; tick it as items
+ship.
+- This settles every entry above that says "Web only" or "Phone not changed
+  yet… asked the owner before mirroring" (the month chooser, the corrected
+  GP, the Orders and Customers Adjust View, This month, stage values, the
+  Customers and Expenses summary cards). They are owed, not deliberate.
+- Read as: the web is the reference for what a screen shows and how a figure
+  is worked out. Not read as: remove what only the phone has (widgets, Live
+  Activity, the watch, a salesman's goal editor), or redraw the Mac to look
+  like the browser. Where matching the web would take something away from
+  the phone — the 0–50% payment discount stepper against the web's AED
+  amount, a salesman editing an order that is in picking, the Expense
+  screen's month picker — it is listed and left for the owner (rule 1).
+- From now on a web change is not finished until the Swift app has it and it
+  has been built for the Mac, not only for the iPhone simulator.
+
+2026-10-12 — Gross profit on the phone and the Mac is the web's (2026-10-01
+above): each order's sale net of the order discount, less the cost of its
+lines; a line with no cost on record is left out of both sides; an order with
+no lines (every imported invoice) is left out entirely; GP % is of the sale
+that has a cost behind it and reads "—" when none has. Until today the Swift
+app counted an uncosted line as all profit, never saw the order discount, and
+divided by the whole month's sale. One function (`Analytics.grossProfit`)
+now feeds the Dashboard, Sales, the salesman drill-down's Avg. GP % and the
+home-screen widget's figure.
+- An order line now remembers whether its cost was missing or zero
+  (`OrderItem.costKnown`); before, both arrived as 0.
+- The Sales GP card says how much sale was left out, in the web's words.
+- An order with no stored subtotal (none in the live data once billed) still
+  counts picked lines only on both sides, as the phone always has.
+- Left alone, as on the web: the "GP" row inside an order being edited still
+  counts a line with no cost as all profit.
+
+## 2026-10-12 — Speed on the iPhone, iPad and Mac
+
+Owner: "Make the iOS and iPadOS and MacOS app faster." One app, built three
+ways, so one change. Where the time went was looked for before anything was
+changed, and it was in how the app syncs, not in any one screen. Sized
+against the live database on the day: 658 orders, 1,948 lines, 360
+customers, 1,758 products. Nothing a screen shows was changed.
+
+2026-10-12 — A burst of live changes is one reload (`RefreshCoalescer`), as
+on the web since 2026-10-06. Saving an order changes its row and each of its
+lines, each change arrives as its own realtime event, and each event started
+its own reload of the whole order book, queued one behind the other — a
+twenty-line order was twenty downloads, twenty redraws and twenty cache
+writes. The first event now waits 400 ms for the rest, then one reload runs;
+an event that lands during the reload gets one more afterwards; a reload
+never overlaps itself, so an older answer cannot land after a newer one.
+- Cost, accepted: a change made on another device shows up to 400 ms later.
+  The web's figure, kept the same so the two agree.
+- Not the web's exact rule: the web waits 400 ms after the LAST event, this
+  waits 400 ms after the FIRST. A steady stream of events would otherwise
+  never reload at all.
+
+2026-10-12 — The sync's reads go out together. They queued: users, then the
+three lists, then settings, then zones, and inside the order read, orders,
+then users, then lines, then base prices — ten round trips end to end, now
+two (the second page of a list longer than 1,000). Same reads, same pages,
+same handling when one fails. `Paging` is untouched.
+- Timed from this Mac against the live database, the first page of each read
+  over one connection, six runs: 1.66–1.79 s one after another, 0.53–0.69 s
+  together.
+- Seen once and not again: with each read on a connection of its own (eleven
+  at once, which is not how the app connects), one run stalled for 60 s. If
+  the "Syncing" pill is ever seen to hang, this is where to look first.
+
+2026-10-12 — A list that comes back the same as the one held is left alone:
+not published, not written to the cache, not sent to the watch or the Live
+Activity. This is every sync where nothing changed, and every live event
+caused by a change made on this device (it is on screen before it is sent).
+`Customer`, `Article`, `Order` and `OrderItem` are `Equatable` for this.
+- One redraw per full sync is kept on purpose (`hasSyncedOnce` and its two
+  neighbours are still assigned every time). It is what shows whatever is
+  not `@Published` — the user list, the zones, the "does this database have
+  the column" flags. A sync used to cause eight or more.
+
+2026-10-12 — Cache files are written off the main thread (`CacheWriter`),
+on one queue so they land in the order asked — sign-out's emptying of the
+cache still comes last. Measured on real-sized data: 128 ms to encode and
+encrypt the three lists, on the main thread, after every sync, and again for
+`LocalDataCache`'s copies of two of them. `Customer`, `Article` and
+`OrderItem` are `nonisolated` (as `Order` and `User` already were) so they
+can be encoded there.
+- Consequence accepted: a write is queued, not finished, when `persist`
+  returns. Killed in that instant, the cache is one change behind and the
+  next sync corrects it. The offline pick queue and drafts have their own
+  storage and are not involved.
+
+2026-10-12 — Two things that redrew every screen for no reason no longer do.
+`debugLog` is not `@Published` (no screen shows it; every line written to it
+redrew everything, five or so times a sync). `isSyncing` lives on its own
+small object (`SyncActivity`) watched only by the "Syncing" pill.
+- The first sync finishing still eases the lists in: that animation followed
+  `isSyncing` and now follows `hasSyncedOnce`.
+
+2026-10-12 — No sync starts before it is known who is signed in. Coming to
+the front at launch started one while the user's own record was still on its
+way. That was a wasted sync, and a race: if the user list answered first,
+the product list was read as a non-manager, without the four manager figures
+(`vac_override` and its neighbours), and `updateArticle` writes all four
+back — as null, for a product the manager then edited before the next sync.
+Not seen happening; read from the code. Closed either way.
+- Also: a reload that answers after sign-out is dropped, and anything
+  waiting in a coalescer is cancelled at sign-out.
+
+2026-10-12 — NOT done, and why.
+- Reading the cache at launch stays on the main thread: 42 ms measured, plus
+  19 ms for `LocalDataCache`'s second copy. Moving it risks a stale cache
+  landing over a fresh sync for a gain nobody would see.
+- A sync on every return to the front stays. On the Mac that is every click
+  back into the window; it is now one redraw when nothing changed, and
+  skipping it would leave a phone that slept through a change out of date.
+- The dashboards still work their figures out again on each redraw (23 ms a
+  redraw in a debug build, on 658 orders). With redraws now rare this is
+  small; it grows with the order book and is the next thing to look at.
+- Date formatters are still created per row in about eighty places. Real,
+  small, mechanical; left for a pass of its own.
+- Showing the dashboard from a remembered sign-in before the user's record
+  has been fetched would save one round trip at every launch. It changes
+  what a deactivated user sees for a moment, so it is the owner's call.
+- NOT measured on a device, and the app was not run signed in. The cache
+  and redraw figures are from the simulator on this Mac, the network figures
+  from this Mac's own connection.
+
+## 2026-10-12 — Mac app, first batch: the figures that disagreed
+
+All in the Swift app (iPhone, iPad, Mac). Built for the Mac; the money and
+gross-profit unit tests pass. Not run signed in — the app cannot be signed in
+to from here — so each screen below is compiled and read, not watched.
+
+2026-10-12 — The Dashboard's Profit is gross profit less the month's
+expenses, as the web's tile is; it showed gross profit twice. On the Mac's
+banner it sits under Gross profit, and the sale section says how many orders
+the figure is the sum of — the web's four tiles (Sales, GP, Profit, Orders)
+inside the banner the Mac already has, rather than a second row of tiles.
+
+2026-10-12 — The Dashboard's Pending / Waiting / Packed count every order at
+that stage, whenever it was taken — "a reading of today" (2026-10-01). They
+counted only orders created this month, and Packed took in orders still
+being picked.
+
+2026-10-12 — The Dashboard's expense figure is bounded by local calendar
+dates at both ends (the fault the web fixed on 2026-10-01: local midnight on
+the 1st sent as a UTC instant is the evening before), is summed in fils, and
+puts an entry with no category under its type.
+
+2026-10-12 — An order's row shows what the web's row shows
+(`Order.listTotal`): the stored total once billed — imported invoices with no
+lines read AED 0.00 before — and what the lines come to until then. On the
+Mac's Orders table, Received is the confirmed money against the order and
+Balance what is left; they were placeholders (a billed order read as paid in
+full, anything else as all owing).
+- Read once for the billed orders in the list when it opens, and again when
+  that set changes. Not live: a payment confirmed while the list is open
+  shows on the next visit.
+
+2026-10-12 — The order-wide discount a manager sets on the web
+(`orders.discount_amount`) is read by the Swift app and comes off before VAT
+wherever it works a total out: approval, every save of an order, the row
+amount of an unbilled order, and the totals inside an order, which now show
+an "Order discount" row. Before today the app never read the column, so
+approving a discounted order on the Mac billed it at full price, and any
+save from the Mac (a pick tick included) rewrote its totals from the lines.
+- It cannot be SET from the Mac yet; that is on the list.
+- Not `Order.discountAmount`, which is the lines' own discounts added up
+  for display (2026-09-26) and is still never stored.
+- The totals inside the manager's order still say "VAT (5%)" and work at 5%;
+  the stored figures use the customer's zone rate, as before. Listed.
+
+2026-10-12 — A new expense is dated by the day it is where it was entered.
+`expenses.date` is a calendar date and the app sent an instant, so the
+database kept its UTC day: an imported row (read as local midnight) landed a
+day early, and so would an expense typed between midnight and 04:00.
+
+2026-10-12 — Reports. Sales is month to date, before VAT, by billing date,
+with every active salesman listed at zero if need be (it was all-time, VAT
+included, under a CSV heading that said "month to date"). The Balance sheet
+sums `subtotal`, not `total`, starts the month at local midnight, and has
+the web's CSV download. Customer Aging and Statement Summary use the same
+outstanding-invoice arithmetic as the Customers page, so goods returns come
+off.
+- Two faults found on the WEB while matching it, not fixed here (rule 1 —
+  raised with the owner): lib/queries/reports.ts dates the month's expenses
+  from the UTC date of local midnight, which here is the last day of the
+  month before; and it reads the month's order lines in one unpaged request.
+- Aging and Statement Summary still list inactive customers by name; the
+  web shows "—" or leaves them out. The Swift customer model has no
+  active flag. Listed.
+
+2026-10-12 — Invoices lists billed orders only, dated by billing date, with
+the web's four sorts in the same menu the Expense screen uses. It listed
+anything past pending, so orders still in the warehouse with no invoice
+number appeared. Download All still takes the newest 200.
+
+2026-10-12 — Signing in. A deactivated account is signed out and told so; it
+used to be let in. A session with no profile gets the web's "signed in, but
+no profile" explanation and a Sign out button instead of a silent login
+screen. A failed profile read says it failed. Return in the username field
+moves to the password, or signs in when there is one. The sidebar remembers
+being pinned (per device, like the browser) and hover no longer undoes a pin.
+- Deactivation takes effect at the next launch or sign-in; the web checks on
+  every request. Not changed.
+
+2026-10-12 — Expenses. The row shows the type and category as stored (a
+Fixed "internet" expense read "Variable / Other", from a built-in list of
+seven categories). Add, edit and import save the category as typed — they
+lowercased it, which split "Fuel" from "fuel" on the web's chart. A Notes
+field, as the web has. The summary card (2026-10-10) is on the app, read from
+the web's /api/expenses/summary like the Products card. The import follows
+the web's rules: a row needs a type, a category, an amount and a date.
+- Consequence: the import no longer guesses a type from the category, so a
+  sheet without a Type column imports nothing and says why. The sample file
+  has always asked for it.
+- The tabs became a pinned header so the card can sit above them and scroll
+  away; otherwise a phone had no room left for the list.
+- Rows the phone saved lowercase before today stay lowercase until edited.
+- Left for the owner, because matching the web would take something away:
+  the Expense screen's month picker (the web lists every date), the block on
+  future dates, and the amount having to be above zero.

@@ -596,7 +596,9 @@ export default function OrderDetail({
   // on record left out of both sides, GP % of the sale that has a cost. In
   // fils, so the row agrees with the list to the fil. Cost is null for anyone
   // but a manager, so for them every line is uncosted and the row is not drawn.
-  const orderGp = useMemo(() => {
+  // Plain arithmetic, not a hook: this sits below the loading return, and a
+  // hook here broke every order with React error 310 (2026-10-13).
+  const orderGp = (() => {
     const saleFils = toFils(Math.max(0, grossSubtotal - orderDiscountAmount));
     let costFils = 0;
     let noCostFils = 0;
@@ -608,7 +610,7 @@ export default function OrderDetail({
     const costed = Math.max(0, saleFils - noCostFils);
     if (costed === 0 && costFils === 0) return { gp: 0, costedSale: 0, uncostedSale: toAed(saleFils) };
     return { gp: toAed(costed - costFils), costedSale: toAed(costed), uncostedSale: toAed(saleFils - costed) };
-  }, [items, grossSubtotal, orderDiscountAmount]);
+  })();
   const fallbackBilled = billed(Math.max(0, grossSubtotal - orderDiscountAmount), FALLBACK_VAT_RATE);
   // Once accepted the order is the warehouse's: a line that is not on the
   // shelf can come off it and a forgotten one can go on, by the warehouse or

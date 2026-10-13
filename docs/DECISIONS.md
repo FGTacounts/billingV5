@@ -4567,3 +4567,7 @@ gp shows on the order. near the total. the percentage and amount").
 - Not touched: the GP row on the phone's New Order screen (NewOrderView),
   which is a draft being composed and still uses the old sum, and the
   Orders list's GP column on the Mac, still owed (docs/MAC-PARITY.md).
+- Same day, a fault in the first cut: the row's arithmetic was in a useMemo
+  placed below the order's loading return, so the hook count changed between
+  renders and every order opened to "This screen didn't load" (React error
+  310). It is plain arithmetic now; it is one order's lines, nothing to memo.

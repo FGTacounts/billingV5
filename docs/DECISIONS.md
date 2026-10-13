@@ -4542,3 +4542,28 @@ rule now as the web's button and the warehouse's on both apps.
   (Orders → the order → its stage) instead of answering the request.
 - A salesman who needs a change to an order still in the warehouse asks a
   manager, who can edit an order at any stage (2026-09-25).
+
+2026-10-13 — An order's Gross profit row shows the amount and the GP %, worked
+out as the Orders list and the Dashboard work it out (owner: "make sure the
+gp shows on the order. near the total. the percentage and amount").
+- Web, Orders → an order: the "Gross profit" row under Total now reads
+  "AED 1,234.56 · 32.5%" for a manager or admin. It showed only the amount,
+  and that amount counted a line with no cost on record as all profit — the
+  inconsistency 2026-10-06 left alone. It is now gpFilsByOrder's arithmetic,
+  done in fils in OrderDetail itself: the lines net of the order discount
+  less their cost, an uncosted line left out of both sides, GP % of the
+  costed sale. A " *" and a hover hint say when some of the sale was left
+  out; "—" with a hint when none of the order has a cost. The row is drawn
+  whenever the order has lines; for anyone but a manager every line comes
+  back uncosted, and the row is not drawn for them at all (isManager).
+- iPhone, iPad and Mac, the manager's order editor: its "Live GP" row had the
+  amount and a whole-number %, but the old sum (an uncosted line as all
+  profit, no order discount, % of the gross subtotal). It now uses the same
+  rule through Analytics.grossProfit(lines:saleFils:), split out of the
+  private grossProfitFils(of:) so the Dashboard, Sales and this row cannot
+  drift apart again; one decimal on the %, " *" and a line under it for
+  uncosted sale, "—" and "No cost recorded for this order" when nothing is.
+  The row stays where it was, between the order discount and VAT.
+- Not touched: the GP row on the phone's New Order screen (NewOrderView),
+  which is a draft being composed and still uses the old sum, and the
+  Orders list's GP column on the Mac, still owed (docs/MAC-PARITY.md).

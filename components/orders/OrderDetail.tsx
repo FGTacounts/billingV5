@@ -590,6 +590,25 @@ export default function OrderDetail({
   const orderDiscountAmount = order.discount_amount ?? 0;
   // Imported invoices carry no lines, so their stored subtotal is all there is.
   const grossSubtotal = items.length ? subtotal(items) : (order.subtotal ?? 0) + orderDiscountAmount;
+  // This order's gross profit, amount and %, the way the Orders list and the
+  // Dashboard work it out (gpFilsByOrder, lib/queries/dashboard.ts): the sale
+  // net of the order discount less the cost of the lines, a line with no cost
+  // on record left out of both sides, GP % of the sale that has a cost. In
+  // fils, so the row agrees with the list to the fil. Cost is null for anyone
+  // but a manager, so for them every line is uncosted and the row is not drawn.
+  const orderGp = useMemo(() => {
+    const saleFils = toFils(Math.max(0, grossSubtotal - orderDiscountAmount));
+    let costFils = 0;
+    let noCostFils = 0;
+    for (const it of items) {
+      const qty = effectiveQty(it);
+      if (it.unit_cost == null) noCostFils += Math.round(toFils(it.unit_price) * qty);
+      else costFils += Math.round(toFils(it.unit_cost) * qty);
+    }
+    const costed = Math.max(0, saleFils - noCostFils);
+    if (costed === 0 && costFils === 0) return { gp: 0, costedSale: 0, uncostedSale: toAed(saleFils) };
+    return { gp: toAed(costed - costFils), costedSale: toAed(costed), uncostedSale: toAed(saleFils - costed) };
+  }, [items, grossSubtotal, orderDiscountAmount]);
   const fallbackBilled = billed(Math.max(0, grossSubtotal - orderDiscountAmount), FALLBACK_VAT_RATE);
   // Once accepted the order is the warehouse's: a line that is not on the
   // shelf can come off it and a forgotten one can go on, by the warehouse or
@@ -1374,14 +1393,23 @@ export default function OrderDetail({
         )}
         <Row label={t("orders.vat")} value={formatAed(order.vat_amount || fallbackBilled.vatAmount)} />
         <Row label={t("common.total")} value={formatAed(order.total || fallbackBilled.total)} bold />
-        {isManager && items.some((it) => it.unit_cost != null) && (
+        {isManager && items.length > 0 && (
           <Row
             label={t("orders.grossProfit")}
-            value={formatAed(
-              grossSubtotal -
-                orderDiscountAmount -
-                items.reduce((s, it) => s + (it.unit_cost ?? 0) * effectiveQty(it), 0)
-            )}
+            value={
+              orderGp.costedSale > 0
+                ? `${formatAed(orderGp.gp)} · ${((orderGp.gp / orderGp.costedSale) * 100).toFixed(1)}%${
+                    orderGp.uncostedSale > 0 ? " *" : ""
+                  }`
+                : "—"
+            }
+            title={
+              orderGp.costedSale === 0
+                ? t("orders.gpNoCost")
+                : orderGp.uncostedSale > 0
+                  ? t("orders.gpPartial")
+                  : undefined
+            }
           />
         )}
       </div>
@@ -1674,9 +1702,9 @@ function Field({ label, value }: { label: string; value: string }) {
   );
 }
 
-function Row({ label, value, bold }: { label: string; value: string; bold?: boolean }) {
+function Row({ label, value, bold, title }: { label: string; value: string; bold?: boolean; title?: string }) {
   return (
-    <div className={`flex justify-between ${bold ? "font-bold text-headline" : "text-secondary"}`}>
+    <div className={`flex justify-between ${bold ? "font-bold text-headline" : "text-secondary"}`} title={title}>
       <span>{label}</span>
       <span className="tabular-nums">{value}</span>
     </div>

@@ -1651,3 +1651,22 @@ not have been written through in any case.
 Editor (role selector: `postgres`). It holds the same two lines for the
 phone, which saves articles straight to the database. If you already ran it
 earlier today, run it again — it was updated.
+
+# 2026-10-13 — Gross profit on an order, and salesmen's phone orders get their cost
+
+- **Orders → an order:** the Gross profit row under Total shows the amount
+  and the GP %, the same way the Orders list and the Dashboard work it out.
+  A ` *` means some lines had no cost on record; `—` means none did.
+- **Why so many orders showed `—`:** an order a salesman makes on the phone
+  was saved with no cost on its lines, because a salesman is not allowed to
+  read cost prices and the phone could only copy a cost it could read. Orders
+  made on the web were fine. 206 lines since 25 Sep were affected, and all of
+  their articles do have a cost.
+
+**Run `scratchpad/RUN-ME-36-order-lines-carry-the-cost.sql`** in Supabase →
+SQL Editor (role selector: `postgres`). From then on the database itself
+writes the article's cost onto every new line, from either app and for any
+user, and it fills the cost in on the 206 lines saved without one. After it
+runs, open an order again: the GP row and the per-line GP column come back,
+and the month's GP on the Dashboard and Sales will rise, because that sale
+now counts.

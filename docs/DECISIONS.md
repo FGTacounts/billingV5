@@ -4571,3 +4571,24 @@ gp shows on the order. near the total. the percentage and amount").
   placed below the order's loading return, so the hook count changed between
   renders and every order opened to "This screen didn't load" (React error
   310). It is plain arithmetic now; it is one order's lines, nothing to memo.
+
+2026-10-13 — The database snapshots the article's cost onto every new order
+line (RUN-ME-36). Owner: "The GP is not showing. and also product wise GP is
+not even there. it used to be there." The order's four lines had no
+unit_cost, though each article has a cost. Every order like it was made by a
+salesman on the phone since 3 Oct: the phone writes a line's cost only when
+the session is a manager's (AppDataManager.unitCostSnapshot, 2026-09-18),
+because a salesman may not read products.cost (RUN-ME-4); the web's create
+route fills it under the server key, so web orders were fine. 206 lines
+from 25 Sep to 12 Oct, all for costed articles; none for an uncosted one.
+- A BEFORE INSERT trigger on order_items, security definer, fills unit_cost
+  from products.cost when the line arrives without one and the article has
+  a cost above zero. A line sent with a cost keeps it. The salesman still
+  cannot read the figure back. This is the same snapshot the web route and
+  manager_edit_order already take, now taken in one place for every client.
+- The same SQL fills today's cost in on the 206 lines. For lines up to three
+  weeks old that is the cost of the day or within fils of it; a figure beats
+  leaving a fifth of October's sale out of GP. Nothing on orders is updated,
+  so no sale is re-dated.
+- The phone is not changed: it keeps sending a cost when it can, and the
+  trigger covers the rest. Until the SQL is run, nothing is different.

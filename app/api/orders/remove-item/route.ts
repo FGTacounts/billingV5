@@ -3,6 +3,7 @@ import { getAppUser } from "@/lib/auth";
 import { supabaseCaller } from "@/lib/supabase/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { recalcOrderTotals, stampEdited, managerEditOrder } from "@/lib/orders-server";
+import { isOwnOrderInPicking } from "@/lib/salesmanEdit";
 import { t } from "@/lib/i18n";
 
 export const runtime = "nodejs";
@@ -13,7 +14,9 @@ export const runtime = "nodejs";
 //
 // Once accepted (waiting / picking / packed) the order is in the warehouse's
 // hands, and a line that turns out not to be on the shelf has to be able to
-// come off it: a manager or the warehouse may remove one (owner, 2026-09-21).
+// come off it: a manager or the warehouse may remove one (owner, 2026-09-21),
+// and so may the salesman whose order it is, while it is in picking (owner,
+// 2026-10-12; lib/salesmanEdit.ts).
 // Stock is only deducted at approval, so at every one of these stages the row
 // simply goes. From approval on, stock has moved and an invoice exists, and
 // the order is corrected through the edit-request flow instead — except by
@@ -55,7 +58,7 @@ export async function POST(req: NextRequest) {
 
   const afterAcceptance = IN_THE_WAREHOUSE.includes(order.status);
   if (afterAcceptance) {
-    if (!isManager && user.role !== "warehouse") {
+    if (!isManager && user.role !== "warehouse" && !isOwnOrderInPicking(order, user)) {
       return NextResponse.json({ error: t("common.warehouseOrManagerAccessRequired") }, { status: 403 });
     }
   } else if (!BEFORE_ACCEPTANCE.includes(order.status)) {

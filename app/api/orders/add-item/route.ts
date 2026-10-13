@@ -4,6 +4,7 @@ import { supabaseCaller } from "@/lib/supabase/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { recalcOrderTotals, stampEdited, managerEditOrder, type ManagerChange } from "@/lib/orders-server";
 import { resolveLinePrice } from "@/lib/money";
+import { isOwnOrderInPicking } from "@/lib/salesmanEdit";
 import { t } from "@/lib/i18n";
 
 export const runtime = "nodejs";
@@ -16,7 +17,8 @@ export const runtime = "nodejs";
 // one. Draft/pending: your own order unless you are a manager. Waiting /
 // picking / packed: a manager or the warehouse (owner, 2026-09-21) — stock
 // is only deducted at approval, so a line added at those stages is deducted
-// with the rest. From approval on stock and an invoice are in play and the
+// with the rest. Picking is also the salesman's, for their own order
+// (owner, 2026-10-12; lib/salesmanEdit.ts). From approval on stock and an invoice are in play and the
 // change goes through the edit-request flow instead — except for a manager
 // or admin, who may add a line at any stage (owner, 2026-09-25), through
 // manager_edit_order, which takes its stock off the shelf if approval has
@@ -57,7 +59,7 @@ export async function POST(req: NextRequest) {
   // itself. The stage rules are for everyone else.
   if (!isManager) {
     if (afterAcceptance) {
-      if (user.role !== "warehouse") {
+      if (user.role !== "warehouse" && !isOwnOrderInPicking(order, user)) {
         return NextResponse.json({ error: t("common.warehouseOrManagerAccessRequired") }, { status: 403 });
       }
     } else if (!BEFORE_ACCEPTANCE.includes(order.status)) {

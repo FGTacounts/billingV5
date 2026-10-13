@@ -1,14 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAppUser } from "@/lib/auth";
 import { supabaseCaller } from "@/lib/supabase/server";
+import { supabaseAdmin } from "@/lib/supabase/admin";
 import { recalcOrderTotals, stampEdited, managerEditOrder } from "@/lib/orders-server";
 import { lineDiscountPrice, lineDiscountPercent, priceBeforeDiscount as basePrice } from "@/lib/money";
+import { isOwnOrderInPicking } from "@/lib/salesmanEdit";
 import { t } from "@/lib/i18n";
 
 export const runtime = "nodejs";
 
 // Edits a line item's quantity/price. A salesman: their own order, while it
-// is draft/pending. A manager or admin: any order at any stage (owner,
+// is draft/pending or in picking (lib/salesmanEdit.ts). A manager or admin: any order at any stage (owner,
 // 2026-09-25), through the database's manager_edit_order, which moves the
 // stock and the totals with the line. Until RUN-ME-28 has been run a manager
 // falls back to the draft/pending rule.
@@ -128,28 +130,34 @@ export async function POST(req: NextRequest) {
     if (!result.missing) return NextResponse.json({ error: result.message }, { status: 400 });
   }
 
-  if (!["draft", "pending"].includes(order.status)) {
+  const ownPicking = isOwnOrderInPicking(order, user);
+  if (!["draft", "pending"].includes(order.status) && !ownPicking) {
     return NextResponse.json({ error: t("orders.noLongerEditableDirectly") }, { status: 409 });
   }
   if (!isManager && order.salesman_id !== user.id) {
     return NextResponse.json({ error: t("orders.onlyOwnOrders") }, { status: 403 });
   }
+  // Past acceptance the write goes through the admin key, as add-item and
+  // remove-item's do: who and which stage were checked just above, and a
+  // write the database declines would otherwise report success with nothing
+  // changed.
+  const writer = ownPicking ? supabaseAdmin() : supabase;
 
   const patch: Record<string, unknown> = {};
   if (qty !== undefined) patch.ordered_qty = qty;
   if (price !== undefined) patch.unit_price = price;
   if (base !== undefined) patch.price_before_discount = base;
 
-  const { error: updateErr } = await supabase.from("order_items").update(patch).eq("id", itemId);
+  const { error: updateErr } = await writer.from("order_items").update(patch).eq("id", itemId);
   if (updateErr) return NextResponse.json({ error: updateErr.message }, { status: 400 });
 
   // The same recompute add-item and remove-item do — one copy of it, in
   // lib/orders-server.ts, so the three routes cannot drift apart.
-  await recalcOrderTotals(supabase, order.id, order.customer_id);
+  await recalcOrderTotals(writer, order.id, order.customer_id);
 
   // Somebody changed what is on this order, so it carries the Edited stamp
   // (RUN-ME-19). Best-effort: an un-migrated database still saves the edit.
-  const stamped = await stampEdited(supabase, order.id, user.id);
+  const stamped = await stampEdited(writer, order.id, user.id);
 
   return NextResponse.json({ ok: true, edited_stamped: stamped });
 }

@@ -4406,3 +4406,139 @@ the web's rules: a row needs a type, a category, an amount and a date.
 - Left for the owner, because matching the web would take something away:
   the Expense screen's month picker (the web lists every date), the block on
   future dates, and the amount having to be above zero.
+
+## 2026-10-12 — The app opens on a remembered sign-in
+
+Owner, from the list of what the speed pass left alone: "Showing the
+dashboard from a remembered sign-in." Asked what should happen with no
+signal, when the account check cannot run: "7 days".
+
+2026-10-12 — The app keeps the server's last answer to "whose session is
+this" — the `users` row — and when it was given (`RememberedSignIn`, an
+encrypted file like the other caches). A launch that finds a session and a
+kept answer for the same account opens on that person's dashboard and starts
+the sync at once. It used to show the sign-in screen until the row had been
+read, a round trip on every launch before anything else began.
+- The check is not skipped, it is no longer waited for. It runs behind the
+  dashboard and does what it did: a deactivated account is signed out and
+  told so, a session with no profile gets the "no profile" card. This is the
+  2026-10-12 "Signing in" decision unchanged, and deactivation still takes
+  effect at the next launch.
+- Consequence accepted by the owner: a deactivated person sees their
+  dashboard, with what was already on the phone, until the check answers —
+  normally under a second.
+- A role or name changed since last time: the dashboard opens as the old one
+  and switches when the check answers. A sync that began under the old role
+  is run again under the new one (`syncAll`), because the product columns
+  read depend on the role. Without that, the race closed this morning — a
+  manager's product list read without the manager's figures — would have
+  come back for exactly this case.
+
+2026-10-12 — With no connection the kept answer is good for seven days from
+the last time the server confirmed it (owner). Inside that, the person is let
+in to what the phone already holds, and the check is made as soon as the
+connection returns or the app next comes to the front. Past it, the sign-in
+screen and "Connection error", as before.
+- This is new: until today a launch with no signal stopped at the sign-in
+  screen for everyone. The offline pick queue already existed for a picker
+  who loses signal with the app open; this is the same person opening it
+  there.
+- Every successful check moves the seven days forward, so a phone in daily
+  use never reaches the limit.
+- The limit is applied at launch. An app left open and offline past seven
+  days is not thrown out until it is next opened.
+- A confirmation dated in the future — a clock set back to stretch the seven
+  days — is not trusted. A clock set back by less than that cannot be told
+  from an honest one, offline.
+- The kept answer decides which dashboard is drawn before the server
+  answers, and nothing else. What a session may read or write is the
+  database's decision. It is removed on sign-out, on deactivation and on "no
+  profile".
+
+2026-10-12 — Not changed: `AppDataManager.resolveCurrentUser` still reads the
+same row for itself at launch, so the row is read twice. It also does not
+look at `is_active`, so a deactivated account's sync can start before
+BillingApp signs it out. Both were so before today.
+
+2026-10-12 — NOT tested signed in. The rule (same account, active, within
+seven days, a future date refused) and the file are unit-tested; the app
+builds for the iPhone simulator and for Mac Catalyst and was launched signed
+out. Opening on a remembered sign-in, the offline launch and the deactivated
+case need a real account, which this session does not have.
+
+## 2026-10-12 — Three differences the owner settled
+
+Asked which app should give way on each; the owner: "1 - use the web.
+2 - make it like that of the web. 3 - change for the web." The third was
+asked again as a choice, since it reads two ways, and the answer was
+"Change the web".
+
+2026-10-12 — Logging a payment on the phone and the Mac takes the discount
+as the web does: an AED amount on top of the cash, for a manager or an admin.
+It was a 0–50% stepper carved out of the amount typed, and an admin did not
+get it. Amount 1000 with discount 100 now stores cash 1000, discount 100 and
+settles 1100 of invoices on both apps; the app used to store cash 900 and
+settle 1000. The allocation functions themselves did not change.
+- The field is always shown, like the goods-return field beside it; the web
+  hides its own behind "+ Add discount".
+- The "Net amount" row went with the stepper: it had nothing left to say.
+- The web's "exceeds outstanding" hint was added under the amount.
+- Editing a payment already took an AED discount on both; untouched.
+
+2026-10-12 — The phone's and the Mac's Expense screen lists every expense,
+as the web's does. The month picker is gone. "Total:" above the list is the
+sum of the rows listed (every date, after the tab, the type filter and the
+search), and the donut is always this month — on both tabs, whatever is
+filtered. Future dates are allowed.
+- The app reads every expense in pages. The WEB's list, donut and export
+  are one unpaged read each and stop at the newest 1,000 expenses; not
+  copied, and not fixed here — raised with the owner.
+- The export is every expense, not the filtered month, because the web's is.
+- Row dates carry the year now that the list spans years.
+- Still as it was: an amount has to be above zero (not asked), and the empty
+  donut is drawn where the web hides the card.
+
+2026-10-12 — On the web a salesman can change the lines of their own order
+while it is in picking, and can ask for an edit on their own approved order.
+The phone always allowed both; the web stopped a salesman at pending.
+Picking is where an order lands when a manager grants an edit request, so
+this is what makes a granted request usable from the browser.
+- One rule in lib/salesmanEdit.ts, used by update-item, add-item,
+  remove-item and the order screen. Quantity, add and remove only: a price
+  is still a manager's on the web, as it was at pending.
+- update-item writes with the admin key for this case, after checking who
+  is asking, whose order it is and its stage — as add-item and remove-item
+  already do past acceptance. A write the database declined would otherwise
+  report success with nothing changed.
+- The salesman's button is always "Request edit", whatever the admin's
+  switch says: reopening without approval puts stock back and clears an
+  invoice's totals, which the switch hands to the warehouse, not to a
+  salesman (2026-09-19, which left exactly this for the owner).
+- NOT copied from the phone, and it is a fault there: the phone also lets a
+  salesman request an edit on an order that is accepted, waiting or packed.
+  Granting any edit request puts the order's stock back on the shelf — on
+  both apps — because once the status is `edit_requested` nothing records
+  what it was before. For an order that was never approved, no stock had
+  been taken, so the grant adds stock that never left, and a later approval
+  takes it once: the shelf ends up over by the order's quantities. Denying
+  such a request marks the order approved without billing it. The web
+  offers the request on approved orders only, where both outcomes are
+  right. The phone is as it was; raised with the owner (rule 1).
+
+2026-10-12 — The phone's salesman "Request Edit" is offered on an approved
+order only (owner: "yes", to the fault described above). It was also offered
+on accepted, waiting and packed orders, where a grant added stock that had
+never left the shelf and a denial marked the order approved unbilled. Same
+rule now as the web's button and the warehouse's on both apps.
+- It is always a request to a manager, whatever the admin's switch says.
+  With "order edits need approval" off, the phone's button read "Reopen for
+  Edit" and called reopen_order_without_approval, which the database refuses
+  to a salesman (RUN-ME-26), so it failed every time. This is what
+  2026-09-19 above said the phone did; the code had drifted from it.
+- Nothing is done about a request already waiting. If the Inbox holds an
+  edit request a salesman made on an order that had not been approved,
+  granting or denying it still goes wrong, because nothing on the row says
+  what stage it came from. A manager can move such an order on the web
+  (Orders → the order → its stage) instead of answering the request.
+- A salesman who needs a change to an order still in the warehouse asks a
+  manager, who can edit an order at any stage (2026-09-25).

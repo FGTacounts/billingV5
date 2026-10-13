@@ -30,6 +30,7 @@ import {
 import { requestExtension } from "@/lib/queries/payments";
 import { deleteOrder } from "@/lib/queries/orders";
 import { billingDateColumn } from "@/lib/billingDate";
+import { isOwnOrderInPicking } from "@/lib/salesmanEdit";
 import { invalidateOrderFacts } from "@/lib/queries/dashboard";
 import { invalidateAging } from "@/lib/queries/aging";
 import { fetchSalesmen } from "@/lib/queries/expenses";
@@ -570,9 +571,12 @@ export default function OrderDetail({
   // 2026-09-25) — the server moves stock and totals with each change.
   const managerEdits = isManager && order.status !== "cancelled";
   // §Next Updates Orders: "make order data editable" — a salesman's own
-  // order while draft/pending; a manager's at any stage (above).
+  // order while draft/pending, or in picking (lib/salesmanEdit.ts); a
+  // manager's at any stage (above).
   const canEditItems =
-    managerEdits || (["draft", "pending"].includes(order.status) && order.salesman_id === user.id);
+    managerEdits ||
+    (["draft", "pending"].includes(order.status) && order.salesman_id === user.id) ||
+    isOwnOrderInPicking(order, user);
   // The Picked column: a manager sees and changes what is picked at every
   // stage, and the warehouse while it picks. The tick picks the whole line;
   // the quantity box beside it, while picking, is for a short pick. Without
@@ -1997,6 +2001,23 @@ function OrderActions({
           </Button>
         )}
       </>
+    );
+  }
+
+  // The salesman asks for an edit to their own approved order, as on the
+  // phone (owner, 2026-10-12). Always a request, whatever the admin's switch
+  // says: reopening puts stock back and clears an invoice's totals, and the
+  // switch hands that to the warehouse, not to a salesman (2026-09-19).
+  if (order.status === "approved" && isSalesman && order.salesman_id === user.id) {
+    return (
+      <Button
+        tier="plain"
+        disabled={busy}
+        onClick={() => run(() => requestEdit(supabase, order.id, user.id))}
+        className="flex items-center gap-1.5"
+      >
+        <FileEdit size={15} /> {t("orders.requestEdit")}
+      </Button>
     );
   }
 

@@ -1,5 +1,95 @@
 # What changed, and what you need to do
 
+## 2026-10-12 — The phone's Request Edit is for approved orders only
+
+Nothing to run in Supabase. The app needs a new build. The web is unchanged.
+
+You said yes to this. A salesman's **Request Edit** button on the phone and
+the Mac now appears on an approved order only — the same as the web and the
+same as the warehouse's button. It used to appear on orders still waiting or
+packed, where granting the request pushed the stock count up and denying it
+marked the order approved without billing it.
+
+Two things to know:
+
+- **A request already sitting in the Inbox is not fixed by this.** If a
+  salesman asked for an edit on an order that had not been approved yet,
+  do not press Grant or Deny on it — open the order on the web and move it
+  to the right stage yourself.
+- With "order edits need approval" switched off in Settings, the salesman's
+  button used to say "Reopen for Edit" and then fail. It now always sends a
+  request to a manager, which works.
+
+Built for the Mac. Not watched running signed in.
+
+## 2026-10-12 — Your three answers, done
+
+Nothing to run in Supabase. **The web needs deploying and the app needs a new
+build.**
+
+1. **Payment discount — the app now works like the web.** When you log a
+   payment on the phone or the Mac, Discount is an AED amount on top of the
+   cash, for managers and admins. Amount 1000, discount 100 settles 1100 of
+   invoices. Before, the app took a percentage out of the 1000.
+2. **Expenses — the app now lists everything, like the web.** No month
+   picker. The total above the list is what is listed; the ring is always
+   this month. Future dates are allowed.
+3. **Salesman edits — the web now allows what the app does.** On the web a
+   salesman can change quantities, add and remove lines on their own order
+   while it is being picked, and gets a "Request edit" button on their own
+   approved order.
+
+**One thing I found and did not change — please decide.** On the phone a
+salesman can also press Request Edit on an order that is still *waiting or
+packed* (not yet approved). If a manager grants that, the stock count goes
+**up** by the order's quantities although nothing had been taken off the
+shelf; if they deny it, the order is marked approved without being billed.
+This is how the phone has always behaved. I did not copy it to the web (the
+web's button is on approved orders only, where it works correctly). I
+suggest limiting the phone's button to approved orders too — say the word.
+
+**Also noticed on the web:** the Expenses page and its export stop at the
+newest 1,000 expenses. The app does not. Say if you want the web fixed.
+
+**Checked how:** web typecheck and build pass; the app is built for the Mac
+and the payment-allocation, money and gross-profit tests pass. Not watched
+running signed in.
+
+## 2026-10-12 — The app opens straight to the dashboard
+
+Nothing to run in Supabase. The app needs a new build (iPhone, iPad and Mac
+are one build). The web is unchanged.
+
+- **No more sign-in screen flashing by at launch.** If you were signed in
+  last time, the app opens on your dashboard at once, with what the phone
+  already holds, and starts syncing immediately. It still checks your
+  account with the server every time it opens — it just no longer makes you
+  wait for the answer.
+- **The first launch after installing this build is the old way.** The app
+  has nothing remembered yet. From the second launch on it is instant.
+- **No signal: 7 days, as you asked.** If the phone has no connection when
+  the app opens, the person is let in as long as the server confirmed their
+  account within the last 7 days. The check runs as soon as the connection
+  is back. After 7 days without a successful check, it is the sign-in screen
+  until there is a connection. Until today nobody could open the app at all
+  without a signal.
+- **Deactivating someone** works as before: the next time their app opens
+  with a connection, they are signed out and told the account is
+  deactivated. The difference is that their dashboard, with what was already
+  on the phone, shows for a moment first. A phone kept offline locks itself
+  7 days after the account was last confirmed.
+
+**Please try these three before it goes to everyone** — I could not, because
+they need a real account:
+
+1. Sign in, close the app completely, open it again: it should open on the
+   dashboard with no sign-in screen.
+2. Turn on aeroplane mode, close the app completely, open it: it should
+   still open on the dashboard. Turn aeroplane mode off: it should sync.
+3. Deactivate a test user on the web, then open the app on that user's
+   phone: the dashboard shows briefly, then the sign-in screen with "Account
+   is deactivated".
+
 ## 2026-10-12 — The Mac app is being brought level with the web
 
 You asked for everything on the web to be in the Mac app and to work the

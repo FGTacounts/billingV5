@@ -44,8 +44,8 @@ Sizes: S an hour or two, M about a day, L several days.
       number, salesman's phone, payment terms, logo, A4. M via the web's
       `/api/invoice-pdf`
 - [x] Invoices list: billed orders, billing date, four sorts. (2026-10-12)
-- [ ] Payment discount: a percentage carved out of the amount (Mac) against
-      an AED amount on top (web); admin excluded on the Mac. S
+- [x] Payment discount is an AED amount on top, for manager and admin.
+      (2026-10-12)
 - [ ] Collecting from a customer's sheet uses a second payment form that
       fills from the invoice total, not the balance. M
 - [x] Expenses: type and category as stored; category saved as typed; a new
@@ -91,8 +91,9 @@ Sizes: S an hour or two, M about a day, L several days.
 - [x] Expenses: summary card. (2026-10-12)
 - [x] Expenses: Notes field; CSV export with type, category and notes.
       (2026-10-12)
-- [ ] Expenses: the web lists every date and allows future dates and a zero
-      amount; the Mac has a month picker and blocks both. Owner to decide. S
+- [x] Expenses lists every date; future dates allowed. (2026-10-12)
+- [ ] Expenses: the web accepts a zero amount; the Mac asks for one above
+      zero. Not asked. S
 - [ ] Sales: goal table with every salesman, sort, bonus and special offer;
       team target; trend with "today vs same day"; custom date range;
       trailing twelve months. M
@@ -130,6 +131,9 @@ Sizes: S an hour or two, M about a day, L several days.
 
 - [x] A deactivated account is refused at sign-in; a session with no profile
       is told so and offered Sign out. (2026-10-12)
+
+- [x] The phone's salesman Request Edit is on approved orders only and is
+      always a request. (2026-10-12)
 
 ## 3. Mac-only awkwardness
 

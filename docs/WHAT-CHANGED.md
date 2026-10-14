@@ -1,5 +1,28 @@
 # What changed, and what you need to do
 
+## 2026-10-14 — Payment terms on one order
+
+**Run `scratchpad/RUN-ME-37-order-payment-terms.sql` in Supabase** (it adds
+one column; nothing else changes). The web needs deploying and the app needs
+a new build.
+
+A manager can now write payment terms on a single order, and that order's
+invoice PDF prints them under **Payment Terms**.
+
+- **Web:** open the order → Edit order details → **Payment terms**.
+- **Phone / Mac:** open the order in the manager's editor → **PAYMENT
+  TERMS**, under PO number, then Save.
+- Leave it empty and the invoice prints the standard **INVOICE TO 30 DAYS**,
+  as every invoice does today. Up to 40 characters; longer terms wrap to two
+  lines in the box.
+- The **Due Date** on the invoice does not change with it — it still comes
+  from the customer's overdue days. Say if you want it to follow the terms.
+- The phone's PDF and Excel used to leave the Payment Terms box empty; they
+  now print the terms, like the web.
+
+Until the SQL is run the field shows "not available yet" on the web and is
+hidden in the app.
+
 ## 2026-10-12 — The phone's Request Edit is for approved orders only
 
 Nothing to run in Supabase. The app needs a new build. The web is unchanged.

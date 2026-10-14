@@ -3,6 +3,7 @@ import { getAppUser } from "@/lib/auth";
 import { supabaseCaller } from "@/lib/supabase/server";
 import { stampEdited } from "@/lib/orders-server";
 import { t } from "@/lib/i18n";
+import { PAYMENT_TERMS_MAX } from "@/lib/invoice-template";
 
 export const runtime = "nodejs";
 
@@ -10,19 +11,22 @@ export const runtime = "nodejs";
 // (invoice number, customer, salesman, PO number editable)" — Manager-only,
 // works regardless of order status (unlike the draft/pending-only line-item
 // edit route). po_number degrades gracefully until its migration is run.
+// payment_terms (RUN-ME-37) is the order's own Payment Terms on its invoice;
+// empty means the standard terms.
 export async function POST(req: NextRequest) {
   const user = await getAppUser();
   if (!user || (user.role !== "manager" && user.role !== "admin")) {
     return NextResponse.json({ error: t("common.managerAccessRequired") }, { status: 403 });
   }
 
-  const { orderId, invoice_number, customer_id, salesman_id, po_number, billed_at } = (await req.json()) as {
+  const { orderId, invoice_number, customer_id, salesman_id, po_number, billed_at, payment_terms } = (await req.json()) as {
     orderId: string;
     invoice_number?: string | null;
     customer_id?: string | null;
     salesman_id?: string | null;
     po_number?: string | null;
     billed_at?: string;
+    payment_terms?: string | null;
   };
   if (!orderId) return NextResponse.json({ error: t("orders.orderIdRequired") }, { status: 400 });
 
@@ -30,6 +34,13 @@ export async function POST(req: NextRequest) {
   if (invoice_number !== undefined) patch.invoice_number = invoice_number || null;
   if (customer_id !== undefined) patch.customer_id = customer_id || null;
   if (po_number !== undefined) patch.po_number = po_number || null;
+  if (payment_terms !== undefined) {
+    const terms = (payment_terms ?? "").trim();
+    if (terms.length > PAYMENT_TERMS_MAX) {
+      return NextResponse.json({ error: t("orders.paymentTermsTooLong", { max: PAYMENT_TERMS_MAX }) }, { status: 400 });
+    }
+    patch.payment_terms = terms || null;
+  }
   // The billing date (RUN-ME-27). The database marks a date written here as
   // set by hand, so later status changes leave it alone — which is why the
   // form only sends it when it was actually changed.
@@ -70,6 +81,11 @@ export async function POST(req: NextRequest) {
   // is refused as PGRST204, a read as 42703, and both name it.
   if (error && billed_at !== undefined && /billed_at/.test(error.message)) {
     return NextResponse.json({ error: t("orders.billingDateNeedsSql") }, { status: 409 });
+  }
+  // The form sends terms only when they were changed, so on a database
+  // without RUN-ME-37 nothing else is held back by this.
+  if (error && payment_terms !== undefined && /payment_terms/.test(error.message)) {
+    return NextResponse.json({ error: t("orders.paymentTermsNeedsSql") }, { status: 409 });
   }
   if (error && po_number !== undefined) {
     // po_number column may not exist yet — retry without it.

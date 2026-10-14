@@ -2,7 +2,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AppUser } from "@/lib/types/db";
 import type { JobKind } from "@/lib/jobs";
-import { fetchOrders, fetchOrderItems } from "@/lib/queries/orders";
+import { fetchOrders, fetchOrderItems, fetchPaymentTerms } from "@/lib/queries/orders";
 import { buildInvoicePdf } from "@/lib/pdf/invoice";
 import { invoiceFileBase } from "@/lib/invoice-template";
 import { fetchProductsServer } from "@/lib/products-server";
@@ -93,6 +93,8 @@ export async function buildInvoiceSlice(
   // invoice layout needs; the ids decide which of them this slice is for.
   const all = await fetchOrders(db, { status: BILLED_STATUSES, limit: MAX_INVOICE_ORDERS });
   const byId = new Map(all.map((o) => [o.id, o]));
+  // Each order's own payment terms, which the list query does not carry.
+  const terms = await fetchPaymentTerms(db, orderIds);
 
   const taken = new Set(usedNames);
   const files: InvoiceFile[] = [];
@@ -104,7 +106,12 @@ export async function buildInvoiceSlice(
     if (!order) continue;
 
     const items = await fetchOrderItems(db, order.id);
-    const bytes = await buildInvoicePdf(order, items, "tax", settings?.vat_rate);
+    const bytes = await buildInvoicePdf(
+      { ...order, payment_terms: terms.get(order.id) ?? null },
+      items,
+      "tax",
+      settings?.vat_rate
+    );
     const base = invoiceFileBase(order.invoice_number, order.billed_at ?? order.updated_at ?? order.created_at);
     let name = `${base}.pdf`;
     while (taken.has(name)) name = `${base}-${order.id.slice(0, 6)}.pdf`;

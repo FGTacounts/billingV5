@@ -429,7 +429,43 @@ export async function fetchOrder(
   if (error) throw error;
   if (!data) return null;
   const [row] = await attachRelations(supabase, [data as unknown as Order]);
-  return { ...row, ...(await fetchManagerFields(supabase, id)) };
+  const [managerFields, terms] = await Promise.all([
+    fetchManagerFields(supabase, id),
+    fetchPaymentTerms(supabase, [id]),
+  ]);
+  return { ...row, ...managerFields, payment_terms: terms.get(id) ?? null };
+}
+
+// Remembered after the first refusal: before RUN-ME-37 the column is not
+// there, and every invoice would otherwise pay for a request it knows fails.
+let paymentTermsMissing = false;
+
+/**
+ * Each order's own payment terms (RUN-ME-37), by order id. Only orders a
+ * manager has written terms on are in the map. Read on its own so a
+ * database without the column still prints every invoice, with the
+ * standard terms.
+ */
+export async function fetchPaymentTerms(
+  supabase: SupabaseClient,
+  orderIds: string[]
+): Promise<Map<string, string>> {
+  const terms = new Map<string, string>();
+  if (paymentTermsMissing || orderIds.length === 0) return terms;
+  // In slices: a long list of ids in one URL is refused for its length.
+  for (let i = 0; i < orderIds.length; i += 200) {
+    const { data, error } = await supabase
+      .from("orders")
+      .select("id, payment_terms")
+      .in("id", orderIds.slice(i, i + 200))
+      .not("payment_terms", "is", null);
+    if (error) {
+      if (/payment_terms/.test(error.message ?? "")) paymentTermsMissing = true;
+      return terms;
+    }
+    for (const r of data ?? []) terms.set(r.id as string, r.payment_terms as string);
+  }
+  return terms;
 }
 
 // Remembered after the first refusal, like the Edited stamp above: before

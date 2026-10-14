@@ -2,7 +2,7 @@ import "server-only";
 import { readFile } from "fs/promises";
 import path from "path";
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
-import { InvoiceTemplate, invoiceDate, amountInWordsInvoice, dueDate } from "@/lib/invoice-template";
+import { InvoiceTemplate, invoiceDate, amountInWordsInvoice, dueDate, paymentTermsFor } from "@/lib/invoice-template";
 import type { OrderRow, OrderItemRow } from "@/lib/queries/orders";
 import { FALLBACK_VAT_RATE } from "@/lib/money";
 import { toFils, toAed, priceBeforeDiscount } from "@/lib/money";
@@ -340,6 +340,28 @@ function drawTableRow(ctx: Ctx, y: number, line: LineCalc): number {
   return y - rowH;
 }
 
+// The order's payment terms in their cell of the salesman row. The standard
+// terms fit on one line like the cells beside them; a manager's own terms
+// (up to 40 characters, RUN-ME-37) may take two smaller lines instead of
+// running into the VAT cell.
+function drawPaymentTerms(ctx: Ctx, terms: string, x: number, w: number, rowTop: number) {
+  const { page, font } = ctx;
+  if (font.widthOfTextAtSize(terms, 7.5) <= w) {
+    page.drawText(terms, { x, y: rowTop - 13, size: 7.5, font, color: INK });
+    return;
+  }
+  let size = 6.5;
+  let lines = wrapText(terms, font, size, w);
+  while (size > 5 && (lines.length > 2 || lines.some((l) => font.widthOfTextAtSize(l, size) > w))) {
+    size -= 0.5;
+    lines = wrapText(terms, font, size, w);
+  }
+  if (lines.length > 2) lines = [lines[0], lines.slice(1).join(" ")];
+  lines.forEach((line, i) => {
+    page.drawText(line, { x, y: rowTop - 8 - i * (size + 1), size, font, color: INK });
+  });
+}
+
 export async function buildInvoicePdf(
   order: OrderRow,
   items: OrderItemRow[],
@@ -389,13 +411,14 @@ export async function buildInvoicePdf(
     order.salesman?.phone ?? "",
     order.po_number ?? "",
     "",
-    InvoiceTemplate.paymentTerms,
+    "", // Payment Terms — drawn below, it may need two lines
     order.customer?.vat_number ? `${(vatRate * 100).toFixed(0)}%` : "",
   ];
   const salesRowTop = y - salesHeaderH;
   salesValues.forEach((v, i) => {
     ctx.page.drawText(v, { x: MARGIN + i * salesW + 4, y: salesRowTop - 13, size: 7.5, font, color: INK });
   });
+  drawPaymentTerms(ctx, paymentTermsFor(order), MARGIN + 4 * salesW + 4, salesW - 8, salesRowTop);
   ctx.page.drawRectangle({
     x: MARGIN,
     y: salesRowTop - salesValueH,

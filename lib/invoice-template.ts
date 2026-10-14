@@ -23,6 +23,13 @@ export const InvoiceTemplate = {
   footerNote2: t("documents.invoiceFooterGeneratedNote"),
 };
 
+// What an order's invoice prints under Payment Terms: the terms a manager
+// wrote on that order (RUN-ME-37), or the standard ones when none were.
+export const PAYMENT_TERMS_MAX = 40;
+export function paymentTermsFor(order: { payment_terms?: string | null }): string {
+  return order.payment_terms?.trim() || InvoiceTemplate.paymentTerms;
+}
+
 export function invoiceDate(iso: string): string {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return iso;

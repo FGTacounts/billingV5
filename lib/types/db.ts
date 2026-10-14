@@ -223,6 +223,9 @@ export interface Order {
   // May not exist until scratchpad/customer-prices-rls-fix.sql is run —
   // optional so a missing column never breaks an order fetch.
   po_number?: string | null;
+  // The order's own payment terms (RUN-ME-37); null prints the standard
+  // terms. Read only for a single order and for the invoice export.
+  payment_terms?: string | null;
   rejected_at: string | null;
   // The billing date. Every order fetched through lib/queries/orders.ts
   // carries it: orders.billed_at once RUN-ME-27 has been run, updated_at

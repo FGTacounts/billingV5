@@ -30,6 +30,7 @@ import {
 import { requestExtension } from "@/lib/queries/payments";
 import { deleteOrder } from "@/lib/queries/orders";
 import { billingDateColumn } from "@/lib/billingDate";
+import { InvoiceTemplate, PAYMENT_TERMS_MAX } from "@/lib/invoice-template";
 import { isOwnOrderInPicking } from "@/lib/salesmanEdit";
 import { invalidateOrderFacts } from "@/lib/queries/dashboard";
 import { invalidateAging } from "@/lib/queries/aging";
@@ -1482,6 +1483,11 @@ function EditOrderFieldsSheet({
   const billedAtOriginal = order.billed_at ?? order.updated_at;
   const [billedOn, setBilledOn] = useState(localDateInput(billedAtOriginal));
   const [billedSupported, setBilledSupported] = useState(false);
+  // The order's own payment terms (RUN-ME-37). Empty prints the standard
+  // terms. Disabled, like the PO number, until the column exists.
+  const termsOriginal = order.payment_terms ?? "";
+  const [paymentTerms, setPaymentTerms] = useState(termsOriginal);
+  const [termsSupported, setTermsSupported] = useState(false);
 
   useEffect(() => {
     const supabase = supabaseBrowser();
@@ -1496,6 +1502,12 @@ function EditOrderFieldsSheet({
         if (error) { setPoSupported(false); return; }
         setPoNumber((data as { po_number: string | null } | null)?.po_number ?? "");
       });
+    supabase
+      .from("orders")
+      .select("payment_terms")
+      .eq("id", order.id)
+      .maybeSingle()
+      .then(({ error }) => setTermsSupported(!error));
   }, [order.id]);
 
   useEffect(() => {
@@ -1520,6 +1532,9 @@ function EditOrderFieldsSheet({
           customer_id: customerId || null,
           ...(salesmanId ? { salesman_id: salesmanId } : {}),
           ...(poSupported ? { po_number: poNumber.trim() || null } : {}),
+          ...(termsSupported && paymentTerms.trim() !== termsOriginal.trim()
+            ? { payment_terms: paymentTerms.trim() || null }
+            : {}),
           // Sent only when it was actually changed: writing it at all marks
           // the date as set by hand, which stops status changes moving it.
           ...(billedSupported && billedOn && billedOn !== localDateInput(billedAtOriginal)
@@ -1562,6 +1577,21 @@ function EditOrderFieldsSheet({
         {!poSupported && t("orders.notAvailableYet")}
       </Label>
       <TextInput value={poNumber} onChange={(e) => setPoNumber(e.target.value)} disabled={!poSupported} />
+
+      <Label>
+        {t("orders.paymentTerms")}
+        {!termsSupported && t("orders.notAvailableYet")}
+      </Label>
+      <TextInput
+        value={paymentTerms}
+        onChange={(e) => setPaymentTerms(e.target.value)}
+        placeholder={InvoiceTemplate.paymentTerms}
+        maxLength={PAYMENT_TERMS_MAX}
+        disabled={!termsSupported}
+      />
+      <p className="text-caption text-secondary mt-1">
+        {t("orders.paymentTermsHint", { standard: InvoiceTemplate.paymentTerms })}
+      </p>
 
       <Label>
         {t("orders.billingDate")}

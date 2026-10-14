@@ -4592,3 +4592,34 @@ from 25 Sep to 12 Oct, all for costed articles; none for an uncosted one.
   so no sale is re-dated.
 - The phone is not changed: it keeps sending a cost when it can, and the
   trigger covers the rest. Until the SQL is run, nothing is different.
+
+## 2026-10-14 — Payment terms per order (RUN-ME-37)
+
+Owner: "ability to edit payments terms of specific orders. (shows in the
+pdf)". Every invoice printed the same "INVOICE TO 30 DAYS" under Payment
+Terms.
+- `orders.payment_terms`, text, null for every existing order. Null prints
+  the standard terms, so no invoice changes until a manager writes terms on
+  that order. Free text, not a number of days: the cell is printed words
+  ("CASH ON DELIVERY", "60 DAYS"), and nothing else reads it.
+- Not tied to the Due Date. The Due Date still comes from the customer's
+  overdue window, and aging/overdue are untouched. Linking them would mean
+  parsing free text; say so if a different number of days should also move
+  the Due Date.
+- At most 40 characters (database check, form limit). The cell is a sixth of
+  the page; the standard terms stay on one 7.5pt line, longer terms wrap to
+  two smaller lines inside the cell on both PDFs.
+- Who: manager and admin, in the web's Edit order details sheet (beside PO
+  number) and the app's order editor — the same people and places that edit
+  the PO number. Written only when changed, so an un-migrated database still
+  saves everything else; the field is shown disabled (web) or hidden (app)
+  until the column exists. A change carries the Edited stamp, like any
+  other field in that sheet.
+- Where it prints: the web invoice PDF, the bulk invoice zip, the phone/Mac
+  invoice PDF and the phone's invoice Excel. The web's invoice Excel has no
+  header block, so it has no Payment Terms cell; not added.
+- The phone's PDF and Excel printed the Payment Terms heading with an empty
+  cell; they now print the order's terms, or the standard ones, as the web
+  always did.
+- Customer statements keep their fixed "PAYMENT TERMS: INVOICE TO 30 DAYS"
+  line — a statement covers many orders.

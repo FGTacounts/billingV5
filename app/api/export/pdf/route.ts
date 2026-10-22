@@ -7,6 +7,7 @@ import { fetchCustomers } from "@/lib/queries/customers";
 import { fetchProductsServer } from "@/lib/products-server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { InvoiceTemplate } from "@/lib/invoice-template";
+import { embedPrintableFont } from "@/lib/pdf/invoice";
 
 export const runtime = "nodejs";
 
@@ -18,8 +19,8 @@ export const runtime = "nodejs";
 async function drawTable(title: string, columns: string[], rows: string[][]) {
   const doc = await PDFDocument.create();
   let page = doc.addPage([595.28, 841.89]);
-  const font = await doc.embedFont(StandardFonts.Helvetica);
-  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  const font = await embedPrintableFont(doc, StandardFonts.Helvetica);
+  const bold = await embedPrintableFont(doc, StandardFonts.HelveticaBold);
   const margin = 36;
   const ink = rgb(0.1, 0.12, 0.11);
   const muted = rgb(0.42, 0.46, 0.44);

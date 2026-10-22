@@ -65,6 +65,38 @@ export interface Ctx {
   showTrn?: boolean;
 }
 
+// Helvetica, a standard PDF font, prints only the Western (WinAnsi)
+// characters, and pdf-lib throws on any other. One zero-width space, tab,
+// "Ⓡ" or Arabic word in a name or an imported description used to fail the
+// whole document with a 500 (invoice #4577, 2026-10-22). Every PDF embeds its
+// fonts through here, so whatever a field holds, the document still prints:
+// spaces stay spaces, invisible marks go, a lookalike prints as its plain
+// form (Ⓡ → R) and anything else as "?".
+const INVISIBLE = /[​-‏‪-‮⁠-⁤⁦-⁩﻿]/;
+export async function embedPrintableFont(doc: PDFDocument, name: StandardFonts): Promise<PDFFont> {
+  const font = await doc.embedFont(name);
+  const printable = new Set(font.getCharacterSet());
+  const canPrint = (s: string) => [...s].every((c) => printable.has(c.codePointAt(0)!));
+  const clean = (text: string) => {
+    let out = "";
+    for (const c of text) {
+      if (printable.has(c.codePointAt(0)!)) out += c;
+      else if (/\s/.test(c)) out += " ";
+      else if (INVISIBLE.test(c)) continue;
+      else {
+        const plain = c.normalize("NFKC");
+        out += canPrint(plain) ? plain : "?";
+      }
+    }
+    return out;
+  };
+  const encodeText = font.encodeText.bind(font);
+  const widthOfTextAtSize = font.widthOfTextAtSize.bind(font);
+  font.encodeText = (text) => encodeText(clean(text));
+  font.widthOfTextAtSize = (text, size) => widthOfTextAtSize(clean(text), size);
+  return font;
+}
+
 export function wrapText(s: string, font: PDFFont, size: number, maxWidth: number): string[] {
   const words = s.split(/\s+/);
   const lines: string[] = [];
@@ -372,8 +404,8 @@ export async function buildInvoicePdf(
   sort: LineSort = DEFAULT_LINE_SORT
 ): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
-  const font = await doc.embedFont(StandardFonts.Helvetica);
-  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  const font = await embedPrintableFont(doc, StandardFonts.Helvetica);
+  const bold = await embedPrintableFont(doc, StandardFonts.HelveticaBold);
   const logo = await loadLogo(doc);
   const brandStrip = await loadPng(doc, "brand/brands-footer.png");
 

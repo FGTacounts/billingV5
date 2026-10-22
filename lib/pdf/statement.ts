@@ -12,6 +12,7 @@ import {
   loadLogo,
   loadPng,
   wrapText,
+  embedPrintableFont,
   type Ctx,
 } from "@/lib/pdf/invoice";
 import { InvoiceTemplate } from "@/lib/invoice-template";
@@ -100,8 +101,8 @@ export async function buildStatementPdf(
   scope: StatementScope = "outstanding"
 ): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
-  const font = await doc.embedFont(StandardFonts.Helvetica);
-  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  const font = await embedPrintableFont(doc, StandardFonts.Helvetica);
+  const bold = await embedPrintableFont(doc, StandardFonts.HelveticaBold);
   const logo = await loadLogo(doc);
   const brandStrip = await loadPng(doc, "brand/brands-footer.png");
   const title = scope === "paid" ? t("customers.statementOfAccountPaid") : t("customers.statementOfAccount");

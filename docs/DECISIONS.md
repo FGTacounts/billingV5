@@ -4689,3 +4689,27 @@ it works at any stage.
   the live column is `edited_by_id` (manager_edit_order and the phone use
   that), so the web's Edited stamp from Edit order details has never landed.
 
+
+## 2026-10-22 — A character the PDF font cannot print no longer fails the PDF
+
+Invoice #4577's Export PDF answered HTTP 500. The web's PDFs draw in
+Helvetica, a standard PDF font that holds only the Western (WinAnsi)
+characters, and pdf-lib throws on any other — so one zero-width space, tab,
+"Ⓡ", emoji or Arabic word in a customer name, address, description, SKU,
+PO number, terms or VAT No failed the whole document. (The live order was
+not read; the cause was reproduced from its item names with the same
+characters. The order is marked Imported, where such marks come from.)
+
+- Fixed where the fonts are made, `embedPrintableFont` in lib/pdf/invoice.ts,
+  which the invoice (single and bulk zip), the customer and salesman
+  statements and Settings' PDF list export all use now. Field-by-field
+  cleaning would miss the next field someone adds.
+- What it prints instead: whitespace of any kind → a space; invisible marks
+  (zero-width, direction marks, BOM) → nothing; a lookalike → its plain form
+  by Unicode NFKC (Ⓡ → R, ﬁ → fi); anything else → "?". Every character the
+  font has, including ® ™ é and curly quotes, is untouched.
+- Arabic therefore prints as "????". Printing it properly needs an Arabic
+  font embedded in the PDF (and @pdf-lib/fontkit, a new dependency) — not
+  asked for, so not done.
+- The phone and Mac draw their own PDFs with the system's text engine, which
+  prints every character; nothing to change there.

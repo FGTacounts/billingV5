@@ -1,5 +1,20 @@
 # What changed, and what you need to do
 
+## 2026-10-22 — Export PDF failing on some orders
+
+Nothing to run in Supabase. The web needs deploying. The app is unchanged.
+
+**Export PDF** on invoice #4577 (and any order like it) showed "This page
+isn't working — HTTP ERROR 500". The invoice font cannot print some
+characters — invisible spaces, tabs, symbols like Ⓡ, emoji, Arabic — and one
+of them anywhere on the invoice stopped the whole PDF. Imported orders often
+carry them without anything showing on screen.
+
+Now the PDF always prints: invisible characters are dropped, a symbol prints
+as its plain letter, and anything else prints as "?". The same fix covers
+statements and the PDF lists in Settings. Arabic text prints as "?" — say if
+you want invoices to print Arabic properly; that needs an Arabic font added.
+
 ## 2026-10-22 — Additional changes on an order
 
 **Run `scratchpad/RUN-ME-38-order-vat-and-vat-numbers.sql` in Supabase**

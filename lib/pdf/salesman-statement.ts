@@ -1,6 +1,6 @@
 import "server-only";
 import { PDFDocument, StandardFonts } from "pdf-lib";
-import { A4, MARGIN, CONTENT_W, INK, MUTED, SHADE, LINE, drawLetterhead, loadLogo, loadPng, type Ctx } from "@/lib/pdf/invoice";
+import { A4, MARGIN, CONTENT_W, INK, MUTED, SHADE, LINE, drawLetterhead, loadLogo, loadPng, embedPrintableFont, type Ctx } from "@/lib/pdf/invoice";
 import { AED, ROW_H, HEADER_H, FOOT_LIMIT, cellText, drawBrandStrip } from "@/lib/pdf/statement";
 import type { SalesmanStatement } from "@/lib/statement";
 import { t } from "@/lib/i18n";
@@ -45,8 +45,8 @@ export async function buildSalesmanStatementPdf(
   statementDate: string
 ): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
-  const font = await doc.embedFont(StandardFonts.Helvetica);
-  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  const font = await embedPrintableFont(doc, StandardFonts.Helvetica);
+  const bold = await embedPrintableFont(doc, StandardFonts.HelveticaBold);
   const logo = await loadLogo(doc);
   const brandStrip = await loadPng(doc, "brand/brands-footer.png");
   const title = t("reports.ssTitle");

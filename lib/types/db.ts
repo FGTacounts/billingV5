@@ -226,6 +226,16 @@ export interface Order {
   // The order's own payment terms (RUN-ME-37); null prints the standard
   // terms. Read only for a single order and for the invoice export.
   payment_terms?: string | null;
+  // Additional changes (RUN-ME-38), read like payment_terms. The VAT on this
+  // order as a fraction — null is the customer's zone rate, 0 is no VAT. The
+  // customer's VAT No as this invoice prints it — null is the customer's own,
+  // "" is none. False leaves our TRN off this invoice.
+  vat_rate_override?: number | null;
+  invoice_customer_vat_no?: string | null;
+  invoice_shows_our_trn?: boolean;
+  // The due date a manager set or an extension moved it to; null is the
+  // billing date plus the customer's overdue window.
+  extended_due_date?: string | null;
   rejected_at: string | null;
   // The billing date. Every order fetched through lib/queries/orders.ts
   // carries it: orders.billed_at once RUN-ME-27 has been run, updated_at

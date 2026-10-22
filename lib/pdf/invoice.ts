@@ -2,9 +2,9 @@ import "server-only";
 import { readFile } from "fs/promises";
 import path from "path";
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
-import { InvoiceTemplate, invoiceDate, amountInWordsInvoice, dueDate, paymentTermsFor } from "@/lib/invoice-template";
+import { InvoiceTemplate, invoiceDate, amountInWordsInvoice, dueDateFor, paymentTermsFor, customerVatNoFor, formatVatRate } from "@/lib/invoice-template";
 import type { OrderRow, OrderItemRow } from "@/lib/queries/orders";
-import { FALLBACK_VAT_RATE } from "@/lib/money";
+import { FALLBACK_VAT_RATE, billed } from "@/lib/money";
 import { toFils, toAed, priceBeforeDiscount } from "@/lib/money";
 import { DEFAULT_OVERDUE_DAYS } from "@/lib/queries/aging";
 import { t } from "@/lib/i18n";
@@ -60,6 +60,9 @@ export interface Ctx {
   bold: PDFFont;
   logo?: Awaited<ReturnType<PDFDocument["embedPng"]>>;
   brandStrip?: Awaited<ReturnType<PDFDocument["embedPng"]>>;
+  // False leaves our TRN out of the letterhead — an order a manager set so in
+  // Additional changes (RUN-ME-38). Every other document prints it.
+  showTrn?: boolean;
 }
 
 export function wrapText(s: string, font: PDFFont, size: number, maxWidth: number): string[] {
@@ -131,7 +134,7 @@ export function drawLetterhead(ctx: Ctx, kind: "tax" | "performa" | { title: str
 
   const textX = MARGIN + 130;
   page.drawText(InvoiceTemplate.companyName, { x: textX, y: y - 14, size: 15, font: bold, color: BRAND });
-  const detailLine = t("documents.companyDetailLine", {
+  const detailLine = t(ctx.showTrn === false ? "documents.companyDetailLineNoTrn" : "documents.companyDetailLine", {
     licenseNo: InvoiceTemplate.licenseNo,
     trn: InvoiceTemplate.trn,
     email: InvoiceTemplate.email,
@@ -181,8 +184,10 @@ function drawPartyBox(
       y -= 10;
     }
   }
-  if (order.customer?.vat_number) {
-    page.drawText(t("documents.vatNo", { number: order.customer.vat_number }), {
+  // The customer's VAT No, or the one a manager set on this order, or none.
+  const vatNo = customerVatNoFor(order);
+  if (vatNo) {
+    page.drawText(t("documents.vatNo", { number: vatNo }), {
       x: x + 6,
       y: bottom + 9,
       size: 7.5,
@@ -199,10 +204,7 @@ function drawInfoBox(ctx: Ctx, x: number, w: number, top: number, bottom: number
     [t("documents.custNo"), order.customer?.code ?? t("common.notSet")],
     [t("documents.invNo"), order.invoice_number ? String(order.invoice_number) : t("common.notSet")],
     [t("documents.invDate"), invoiceDate(order.billed_at ?? order.updated_at ?? order.created_at)],
-    [
-      t("documents.dueDate"),
-      dueDate(order.billed_at ?? order.updated_at ?? order.created_at, order.customer?.overdue_threshold_days ?? DEFAULT_OVERDUE_DAYS),
-    ],
+    [t("documents.dueDate"), dueDateFor(order, order.customer?.overdue_threshold_days ?? DEFAULT_OVERDUE_DAYS)],
     [t("documents.crNo"), t("common.notSet")],
   ];
   const rowH = (top - bottom) / rows.length;
@@ -375,7 +377,15 @@ export async function buildInvoicePdf(
   const logo = await loadLogo(doc);
   const brandStrip = await loadPng(doc, "brand/brands-footer.png");
 
-  const ctx: Ctx = { doc, page: doc.addPage([A4.w, A4.h]), font, bold, logo, brandStrip };
+  const ctx: Ctx = {
+    doc,
+    page: doc.addPage([A4.w, A4.h]),
+    font,
+    bold,
+    logo,
+    brandStrip,
+    showTrn: order.invoice_shows_our_trn !== false,
+  };
   let y = drawLetterhead(ctx, kind);
 
   // Three-column header block (Bill To / Cust-Inv info / Ship To)
@@ -412,7 +422,7 @@ export async function buildInvoicePdf(
     order.po_number ?? "",
     "",
     "", // Payment Terms — drawn below, it may need two lines
-    order.customer?.vat_number ? `${(vatRate * 100).toFixed(0)}%` : "",
+    customerVatNoFor(order) ? formatVatRate(vatRate) : "",
   ];
   const salesRowTop = y - salesHeaderH;
   salesValues.forEach((v, i) => {
@@ -464,10 +474,18 @@ export async function buildInvoicePdf(
   const sumFils = (pick: (l: (typeof lines)[number]) => number) =>
     lines.reduce((sum, l) => sum + toFils(pick(l)), 0);
   const grossSubtotal = toAed(lines.reduce((sum, l) => sum + Math.round(toFils(l.price) * l.qty), 0));
-  const discountTotal = toAed(sumFils((l) => l.discount));
-  const netSubtotal = toAed(sumFils((l) => l.netPrice));
-  const vatTotal = toAed(sumFils((l) => l.vat));
-  const grandTotal = toAed(sumFils((l) => l.netTotal));
+  // The discount on the whole order (RUN-ME-28) comes off after the lines and
+  // before VAT, as it does in the stored total. With one, VAT is worked out
+  // once on what is left — the lines' own VAT column then adds up to more
+  // than the VAT charged, by the VAT on the discount. Without one the footer
+  // is the columns added up, exactly as before.
+  const orderDiscountFils = toFils(order.discount_amount ?? 0);
+  const discountTotal = toAed(sumFils((l) => l.discount) + orderDiscountFils);
+  const linesNetFils = sumFils((l) => l.netPrice);
+  const netSubtotal = toAed(Math.max(0, linesNetFils - orderDiscountFils));
+  const discounted = orderDiscountFils > 0 ? billed(netSubtotal, vatRate) : null;
+  const vatTotal = discounted ? discounted.vatAmount : toAed(sumFils((l) => l.vat));
+  const grandTotal = discounted ? discounted.total : toAed(sumFils((l) => l.netTotal));
   let fy = y - 18;
   const footerRow = (label: string, value: string, boldRow = false) => {
     ctx.page.drawText(label, { x: MARGIN, y: fy, size: boldRow ? 10 : 8.5, font: boldRow ? bold : font, color: boldRow ? INK : MUTED });

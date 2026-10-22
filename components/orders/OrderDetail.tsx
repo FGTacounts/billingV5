@@ -30,10 +30,10 @@ import {
 import { requestExtension } from "@/lib/queries/payments";
 import { deleteOrder } from "@/lib/queries/orders";
 import { billingDateColumn } from "@/lib/billingDate";
-import { InvoiceTemplate, PAYMENT_TERMS_MAX } from "@/lib/invoice-template";
+import { InvoiceTemplate, PAYMENT_TERMS_MAX, VAT_NO_MAX, formatVatRate } from "@/lib/invoice-template";
 import { isOwnOrderInPicking } from "@/lib/salesmanEdit";
 import { invalidateOrderFacts } from "@/lib/queries/dashboard";
-import { invalidateAging } from "@/lib/queries/aging";
+import { invalidateAging, DEFAULT_OVERDUE_DAYS } from "@/lib/queries/aging";
 import { fetchSalesmen } from "@/lib/queries/expenses";
 import type { Seller } from "@/lib/queries/sales";
 import { fetchCustomers } from "@/lib/queries/customers";
@@ -128,6 +128,7 @@ export default function OrderDetail({
   // §Orders: "Manager has complete flexibility over an order at any stage
   // (invoice number, customer, salesman, PO number editable)".
   const [showEditFields, setShowEditFields] = useState(false);
+  const [showAdditional, setShowAdditional] = useState(false);
   const { preferences, update: updatePrefs } = usePreferences();
   const lineSort = parseLineSort(preferences.lineSort);
 
@@ -612,7 +613,10 @@ export default function OrderDetail({
     if (costed === 0 && costFils === 0) return { gp: 0, costedSale: 0, uncostedSale: toAed(saleFils) };
     return { gp: toAed(costed - costFils), costedSale: toAed(costed), uncostedSale: toAed(saleFils - costed) };
   })();
-  const fallbackBilled = billed(Math.max(0, grossSubtotal - orderDiscountAmount), FALLBACK_VAT_RATE);
+  // An order's own rate (Additional changes) is used even here: 0 is a real
+  // rate, so a stored VAT of 0 is not mistaken for "not worked out yet".
+  const ownVatRate = order.vat_rate_override ?? null;
+  const fallbackBilled = billed(Math.max(0, grossSubtotal - orderDiscountAmount), ownVatRate ?? FALLBACK_VAT_RATE);
   // Once accepted the order is the warehouse's: a line that is not on the
   // shelf can come off it and a forgotten one can go on, by the warehouse or
   // a manager, until approval moves stock (add-item / remove-item routes,
@@ -661,6 +665,11 @@ export default function OrderDetail({
           {isManager && (
             <Button tier="tinted" onClick={() => setShowEditFields(true)} className="!px-3 !py-1.5 text-caption">
               {t("orders.editDetails")}
+            </Button>
+          )}
+          {managerEdits && (
+            <Button tier="tinted" onClick={() => setShowAdditional(true)} className="!px-3 !py-1.5 text-caption">
+              {t("orders.additionalChanges")}
             </Button>
           )}
           {/* §Orders: an order can be deleted, and deleting it puts the
@@ -1394,7 +1403,10 @@ export default function OrderDetail({
             )}
           </div>
         )}
-        <Row label={t("orders.vat")} value={formatAed(order.vat_amount || fallbackBilled.vatAmount)} />
+        <Row
+          label={ownVatRate != null ? t("orders.vatWithRate", { rate: formatVatRate(ownVatRate) }) : t("orders.vat")}
+          value={formatAed(order.total ? order.vat_amount ?? 0 : fallbackBilled.vatAmount)}
+        />
         <Row label={t("common.total")} value={formatAed(order.total || fallbackBilled.total)} bold />
         {isManager && items.length > 0 && (
           <Row
@@ -1421,6 +1433,18 @@ export default function OrderDetail({
         <ExtensionRequest orderId={order.id} user={user} />
       )}
     </Sheet>
+    {showAdditional && (
+      <AdditionalChangesSheet
+        order={order}
+        hasLines={items.length > 0}
+        onClose={() => setShowAdditional(false)}
+        onSaved={() => {
+          setShowAdditional(false);
+          load();
+          onChanged();
+        }}
+      />
+    )}
     {showEditFields && (
       <EditOrderFieldsSheet
         order={order}
@@ -1483,11 +1507,6 @@ function EditOrderFieldsSheet({
   const billedAtOriginal = order.billed_at ?? order.updated_at;
   const [billedOn, setBilledOn] = useState(localDateInput(billedAtOriginal));
   const [billedSupported, setBilledSupported] = useState(false);
-  // The order's own payment terms (RUN-ME-37). Empty prints the standard
-  // terms. Disabled, like the PO number, until the column exists.
-  const termsOriginal = order.payment_terms ?? "";
-  const [paymentTerms, setPaymentTerms] = useState(termsOriginal);
-  const [termsSupported, setTermsSupported] = useState(false);
 
   useEffect(() => {
     const supabase = supabaseBrowser();
@@ -1502,12 +1521,6 @@ function EditOrderFieldsSheet({
         if (error) { setPoSupported(false); return; }
         setPoNumber((data as { po_number: string | null } | null)?.po_number ?? "");
       });
-    supabase
-      .from("orders")
-      .select("payment_terms")
-      .eq("id", order.id)
-      .maybeSingle()
-      .then(({ error }) => setTermsSupported(!error));
   }, [order.id]);
 
   useEffect(() => {
@@ -1532,9 +1545,6 @@ function EditOrderFieldsSheet({
           customer_id: customerId || null,
           ...(salesmanId ? { salesman_id: salesmanId } : {}),
           ...(poSupported ? { po_number: poNumber.trim() || null } : {}),
-          ...(termsSupported && paymentTerms.trim() !== termsOriginal.trim()
-            ? { payment_terms: paymentTerms.trim() || null }
-            : {}),
           // Sent only when it was actually changed: writing it at all marks
           // the date as set by hand, which stops status changes moving it.
           ...(billedSupported && billedOn && billedOn !== localDateInput(billedAtOriginal)
@@ -1577,21 +1587,6 @@ function EditOrderFieldsSheet({
         {!poSupported && t("orders.notAvailableYet")}
       </Label>
       <TextInput value={poNumber} onChange={(e) => setPoNumber(e.target.value)} disabled={!poSupported} />
-
-      <Label>
-        {t("orders.paymentTerms")}
-        {!termsSupported && t("orders.notAvailableYet")}
-      </Label>
-      <TextInput
-        value={paymentTerms}
-        onChange={(e) => setPaymentTerms(e.target.value)}
-        placeholder={InvoiceTemplate.paymentTerms}
-        maxLength={PAYMENT_TERMS_MAX}
-        disabled={!termsSupported}
-      />
-      <p className="text-caption text-secondary mt-1">
-        {t("orders.paymentTermsHint", { standard: InvoiceTemplate.paymentTerms })}
-      </p>
 
       <Label>
         {t("orders.billingDate")}
@@ -1658,6 +1653,245 @@ function EditOrderFieldsSheet({
           </option>
         ))}
       </select>
+    </Sheet>
+  );
+}
+
+// Additional changes (owner, 2026-10-22): what an order's invoice says about
+// money and tax, beyond its lines — payment terms, VAT, the two VAT numbers,
+// the due date and the discount on the whole order. Manager and admin, at
+// any stage. Only the fields actually changed are sent, so an un-migrated
+// database still takes a change to the ones it has.
+type VatMode = "standard" | "none" | "other";
+type VatNoMode = "own" | "none" | "other";
+
+function AdditionalChangesSheet({
+  order,
+  hasLines,
+  onClose,
+  onSaved,
+}: {
+  order: OrderRow;
+  hasLines: boolean;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const ownRate = order.vat_rate_override ?? null;
+  const vatModeOriginal: VatMode = ownRate == null ? "standard" : ownRate === 0 ? "none" : "other";
+  const vatOtherOriginal = ownRate != null && ownRate > 0 ? String(Number((ownRate * 100).toFixed(2))) : "";
+  const [vatMode, setVatMode] = useState<VatMode>(vatModeOriginal);
+  const [vatOther, setVatOther] = useState(vatOtherOriginal);
+
+  const ownVatNo = order.invoice_customer_vat_no ?? null;
+  const vatNoModeOriginal: VatNoMode = ownVatNo == null ? "own" : ownVatNo === "" ? "none" : "other";
+  const [vatNoMode, setVatNoMode] = useState<VatNoMode>(vatNoModeOriginal);
+  const [vatNoOther, setVatNoOther] = useState(ownVatNo ?? "");
+  const showTrnOriginal = order.invoice_shows_our_trn !== false;
+  const [showTrn, setShowTrn] = useState(showTrnOriginal);
+
+  const dueOriginal = (order.extended_due_date ?? "").slice(0, 10);
+  const [due, setDue] = useState(dueOriginal);
+  const termsOriginal = order.payment_terms ?? "";
+  const [paymentTerms, setPaymentTerms] = useState(termsOriginal);
+  const discountOriginal = order.discount_amount ?? 0;
+  const [discount, setDiscount] = useState(discountOriginal > 0 ? discountOriginal.toFixed(2) : "");
+
+  // Whether the database has RUN-ME-37 / RUN-ME-38 yet, and the rate the
+  // customer is billed at when the order has none of its own.
+  const [standardRate, setStandardRate] = useState<number | null>(null);
+  const [supported, setSupported] = useState(false);
+  const [termsSupported, setTermsSupported] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    fetch(`/api/orders/additional-changes?orderId=${order.id}`)
+      .then((r) => r.json())
+      .then((d: { standardRate?: number; supported?: boolean; termsSupported?: boolean }) => {
+        if (typeof d.standardRate === "number") setStandardRate(d.standardRate);
+        setSupported(d.supported === true);
+        setTermsSupported(d.termsSupported === true);
+      })
+      .catch(() => {});
+  }, [order.id]);
+
+  const customerVatNo = order.customer?.vat_number?.trim() ?? "";
+  const thresholdDays = order.customer?.overdue_threshold_days ?? DEFAULT_OVERDUE_DAYS;
+
+  async function save() {
+    const body: Record<string, unknown> = { orderId: order.id };
+
+    if (vatMode !== vatModeOriginal || (vatMode === "other" && vatOther !== vatOtherOriginal)) {
+      if (vatMode === "standard") body.vat_rate_override = null;
+      else if (vatMode === "none") body.vat_rate_override = 0;
+      else {
+        const pct = Number(vatOther);
+        if (!vatOther.trim() || !Number.isFinite(pct) || pct < 0 || pct > 100) {
+          toast.error(t("orders.vatRateInvalid"));
+          return;
+        }
+        body.vat_rate_override = pct / 100;
+      }
+    }
+    const vatNoValue = vatNoMode === "own" ? null : vatNoMode === "none" ? "" : vatNoOther.trim();
+    if (vatNoValue !== ownVatNo) body.invoice_customer_vat_no = vatNoValue;
+    if (showTrn !== showTrnOriginal) body.invoice_shows_our_trn = showTrn;
+    if (due !== dueOriginal) body.extended_due_date = due || null;
+    if (paymentTerms.trim() !== termsOriginal.trim()) body.payment_terms = paymentTerms.trim() || null;
+    const discountValue = Math.round((Number(discount) || 0) * 100) / 100;
+    if (discountValue !== discountOriginal) {
+      if (!Number.isFinite(Number(discount || 0)) || Number(discount || 0) < 0) {
+        toast.error(t("orders.orderDiscountInvalid"));
+        return;
+      }
+      body.discount = discountValue;
+    }
+    if (Object.keys(body).length === 1) {
+      onClose();
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const res = await fetch("/api/orders/additional-changes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? t("orders.additionalChangesFailed"));
+      tapSuccess();
+      // The total feeds sales and balances, and the due date feeds aging.
+      invalidateOrderFacts();
+      invalidateAging();
+      onSaved();
+    } catch (e) {
+      toast.error(friendlyError(e, t("orders.additionalChangesFailed")));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const selectClass = "w-full px-3.5 py-2.5 rounded-card border border-hairline bg-canvas text-subhead disabled:opacity-60";
+
+  return (
+    <Sheet
+      open
+      onClose={onClose}
+      title={t("orders.additionalChanges")}
+      footer={
+        <>
+          <Button tier="plain" onClick={onClose}>{t("common.cancel")}</Button>
+          <Button tier="primary" disabled={saving} onClick={save}>
+            {saving ? t("common.saving") : t("common.save")}
+          </Button>
+        </>
+      }
+    >
+      <Label>
+        {t("orders.paymentTerms")}
+        {!termsSupported && t("orders.notAvailableYet")}
+      </Label>
+      <TextInput
+        value={paymentTerms}
+        onChange={(e) => setPaymentTerms(e.target.value)}
+        placeholder={InvoiceTemplate.paymentTerms}
+        maxLength={PAYMENT_TERMS_MAX}
+        disabled={!termsSupported}
+      />
+      <p className="text-caption text-secondary mt-1">
+        {t("orders.paymentTermsHint", { standard: InvoiceTemplate.paymentTerms })}
+      </p>
+
+      <Label>
+        {t("orders.vatOnOrder")}
+        {!supported && t("orders.notAvailableYet")}
+      </Label>
+      <select
+        className={selectClass}
+        value={vatMode}
+        onChange={(e) => setVatMode(e.target.value as VatMode)}
+        disabled={!supported}
+        aria-label={t("orders.vatOnOrder")}
+      >
+        <option value="standard">
+          {t("orders.vatStandard", { rate: standardRate == null ? "…" : formatVatRate(standardRate) })}
+        </option>
+        <option value="none">{t("orders.vatNone")}</option>
+        <option value="other">{t("orders.vatOther")}</option>
+      </select>
+      {vatMode === "other" && (
+        <div className="flex items-center gap-2 mt-2">
+          <TextInput
+            type="number"
+            min={0}
+            max={100}
+            step="0.01"
+            className="tabular-nums !w-28"
+            aria-label={t("orders.vatOtherRate")}
+            placeholder={t("orders.vatOtherRate")}
+            value={vatOther}
+            onChange={(e) => setVatOther(e.target.value)}
+            disabled={!supported}
+          />
+          <span className="text-subhead text-secondary">%</span>
+        </div>
+      )}
+      <p className="text-caption text-secondary mt-1">{t("orders.vatHint")}</p>
+
+      <Label>
+        {t("orders.customerVatNo")}
+        {!supported && t("orders.notAvailableYet")}
+      </Label>
+      <select
+        className={selectClass}
+        value={vatNoMode}
+        onChange={(e) => setVatNoMode(e.target.value as VatNoMode)}
+        disabled={!supported}
+        aria-label={t("orders.customerVatNo")}
+      >
+        <option value="own">
+          {customerVatNo ? t("orders.customerVatNoOwn", { number: customerVatNo }) : t("orders.customerVatNoOwnNone")}
+        </option>
+        <option value="none">{t("orders.customerVatNoNone")}</option>
+        <option value="other">{t("orders.customerVatNoOther")}</option>
+      </select>
+      {vatNoMode === "other" && (
+        <TextInput
+          className="mt-2 tabular-nums"
+          aria-label={t("orders.customerVatNoOther")}
+          value={vatNoOther}
+          onChange={(e) => setVatNoOther(e.target.value)}
+          maxLength={VAT_NO_MAX}
+          disabled={!supported}
+        />
+      )}
+      <label className="flex items-center gap-2 text-subhead mt-3 min-h-[44px]">
+        <input
+          type="checkbox"
+          checked={showTrn}
+          onChange={(e) => setShowTrn(e.target.checked)}
+          disabled={!supported}
+        />
+        <span className="tabular-nums">{t("orders.ourTrn", { trn: InvoiceTemplate.trn })}</span>
+      </label>
+
+      <Label>{t("orders.dueDate")}</Label>
+      <TextInput type="date" className="tabular-nums" value={due} onChange={(e) => setDue(e.target.value)} />
+      <p className="text-caption text-secondary mt-1">{t("orders.dueDateHint", { days: thresholdDays })}</p>
+
+      <Label>{t("orders.orderDiscount")}</Label>
+      <TextInput
+        type="number"
+        min={0}
+        step="0.01"
+        className="tabular-nums"
+        value={discount}
+        onChange={(e) => setDiscount(e.target.value)}
+        disabled={!hasLines}
+      />
+      <p className="text-caption text-secondary mt-1">
+        {hasLines ? t("orders.orderDiscountHint") : t("orders.discountNeedsLines")}
+      </p>
     </Sheet>
   );
 }

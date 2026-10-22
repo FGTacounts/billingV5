@@ -2,9 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAppUser } from "@/lib/auth";
 import { supabaseCaller } from "@/lib/supabase/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
-import { resolveVatRate } from "@/lib/queries/zones";
 import { toFils, toAed, billed } from "@/lib/money";
-import { orderDiscount } from "@/lib/orders-server";
+import { orderDiscount, orderVatRate } from "@/lib/orders-server";
 
 export const runtime = "nodejs";
 
@@ -81,23 +80,12 @@ export async function POST(req: NextRequest) {
     subtotalFils += Math.round(toFils(it.unit_price) * (it.picked_qty ?? it.ordered_qty ?? 0));
   }
 
-  const { data: settings } = await supabase
-    .from("app_settings")
-    .select("vat_rate")
-    .limit(1)
-    .maybeSingle();
-  const fallbackVatRate = settings?.vat_rate ?? 0.05;
-
   // §Global zones: an order's VAT is the customer's zone rate (by country),
-  // not always the flat app-wide rate — resolveVatRate degrades to
-  // fallbackVatRate when the customer has no country set or the zones
-  // tables don't exist yet.
-  let customerCountry: string | null = null;
-  if (order.customer_id) {
-    const { data: cust } = await supabase.from("customers").select("country_code").eq("id", order.customer_id).maybeSingle();
-    customerCountry = cust?.country_code ?? null;
-  }
-  const vatRate = await resolveVatRate(supabase, customerCountry, fallbackVatRate);
+  // not always the flat app-wide rate — unless a manager set this order's
+  // own rate in Additional changes (RUN-ME-38). orderVatRate degrades to the
+  // app-wide rate when the customer has no country set or the zones tables
+  // don't exist yet.
+  const vatRate = await orderVatRate(supabase, orderId, order.customer_id ?? null);
   // The order-wide discount (RUN-ME-28) comes off before VAT, as it does in
   // manager_edit_order; 0 on a database without it.
   const discountFils = Math.round((await orderDiscount(supabase, orderId)) * 100);

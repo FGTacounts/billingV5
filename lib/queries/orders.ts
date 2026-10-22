@@ -136,8 +136,9 @@ async function attachRelations(
  * listed as AED 0.00 (owner, 2026-10-01). The phone never did: its
  * `receivableTotal` falls back to the lines when the stored total is 0. This
  * is the same fallback, with the same arithmetic as recalcOrderTotals — lines
- * at picked qty else ordered, less the order discount, VAT at the customer's
- * zone rate — so the figure here is the one approval will store.
+ * at picked qty else ordered, less the order discount, VAT at the order's own
+ * rate else the customer's zone rate — so the figure here is the one approval
+ * will store.
  *
  * Display only: nothing is written. Billed orders are left alone, a stored
  * 0 there is a real figure (an order billed before lines were kept).
@@ -159,7 +160,7 @@ async function unbilledTotalsFromLines(
   for (let i = 0; i < ids.length; i += CHUNK) chunks.push(ids.slice(i, i + CHUNK));
 
   // unit_cost is never asked for: staff are refused the whole read if it is.
-  const [itemResults, discountResults, { data: settings }, { data: custs }] = await Promise.all([
+  const [itemResults, discountResults, { data: settings }, { data: custs }, extras] = await Promise.all([
     Promise.all(
       chunks.map((c) =>
         supabase.from("order_items").select("order_id, unit_price, ordered_qty, picked_qty").in("order_id", c)
@@ -171,6 +172,8 @@ async function unbilledTotalsFromLines(
     customerIds.length
       ? supabase.from("customers").select("id, country_code").in("id", customerIds)
       : Promise.resolve({ data: [] as { id: string; country_code: string | null }[] }),
+    // An order's own VAT rate (RUN-ME-38) wins over its customer's zone.
+    fetchAdditionalChanges(supabase, ids),
   ]);
 
   const itemsByOrder = new Map<string, Priceable[]>();
@@ -204,7 +207,8 @@ async function unbilledTotalsFromLines(
     if (!items?.length) continue;
     const cc = r.customer_id ? countryByCustomer.get(r.customer_id) ?? null : null;
     const net = Math.max(0, subtotalFils(items) - Math.round((discountById.get(r.id) ?? 0) * 100));
-    const { subtotal, vatAmount, total } = billed(toAed(net), rateByCountry.get(cc) ?? fallbackRate);
+    const rate = extras.get(r.id)?.vat_rate_override ?? rateByCountry.get(cc) ?? fallbackRate;
+    const { subtotal, vatAmount, total } = billed(toAed(net), rate);
     out.set(r.id, { subtotal, vat_amount: vatAmount, total });
   }
   return out;
@@ -429,11 +433,93 @@ export async function fetchOrder(
   if (error) throw error;
   if (!data) return null;
   const [row] = await attachRelations(supabase, [data as unknown as Order]);
-  const [managerFields, terms] = await Promise.all([
+  const [managerFields, terms, extras] = await Promise.all([
     fetchManagerFields(supabase, id),
     fetchPaymentTerms(supabase, [id]),
+    fetchAdditionalChanges(supabase, [id]),
   ]);
-  return { ...row, ...managerFields, payment_terms: terms.get(id) ?? null };
+  return { ...row, ...managerFields, ...(extras.get(id) ?? NO_ADDITIONAL_CHANGES), payment_terms: terms.get(id) ?? null };
+}
+
+export type AdditionalChanges = Pick<
+  Order,
+  "vat_rate_override" | "invoice_customer_vat_no" | "invoice_shows_our_trn" | "extended_due_date"
+>;
+
+/** What an order with nothing changed in Additional changes reads as. */
+export const NO_ADDITIONAL_CHANGES: AdditionalChanges = {
+  vat_rate_override: null,
+  invoice_customer_vat_no: null,
+  invoice_shows_our_trn: true,
+  extended_due_date: null,
+};
+
+/**
+ * Each order's discount on the whole order (RUN-ME-28), by order id — for
+ * the bulk invoice export, whose list query does not carry it. Empty on a
+ * database without the column.
+ */
+export async function fetchOrderDiscounts(
+  supabase: SupabaseClient,
+  orderIds: string[]
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  for (let i = 0; i < orderIds.length; i += 200) {
+    const { data, error } = await supabase
+      .from("orders")
+      .select("id, discount_amount")
+      .in("id", orderIds.slice(i, i + 200))
+      .gt("discount_amount", 0);
+    if (error) return out;
+    for (const r of data ?? []) out.set(r.id as string, Number(r.discount_amount) || 0);
+  }
+  return out;
+}
+
+// Remembered after the first refusal: before RUN-ME-38 there are no such
+// columns, and only the due date (which has been there all along) is read.
+let additionalChangesMissing = false;
+
+/**
+ * Each order's Additional changes, by order id: its own VAT rate, the VAT
+ * numbers its invoice prints (RUN-ME-38) and its due date. Read on its own,
+ * like the payment terms, so a database without the columns still loads and
+ * prints every order as it always has.
+ */
+export async function fetchAdditionalChanges(
+  supabase: SupabaseClient,
+  orderIds: string[]
+): Promise<Map<string, AdditionalChanges>> {
+  const out = new Map<string, AdditionalChanges>();
+  for (let i = 0; i < orderIds.length; i += 200) {
+    const slice = orderIds.slice(i, i + 200);
+    const read = (columns: string) => supabase.from("orders").select(columns).in("id", slice);
+    let rows: Record<string, unknown>[] | null = null;
+    if (!additionalChangesMissing) {
+      const { data, error } = await read(
+        "id, vat_rate_override, invoice_customer_vat_no, invoice_shows_our_trn, extended_due_date"
+      );
+      if (!error) rows = data as unknown as Record<string, unknown>[];
+      else if (/vat_rate_override|invoice_customer_vat_no|invoice_shows_our_trn/.test(error.message ?? "")) {
+        additionalChangesMissing = true;
+      } else return out;
+    }
+    if (!rows) {
+      const { data, error } = await read("id, extended_due_date");
+      if (error) return out;
+      rows = data as unknown as Record<string, unknown>[];
+    }
+    for (const r of rows ?? []) {
+      const rate = r.vat_rate_override;
+      out.set(r.id as string, {
+        vat_rate_override: rate == null ? null : Number(rate),
+        invoice_customer_vat_no: (r.invoice_customer_vat_no as string | null | undefined) ?? null,
+        invoice_shows_our_trn: r.invoice_shows_our_trn !== false,
+        extended_due_date: (r.extended_due_date as string | null | undefined) ?? null,
+      });
+    }
+  }
+  return out;
 }
 
 // Remembered after the first refusal: before RUN-ME-37 the column is not

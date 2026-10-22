@@ -37,7 +37,8 @@ export async function GET(req: NextRequest) {
   ]);
   // The order screen passes the sort it is showing, so the paper matches it.
   const sort = parseLineSort(req.nextUrl.searchParams.get("sort"));
-  const bytes = await buildInvoicePdf(order, items, kind, settings.data?.vat_rate, sort);
+  // The order's own rate when a manager set one (Additional changes).
+  const bytes = await buildInvoicePdf(order, items, kind, order.vat_rate_override ?? settings.data?.vat_rate, sort);
   const fileName = `${invoiceFileBase(order.invoice_number, order.billed_at ?? order.updated_at ?? order.created_at)}.pdf`;
 
   return new NextResponse(Buffer.from(bytes), {

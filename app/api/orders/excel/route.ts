@@ -6,7 +6,7 @@ import { fetchOrder, fetchOrderItems } from "@/lib/queries/orders";
 import { parseLineSort } from "@/lib/lineSort";
 import { computeInvoiceLines } from "@/lib/pdf/invoice";
 import { invoiceFileBase } from "@/lib/invoice-template";
-import { FALLBACK_VAT_RATE } from "@/lib/money";
+import { FALLBACK_VAT_RATE, billed, toAed, toFils } from "@/lib/money";
 import { t } from "@/lib/i18n";
 
 export const runtime = "nodejs";
@@ -31,7 +31,8 @@ export async function GET(req: NextRequest) {
     fetchOrderItems(supabase, orderId),
     supabase.from("app_settings").select("vat_rate").limit(1).maybeSingle(),
   ]);
-  const vatRate = settings.data?.vat_rate ?? FALLBACK_VAT_RATE;
+  // The order's own rate when a manager set one (Additional changes).
+  const vatRate = order.vat_rate_override ?? settings.data?.vat_rate ?? FALLBACK_VAT_RATE;
   const lines = computeInvoiceLines(items, vatRate, parseLineSort(req.nextUrl.searchParams.get("sort")));
 
   // Unpicked lines are always at the end (owner, 2026-09-26), which replaced
@@ -66,10 +67,16 @@ export async function GET(req: NextRequest) {
       netTotal: l.netTotal,
     });
   }
-  const netSubtotal = lines.reduce((s, l) => s + l.netPrice, 0);
-  const vatTotal = lines.reduce((s, l) => s + l.vat, 0);
-  const grandTotal = lines.reduce((s, l) => s + l.netTotal, 0);
+  // Added in fils. The order discount comes off before VAT, as on the PDF
+  // (lib/pdf/invoice.ts): with one, VAT is worked out once on what is left.
+  const linesNetFils = lines.reduce((s, l) => s + toFils(l.netPrice), 0);
+  const orderDiscountFils = toFils(order.discount_amount ?? 0);
+  const discounted = orderDiscountFils > 0 ? billed(toAed(Math.max(0, linesNetFils - orderDiscountFils)), vatRate) : null;
+  const netSubtotal = discounted ? discounted.subtotal : toAed(linesNetFils);
+  const vatTotal = discounted ? discounted.vatAmount : toAed(lines.reduce((s, l) => s + toFils(l.vat), 0));
+  const grandTotal = discounted ? discounted.total : toAed(lines.reduce((s, l) => s + toFils(l.netTotal), 0));
   sheet.addRow({});
+  if (discounted) sheet.addRow({ desc: t("orders.orderDiscount"), netTotal: -toAed(orderDiscountFils) });
   sheet.addRow({ desc: t("orders.subtotalWithoutVat"), netTotal: netSubtotal });
   sheet.addRow({ desc: t("orders.vatTotal"), netTotal: vatTotal });
   const totalRow = sheet.addRow({ desc: t("orders.grandTotal"), netTotal: grandTotal });

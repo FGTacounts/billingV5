@@ -1,5 +1,48 @@
 # What changed, and what you need to do
 
+## 2026-10-22 — Additional changes on an order
+
+**Run `scratchpad/RUN-ME-38-order-vat-and-vat-numbers.sql` in Supabase**
+(billing project — check the address bar says `isdeheipdfmwzmmnnidr`). It
+adds three columns; no order changes until you change one. The web needs
+deploying and the app needs a new build.
+
+Open an order → **Additional changes** (web: the button beside Edit details;
+phone / Mac: the button in the manager's editor, under the customer). Manager
+and admin, at any stage. It holds:
+
+- **Payment terms** — moved here from Edit order details (web) and from the
+  editor (app). Works as before.
+- **VAT on this order** — the customer's rate (as today), **No VAT**, or
+  **Another rate** (e.g. 2.5). Subtotal, VAT and total are worked out again
+  straight away, so the customer's balance and the VAT figures follow, and
+  the invoice prints the new rate. Works on approved orders too.
+- **Customer's VAT No on the invoice** — the customer's own (as today),
+  **Don't print one**, or **This number** for this invoice only.
+- **Print our TRN** — untick to leave our TRN off this order's invoice.
+- **Due date** — printed as the invoice's Due Date. Empty: the billing date
+  plus the customer's overdue days, as today. It is the same date as
+  "Extend due date" on the customer's page.
+- **Order discount** — the discount on the whole order, taken off before
+  VAT. It can now be set from the phone and Mac too.
+
+Fixed along the way, because these would have printed the new choices wrong:
+
+- The **web invoice PDF and Excel** left out the order discount — the total
+  printed was higher than the total billed. They now show it.
+- The **phone / Mac invoice** worked VAT out as a fixed 5% of the total, and
+  never printed the customer's VAT No. It now uses the order's own figures
+  and prints the number.
+- The **phone / Mac** moved an order's due date back a day every time the
+  order was saved in Dubai. It no longer does.
+
+Until the SQL is run the VAT and VAT number fields say "not available yet"
+(web) or explain why (app); the due date, terms and discount work already.
+
+**Overdue is unchanged** (your choice): an order counts as overdue your
+overdue days after its due date — a due date of 30 Nov with 90 days makes it
+overdue at the end of February, as "Extend due date" has always worked.
+
 ## 2026-10-14 — Payment terms on one order
 
 **Run `scratchpad/RUN-ME-37-order-payment-terms.sql` in Supabase** (it adds

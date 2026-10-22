@@ -4623,3 +4623,69 @@ Terms.
   always did.
 - Customer statements keep their fixed "PAYMENT TERMS: INVOICE TO 30 DAYS"
   line — a statement covers many orders.
+
+## 2026-10-22 — Additional changes on an order (RUN-ME-38)
+
+Owner: "in an order add an option called additional changes, where the
+manager/admin can edit payment terms, remove or change VAT", and, asked what
+else: "VAT no of the customer and our VAT no, removal or adding, due date,
+order discount". Chosen with the owner: VAT is the customer's rate, none, or
+another %; one new button holds everything, and payment terms move into it;
+it works at any stage.
+- Three columns on orders. `vat_rate_override` numeric fraction like
+  zones.vat_rate, null = the customer's zone rate, 0 = no VAT, checked 0–1.
+  `invoice_customer_vat_no` text, null = the customer's own, "" = none
+  printed, else that number, ≤ 30 characters — one column with three states
+  rather than a flag plus a text, so the two cannot disagree.
+  `invoice_shows_our_trn` boolean not null default true.
+- Only a manager or admin may set them: a BEFORE INSERT OR UPDATE trigger
+  raises 42501 for anyone else who is signed in. It only raises, never
+  rewrites, so it cannot re-date a sale. The server key and the SQL editor
+  (no auth.uid()) pass, as the routes and repairs need. A salesman's own
+  order could otherwise be saved with no VAT straight through the public
+  anon key. Payment terms, due date and discount keep the guards they had.
+- manager_edit_order (RUN-ME-31's text, copied line for line) takes the
+  order's own rate before the zone lookup; lib/orders-server.ts orderVatRate
+  does the same for recalcOrderTotals and the approval route, the list totals
+  of unbilled orders take it too, and on the phone AppDataManager.vatRate(for:)
+  serves the approval and the header save — which runs on every tick and
+  note, and would otherwise have put a removed VAT back on.
+- The due date is `orders.extended_due_date`, the date the customer page's
+  "Extend due date" and approved extension requests already write — one due
+  date per order, not two. The invoice now prints it when set (web
+  dueDateFor, phone InvoiceTemplate.dueDate); before, neither invoice did.
+  Aging is unchanged: it still counts an order's days from that date, so it
+  turns overdue the customer's threshold after it. Raised with the owner,
+  who chose to keep it (2026-10-22: "Keep overdue as it works today (the
+  customer's overdue days counted from the due date)").
+- New route /api/orders/additional-changes (GET: is RUN-ME-38 in, and the
+  customer's rate; POST: only the changed fields). A VAT or discount change
+  re-adds the order through manager_edit_order with no line changes; if that
+  refuses (a discount over the order's worth), the fields just written are
+  put back. An invoice imported without lines has its VAT worked out again
+  on its stored subtotal and cannot take a discount here.
+- Payment terms left Edit order details (web) and the editor's customer card
+  (phone); the due-date toggle left the phone editor too, and its Save no
+  longer writes a due date of its own, so it cannot undo the sheet. The
+  inline Order discount on the web's totals stays — it is where the figure
+  is shown, and the sheet is a second way to the same column.
+- The web invoice PDF, Excel and bulk zip did not take the order discount
+  off (their footer was the lines added up). With a discount they now show
+  it and work VAT out once on what is left, as the stored total does; the
+  lines' own VAT column then adds to more than the VAT charged, by the VAT
+  on the discount. Without one the footer is exactly as before.
+- The phone's PDF and Excel backed VAT out of the total at a fixed 1.05 and
+  printed "VAT No:" with nothing after it. They now use the order's own
+  figures and print the number; the VAT cell shows the rate when a VAT No is
+  printed, as the web always did. The editor's "VAT (5%)" label (listed
+  2026-10-12) now shows the rate the order is billed at.
+- The phone wrote extended_due_date as a UTC day while reading it as a local
+  one, so in UTC+4 every save of an order moved its due date back a day.
+  Both sides now use the device's calendar (AppDataManager.calendarDay).
+- Not touched: Reports' VAT provision (a flat estimate on the month's sales,
+  not per order); statements' fixed payment-terms line; the new-order screen
+  on the phone, which drafts at the customer's rate.
+- Seen, not fixed: lib/orders-server.ts stampEdited writes `edited_by`, but
+  the live column is `edited_by_id` (manager_edit_order and the phone use
+  that), so the web's Edited stamp from Edit order details has never landed.
+

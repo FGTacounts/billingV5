@@ -11,9 +11,10 @@ import { resolveVatRate } from "@/lib/queries/zones";
 /**
  * Re-adds the order up from its lines and stores subtotal/vat_amount/total.
  *
- * The VAT rate is the customer's zone rate where there is one, falling back
- * to the app-wide rate — the same resolution the approval does, so a
- * pre-approval total and the billed total agree.
+ * The VAT rate is the order's own where a manager set one, else the
+ * customer's zone rate, falling back to the app-wide rate — orderVatRate,
+ * the same resolution the approval does, so a pre-approval total and the
+ * billed total agree.
  *
  * subtotal/vat_amount/total are NOT NULL columns (default 0), so an order
  * with no lines left is written as zeroes rather than nulls.
@@ -32,15 +33,7 @@ export async function recalcOrderTotals(
     .select("unit_price, ordered_qty, picked_qty")
     .eq("order_id", orderId);
 
-  const { data: settings } = await supabase.from("app_settings").select("vat_rate").limit(1).maybeSingle();
-  const fallbackRate = settings?.vat_rate ?? FALLBACK_VAT_RATE;
-
-  let customerCountry: string | null = null;
-  if (customerId) {
-    const { data: cust } = await supabase.from("customers").select("country_code").eq("id", customerId).maybeSingle();
-    customerCountry = cust?.country_code ?? null;
-  }
-  const rate = await resolveVatRate(supabase, customerCountry, fallbackRate);
+  const rate = await orderVatRate(supabase, orderId, customerId);
 
   const rows = allItems ?? [];
   const discount = await orderDiscount(supabase, orderId);
@@ -50,6 +43,51 @@ export async function recalcOrderTotals(
     .from("orders")
     .update({ subtotal, vat_amount: vatAmount, total })
     .eq("id", orderId);
+}
+
+/**
+ * The VAT rate an order is billed at: the rate a manager set on it in
+ * Additional changes (RUN-ME-38; 0 is no VAT), else the customer's zone
+ * rate, else the default zone's, else the app-wide rate. The same order of
+ * choice as manager_edit_order in the database, so a total worked out here
+ * and one worked out there agree.
+ */
+export async function orderVatRate(
+  supabase: SupabaseClient,
+  orderId: string,
+  customerId: string | null
+): Promise<number> {
+  const override = await orderVatOverride(supabase, orderId);
+  if (override != null) return override;
+  return customerVatRate(supabase, customerId);
+}
+
+/** The rate a customer is billed at when an order has no rate of its own. */
+export async function customerVatRate(supabase: SupabaseClient, customerId: string | null): Promise<number> {
+  const { data: settings } = await supabase.from("app_settings").select("vat_rate").limit(1).maybeSingle();
+  const fallbackRate = settings?.vat_rate ?? FALLBACK_VAT_RATE;
+  let customerCountry: string | null = null;
+  if (customerId) {
+    const { data: cust } = await supabase.from("customers").select("country_code").eq("id", customerId).maybeSingle();
+    customerCountry = cust?.country_code ?? null;
+  }
+  return resolveVatRate(supabase, customerCountry, fallbackRate);
+}
+
+// Remembered after the first refusal: before RUN-ME-38 there is no column,
+// and no order has a rate of its own.
+let vatOverrideMissing = false;
+
+/** The VAT rate a manager set on this order, or null for the usual rate. */
+export async function orderVatOverride(supabase: SupabaseClient, orderId: string): Promise<number | null> {
+  if (vatOverrideMissing) return null;
+  const { data, error } = await supabase.from("orders").select("vat_rate_override").eq("id", orderId).maybeSingle();
+  if (error) {
+    if (/vat_rate_override/.test(error.message ?? "")) vatOverrideMissing = true;
+    return null;
+  }
+  const v = (data as { vat_rate_override: number | string | null } | null)?.vat_rate_override;
+  return v == null ? null : Number(v);
 }
 
 // Remembered after the first refusal, so a database without RUN-ME-19 does

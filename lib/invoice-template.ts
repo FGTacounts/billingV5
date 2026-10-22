@@ -30,6 +30,23 @@ export function paymentTermsFor(order: { payment_terms?: string | null }): strin
   return order.payment_terms?.trim() || InvoiceTemplate.paymentTerms;
 }
 
+// The customer's VAT No as an order's invoice prints it (RUN-ME-38): the
+// number a manager wrote on that order, none when they removed it ("" on the
+// order), else the customer's own. "" means print no VAT No line.
+export const VAT_NO_MAX = 30;
+export function customerVatNoFor(order: {
+  invoice_customer_vat_no?: string | null;
+  customer?: { vat_number?: string | null } | null;
+}): string {
+  if (order.invoice_customer_vat_no != null) return order.invoice_customer_vat_no.trim();
+  return order.customer?.vat_number?.trim() ?? "";
+}
+
+// A VAT rate as printed and shown: 0.05 → "5%", 0.025 → "2.5%", 0 → "0%".
+export function formatVatRate(rate: number): string {
+  return `${Number((rate * 100).toFixed(2))}%`;
+}
+
 export function invoiceDate(iso: string): string {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return iso;
@@ -46,6 +63,18 @@ export function dueDate(iso: string, thresholdDays: number): string {
   if (isNaN(d.getTime())) return iso;
   d.setDate(d.getDate() + thresholdDays);
   return invoiceDate(d.toISOString());
+}
+
+// What an order's invoice prints as its Due Date: the date a manager set in
+// Additional changes, or an approved extension moved it to — both are
+// orders.extended_due_date, a calendar date — else the reckoned one above.
+export function dueDateFor(
+  order: { extended_due_date?: string | null; billed_at?: string | null; updated_at: string; created_at: string },
+  thresholdDays: number
+): string {
+  const set = /^(\d{4})-(\d{2})-(\d{2})/.exec(order.extended_due_date ?? "");
+  if (set) return `${set[3]}.${set[2]}.${set[1]}`;
+  return dueDate(order.billed_at ?? order.updated_at ?? order.created_at, thresholdDays);
 }
 
 const MONTH_ABBR = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];

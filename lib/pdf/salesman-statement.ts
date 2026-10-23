@@ -4,6 +4,7 @@ import { A4, MARGIN, CONTENT_W, INK, MUTED, SHADE, LINE, drawLetterhead, loadLog
 import { AED, ROW_H, HEADER_H, FOOT_LIMIT, cellText, drawBrandStrip } from "@/lib/pdf/statement";
 import type { SalesmanStatement } from "@/lib/statement";
 import { t } from "@/lib/i18n";
+import { BUSINESS_TIME_ZONE } from "@/lib/invoice-template";
 
 // The salesman-wise statement, in the same dress as the customer statement and
 // the invoice (shared letterhead, palette and table pieces — nothing copied).
@@ -118,7 +119,7 @@ export async function buildSalesmanStatementPdf(
     if (y - ROW_H < FOOT_LIMIT) nextPage();
     const customer = fit(`${r.customerName}${r.customerCode ? ` (${r.customerCode})` : ""}`, font, 7.5, COLS[2].w - 8);
     const values: Record<string, string> = {
-      date: new Date(r.date).toLocaleDateString("en-GB"),
+      date: new Date(r.date).toLocaleDateString("en-GB", { timeZone: BUSINESS_TIME_ZONE }),
       inv: r.invNo,
       customer,
       payable: AED(r.totalPayable),

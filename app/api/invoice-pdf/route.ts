@@ -7,6 +7,7 @@ import { buildInvoicePdf } from "@/lib/pdf/invoice";
 import { invoiceFileBase } from "@/lib/invoice-template";
 import { t } from "@/lib/i18n";
 import { BILLED_STATUSES } from "@/lib/billedStatuses";
+import { orderVatRate } from "@/lib/orders-server";
 
 export const runtime = "nodejs";
 
@@ -31,14 +32,15 @@ export async function GET(req: NextRequest) {
   const kind =
     (user.role === "manager" || user.role === "admin") ? requestedKind : BILLED_STATUSES.includes(order.status) ? "tax" : "performa";
 
-  const [items, settings] = await Promise.all([
+  // The rate the order is billed at — its own (Additional changes), else its
+  // customer's zone, else the app-wide one — as approval stores it.
+  const [items, vatRate] = await Promise.all([
     fetchOrderItems(supabase, orderId),
-    supabase.from("app_settings").select("vat_rate").limit(1).maybeSingle(),
+    orderVatRate(supabase, order.id, order.customer_id ?? null),
   ]);
   // The order screen passes the sort it is showing, so the paper matches it.
   const sort = parseLineSort(req.nextUrl.searchParams.get("sort"));
-  // The order's own rate when a manager set one (Additional changes).
-  const bytes = await buildInvoicePdf(order, items, kind, order.vat_rate_override ?? settings.data?.vat_rate, sort);
+  const bytes = await buildInvoicePdf(order, items, kind, vatRate, sort);
   const fileName = `${invoiceFileBase(order.invoice_number, order.billed_at ?? order.updated_at ?? order.created_at)}.pdf`;
 
   return new NextResponse(Buffer.from(bytes), {

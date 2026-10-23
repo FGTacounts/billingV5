@@ -16,6 +16,7 @@ import { fetchProductsServer } from "@/lib/products-server";
 import { fetchAllPages } from "@/lib/paging";
 import { BILLED_STATUSES } from "@/lib/billedStatuses";
 import { scanOrderImage, scanArticlesDoc, type ScannedArticle } from "@/lib/ai-scan";
+import { customerVatRate } from "@/lib/orders-server";
 
 /**
  * The work itself, lifted out of the four request handlers that used to do it
@@ -94,8 +95,6 @@ export async function buildInvoiceSlice(
 ): Promise<InvoiceFile[]> {
   if (orderIds.length === 0) return [];
 
-  const { data: settings } = await db.from("app_settings").select("vat_rate").limit(1).maybeSingle();
-
   // fetchOrders is one query and gives the customer and salesman joins the
   // invoice layout needs; the ids decide which of them this slice is for.
   const all = await fetchOrders(db, { status: BILLED_STATUSES, limit: MAX_INVOICE_ORDERS });
@@ -110,6 +109,12 @@ export async function buildInvoiceSlice(
 
   const taken = new Set(usedNames);
   const files: InvoiceFile[] = [];
+  // The customer's rate (zone, else app-wide), asked once per customer.
+  const customerRates = new Map<string | null, Promise<number>>();
+  const rateFor = (customerId: string | null) => {
+    if (!customerRates.has(customerId)) customerRates.set(customerId, customerVatRate(db, customerId));
+    return customerRates.get(customerId)!;
+  };
 
   for (const id of orderIds) {
     const order = byId.get(id);
@@ -123,7 +128,8 @@ export async function buildInvoiceSlice(
       { ...order, ...own, payment_terms: terms.get(order.id) ?? null, discount_amount: discounts.get(order.id) ?? 0 },
       items,
       "tax",
-      own.vat_rate_override ?? settings?.vat_rate
+      // The order's own rate, else its customer's — as approval stored it.
+      own.vat_rate_override ?? (await rateFor(order.customer_id ?? null))
     );
     const base = invoiceFileBase(order.invoice_number, order.billed_at ?? order.updated_at ?? order.created_at);
     let name = `${base}.pdf`;

@@ -4,11 +4,9 @@ import { getAppUser } from "@/lib/auth";
 import { supabaseCaller } from "@/lib/supabase/server";
 import { buildSalesmanStatement } from "@/lib/statement";
 import { buildSalesmanStatementPdf } from "@/lib/pdf/salesman-statement";
-import { InvoiceTemplate } from "@/lib/invoice-template";
+import { InvoiceTemplate, BUSINESS_TIME_ZONE } from "@/lib/invoice-template";
 import { t } from "@/lib/i18n";
 
-// The server runs in UTC; "today" on a statement is the day in Dubai.
-const BUSINESS_TIME_ZONE = "Asia/Dubai";
 
 export const runtime = "nodejs";
 
@@ -71,7 +69,7 @@ export async function GET(req: NextRequest) {
     head.eachCell((c) => (c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEBEBEB" } }));
     for (const r of statement.rows) {
       sheet.addRow([
-        new Date(r.date).toLocaleDateString("en-GB"),
+        new Date(r.date).toLocaleDateString("en-GB", { timeZone: BUSINESS_TIME_ZONE }),
         r.invNo,
         r.customerName,
         r.customerCode,

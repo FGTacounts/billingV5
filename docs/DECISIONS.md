@@ -4784,3 +4784,30 @@ invoices print VAT at the order's rate else the app-wide rate, while stored
 totals use the customer's zone; without an order discount the invoice adds
 VAT per line, the stored total rounds it once, so they can differ by fils;
 server-made PDFs date invoices in UTC.
+
+## 2026-10-23 — Invoices print the stored VAT rate and total, dated in Dubai
+
+The owner said yes to the three invoice findings of the web bug sweep above.
+
+- **VAT rate.** The invoice PDF, Excel and bulk zip took the order's own rate
+  else the app-wide rate. They now take the rate approval stores totals at
+  (`orderVatRate`: the order's own, else the customer's zone, else the
+  app-wide rate; the zip asks once per customer). Today there is one zone,
+  Default at 5%, the app-wide rate too, so no current invoice changes.
+- **Total.** Without an order discount the footer added up each line's VAT,
+  each rounded on its own; the stored total rounds VAT once on the subtotal
+  (`billed()`). 13 of the 120 billed orders with lines printed a VAT and
+  grand total a fil or two off what the statement and balance use. The
+  footer is now `invoiceTotals()` in lib/pdf/invoice.ts, shared by the PDF,
+  Excel and zip: VAT once on the net subtotal. The lines' VAT column is
+  still each line rounded, so it can differ from the VAT charged by a fil —
+  the total follows the stored figure, not the column.
+- **Invoices with no lines** (536 imported ones) print their stored subtotal,
+  VAT and total instead of zeroes.
+- Checked read-only against the live data: all 656 billed invoices now print
+  exactly their stored VAT and total.
+- **Dates.** `invoiceDate`, `dueDate` and `invoiceFileBase` read the day in
+  Asia/Dubai (`BUSINESS_TIME_ZONE` in lib/invoice-template.ts). The server
+  runs in UTC, so an order billed 00:00–03:59 Dubai was dated, due-dated and
+  file-named a day early (INVnnn.OCT26 for one billed just after midnight on
+  1 Nov). Statement rows are dated the same way.

@@ -15,7 +15,7 @@ import {
   embedPrintableFont,
   type Ctx,
 } from "@/lib/pdf/invoice";
-import { InvoiceTemplate } from "@/lib/invoice-template";
+import { InvoiceTemplate, BUSINESS_TIME_ZONE } from "@/lib/invoice-template";
 import type { Statement, StatementScope } from "@/lib/statement";
 import { t } from "@/lib/i18n";
 
@@ -209,7 +209,7 @@ export async function buildStatementPdf(
     }
     const isCredit = r.description !== "INVOICE";
     const values: Record<string, string> = {
-      date: new Date(r.date).toLocaleDateString("en-GB"),
+      date: new Date(r.date).toLocaleDateString("en-GB", { timeZone: BUSINESS_TIME_ZONE }),
       inv: r.invNo,
       desc:
         r.description === "GRV"

@@ -4,12 +4,10 @@ import { getAppUser } from "@/lib/auth";
 import { supabaseCaller } from "@/lib/supabase/server";
 import { buildStatement, type StatementScope } from "@/lib/statement";
 import { buildStatementPdf } from "@/lib/pdf/statement";
-import { InvoiceTemplate } from "@/lib/invoice-template";
+import { InvoiceTemplate, BUSINESS_TIME_ZONE } from "@/lib/invoice-template";
 import { FALLBACK_VAT_RATE } from "@/lib/money";
 import { t } from "@/lib/i18n";
 
-// The server runs in UTC; "today" on a statement is the day in Dubai.
-const BUSINESS_TIME_ZONE = "Asia/Dubai";
 
 export const runtime = "nodejs";
 

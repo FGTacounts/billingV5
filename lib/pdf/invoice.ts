@@ -286,7 +286,7 @@ function drawTableHeader(ctx: Ctx, y: number): number {
   return y - headerH;
 }
 
-interface LineCalc {
+export interface LineCalc {
   no: number;
   sku: string;
   desc: string;
@@ -342,6 +342,38 @@ export function computeInvoiceLines(
       netTotal: netPrice + vatAmt,
     };
   });
+}
+
+/**
+ * An invoice's footer figures, in AED. VAT is worked out once on the net
+ * subtotal at the order's rate — billed(), the arithmetic approval and
+ * manager_edit_order store — so the grand total printed is the order's stored
+ * total, the one its statement and balance use. The lines' own VAT column is
+ * each line rounded on its own, so it can add up to a fil or two more or less
+ * than the VAT charged (owner, 2026-10-23: the paper follows the stored
+ * total). The discount on the whole order (RUN-ME-28) comes off after the
+ * lines and before VAT.
+ *
+ * An invoice imported without lines has only its stored figures, and prints
+ * those rather than zeroes.
+ */
+export function invoiceTotals(
+  lines: LineCalc[],
+  order: Pick<OrderRow, "discount_amount" | "subtotal" | "vat_amount" | "total">,
+  vatRate: number
+): { grossSubtotal: number; discountTotal: number; netSubtotal: number; vatTotal: number; grandTotal: number } {
+  if (lines.length === 0 && Number(order.total) > 0) {
+    const sub = Number(order.subtotal) || 0;
+    return { grossSubtotal: sub, discountTotal: 0, netSubtotal: sub, vatTotal: Number(order.vat_amount) || 0, grandTotal: Number(order.total) };
+  }
+  const sumFils = (pick: (l: LineCalc) => number) => lines.reduce((sum, l) => sum + toFils(pick(l)), 0);
+  // l.price is the list price and l.netPrice is already net of any per-line
+  // discount, so "gross" (pre-discount) is rebuilt from price×qty.
+  const grossSubtotal = toAed(lines.reduce((sum, l) => sum + Math.round(toFils(l.price) * l.qty), 0));
+  const orderDiscountFils = toFils(order.discount_amount ?? 0);
+  const discountTotal = toAed(sumFils((l) => l.discount) + orderDiscountFils);
+  const { subtotal, vatAmount, total } = billed(toAed(Math.max(0, sumFils((l) => l.netPrice) - orderDiscountFils)), vatRate);
+  return { grossSubtotal, discountTotal, netSubtotal: subtotal, vatTotal: vatAmount, grandTotal: total };
 }
 
 function drawTableRow(ctx: Ctx, y: number, line: LineCalc): number {
@@ -500,24 +532,7 @@ export async function buildInvoicePdf(
   // l.price is the list price and l.netPrice is already net of any per-line
   // discount, so "gross" (pre-discount) has to be reconstructed from price×qty
   // rather than reused from netPrice.
-  // Summed in fils from the figures already printed on each line, so the
-  // footer is the column added up rather than a separate calculation that
-  // can land a fil away from it.
-  const sumFils = (pick: (l: (typeof lines)[number]) => number) =>
-    lines.reduce((sum, l) => sum + toFils(pick(l)), 0);
-  const grossSubtotal = toAed(lines.reduce((sum, l) => sum + Math.round(toFils(l.price) * l.qty), 0));
-  // The discount on the whole order (RUN-ME-28) comes off after the lines and
-  // before VAT, as it does in the stored total. With one, VAT is worked out
-  // once on what is left — the lines' own VAT column then adds up to more
-  // than the VAT charged, by the VAT on the discount. Without one the footer
-  // is the columns added up, exactly as before.
-  const orderDiscountFils = toFils(order.discount_amount ?? 0);
-  const discountTotal = toAed(sumFils((l) => l.discount) + orderDiscountFils);
-  const linesNetFils = sumFils((l) => l.netPrice);
-  const netSubtotal = toAed(Math.max(0, linesNetFils - orderDiscountFils));
-  const discounted = orderDiscountFils > 0 ? billed(netSubtotal, vatRate) : null;
-  const vatTotal = discounted ? discounted.vatAmount : toAed(sumFils((l) => l.vat));
-  const grandTotal = discounted ? discounted.total : toAed(sumFils((l) => l.netTotal));
+  const { grossSubtotal, discountTotal, netSubtotal, vatTotal, grandTotal } = invoiceTotals(lines, order, vatRate);
   let fy = y - 18;
   const footerRow = (label: string, value: string, boldRow = false) => {
     ctx.page.drawText(label, { x: MARGIN, y: fy, size: boldRow ? 10 : 8.5, font: boldRow ? bold : font, color: boldRow ? INK : MUTED });

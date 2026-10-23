@@ -47,12 +47,27 @@ export function formatVatRate(rate: number): string {
   return `${Number((rate * 100).toFixed(2))}%`;
 }
 
+// The business's day. Invoices are made on the server, which runs in UTC:
+// read there, an order billed at 01:30 in Dubai would be dated the day before.
+export const BUSINESS_TIME_ZONE = "Asia/Dubai";
+const businessDay = new Intl.DateTimeFormat("en-GB", {
+  timeZone: BUSINESS_TIME_ZONE,
+  day: "2-digit",
+  month: "2-digit",
+  year: "numeric",
+});
+
+/** Day, month (1–12) and year of an instant, in Dubai. */
+function dayInDubai(d: Date): { dd: string; mm: string; yyyy: string } {
+  const part = (type: string) => businessDay.formatToParts(d).find((p) => p.type === type)?.value ?? "";
+  return { dd: part("day"), mm: part("month"), yyyy: part("year") };
+}
+
 export function invoiceDate(iso: string): string {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return iso;
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  return `${dd}.${mm}.${d.getFullYear()}`;
+  const { dd, mm, yyyy } = dayInDubai(d);
+  return `${dd}.${mm}.${yyyy}`;
 }
 
 // Due Date = invoice date + the customer's overdue-threshold window — the
@@ -61,8 +76,8 @@ export function invoiceDate(iso: string): string {
 export function dueDate(iso: string, thresholdDays: number): string {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return iso;
-  d.setDate(d.getDate() + thresholdDays);
-  return invoiceDate(d.toISOString());
+  // Dubai keeps no daylight saving, so a day is always 24 hours there.
+  return invoiceDate(new Date(d.getTime() + thresholdDays * 86_400_000).toISOString());
 }
 
 // What an order's invoice prints as its Due Date: the date a manager set in
@@ -85,8 +100,9 @@ const MONTH_ABBR = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP
 // pending, in-pipeline) fall back to "DRAFT" rather than fabricating one.
 export function invoiceFileBase(invoiceNumber: string | number | null, dateIso: string): string {
   const d = new Date(dateIso);
-  const mon = isNaN(d.getTime()) ? "" : MONTH_ABBR[d.getMonth()];
-  const yy = isNaN(d.getTime()) ? "" : String(d.getFullYear()).slice(-2);
+  const day = isNaN(d.getTime()) ? null : dayInDubai(d);
+  const mon = day ? MONTH_ABBR[Number(day.mm) - 1] : "";
+  const yy = day ? day.yyyy.slice(-2) : "";
   const num = invoiceNumber != null ? String(invoiceNumber) : "DRAFT";
   return `INV${num}.${mon}${yy}`;
 }

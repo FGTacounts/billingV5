@@ -7,6 +7,9 @@ import { buildSalesmanStatementPdf } from "@/lib/pdf/salesman-statement";
 import { InvoiceTemplate } from "@/lib/invoice-template";
 import { t } from "@/lib/i18n";
 
+// The server runs in UTC; "today" on a statement is the day in Dubai.
+const BUSINESS_TIME_ZONE = "Asia/Dubai";
+
 export const runtime = "nodejs";
 
 // Salesman-wise statement: what is still owed on the orders one salesman took.
@@ -40,9 +43,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ salesman: { id: salesmanId, name: salesmanName }, ...statement });
   }
 
-  const statementDate = new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+  const statementDate = new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric", timeZone: BUSINESS_TIME_ZONE });
   const safeName = salesmanName.replace(/[^\w&.() -]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 60);
-  const fileBase = `Salesman statement ${safeName} ${new Date().toLocaleDateString("en-GB").replace(/\//g, ".")}`;
+  const fileBase = `Salesman statement ${safeName} ${new Date().toLocaleDateString("en-GB", { timeZone: BUSINESS_TIME_ZONE }).replace(/\//g, ".")}`;
 
   if (format === "excel") {
     if (!isManager) return NextResponse.json({ error: t("common.managerAccessRequired") }, { status: 403 });

@@ -18,7 +18,9 @@ export const runtime = "nodejs";
 // A Manager may delete any order. A Salesman may delete their own, but only
 // while it is still a draft or pending — after that it has been through
 // somebody else's hands.
-const STOCK_DEDUCTED = ["approved", "delivering", "delivered"];
+// edit_requested is an approved order waiting on an edit: its stock is
+// still off the shelf (grant-edit is what puts it back).
+const STOCK_DEDUCTED = ["approved", "edit_requested", "delivering", "delivered"];
 
 export async function POST(req: NextRequest) {
   const user = await getAppUser();
@@ -75,11 +77,14 @@ export async function POST(req: NextRequest) {
         .select("stock_on_hand")
         .eq("id", productId)
         .maybeSingle();
-      if (!product) continue;
-      await supabase
+      // No count kept for this article: approval took nothing off, so there
+      // is nothing to put back (and writing one would invent a count).
+      if (!product || product.stock_on_hand == null) continue;
+      const { error: stockErr } = await supabase
         .from("products")
-        .update({ stock_on_hand: (product.stock_on_hand ?? 0) + qty })
+        .update({ stock_on_hand: product.stock_on_hand + qty })
         .eq("id", productId);
+      if (stockErr) return NextResponse.json({ error: stockErr.message }, { status: 500 });
       stockRestored += qty;
     }
   }

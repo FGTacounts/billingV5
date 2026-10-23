@@ -16,6 +16,7 @@ import { t } from "@/lib/i18n";
 import Sheet from "@/components/ui/Sheet";
 import Button from "@/components/ui/Button";
 import { Label, TextInput } from "@/components/ui/Field";
+import { localDateKey } from "@/lib/queries/dashboard";
 import ScanCheque from "./ScanCheque";
 
 // Two-step collection flow (Problems and Updates — Payments/Customers §):
@@ -65,7 +66,7 @@ export default function LogPaymentSheet({
   const [payerDetails, setPayerDetails] = useState("");
   const [recipientName, setRecipientName] = useState(InvoiceTemplate.companyName);
   const [editingRecipient, setEditingRecipient] = useState(false);
-  const [chequeDate, setChequeDate] = useState(new Date().toISOString().slice(0, 10));
+  const [chequeDate, setChequeDate] = useState(localDateKey(new Date()));
   const [chequePhoto, setChequePhoto] = useState<Blob | null>(null);
   const [notes, setNotes] = useState("");
   const [scanning, setScanning] = useState(false);
@@ -344,7 +345,7 @@ export default function LogPaymentSheet({
               </div>
               <button
                 className="text-caption text-accent font-medium"
-                onClick={() => { setCustomer(null); setInvoices([]); setSelectedOrders(new Set()); setOpenGrvs([]); setTickedGrvs(new Set()); }}
+                onClick={() => { setCustomer(null); setBank(""); setPayerDetails(""); setInvoices([]); setSelectedOrders(new Set()); setOpenGrvs([]); setTickedGrvs(new Set()); }}
               >
                 {t("payments.change")}
               </button>

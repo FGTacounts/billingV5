@@ -98,7 +98,7 @@ export function DateRangePicker({ range, onChange }: { range: SaleRange; onChang
                 type="date"
                 value={draftTo}
                 min={draftFrom}
-                max={new Date().toISOString().slice(0, 10)}
+                max={localDateKey(new Date())}
                 onChange={(e) => setDraftTo(e.target.value)}
                 className="min-w-0 flex-1 px-2 py-1.5 rounded-inner border border-hairline text-caption bg-canvas"
               />

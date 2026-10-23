@@ -13,6 +13,7 @@ import { t } from "@/lib/i18n";
 import Sheet from "@/components/ui/Sheet";
 import Button from "@/components/ui/Button";
 import { Label, TextInput } from "@/components/ui/Field";
+import { localDateKey } from "@/lib/queries/dashboard";
 import { SkeletonList } from "@/components/ui/Empty";
 
 // The payment's created_at as a local yyyy-mm-dd, for a date input.
@@ -47,7 +48,7 @@ export default function EditPaymentSheet({
   const [status, setStatus] = useState<"pending" | "confirmed">(payment.status === "confirmed" ? "confirmed" : "pending");
   const [bank, setBank] = useState(payment.cheque_bank ?? "");
   const [chequeNumber, setChequeNumber] = useState(payment.cheque_number ?? "");
-  const [chequeDate, setChequeDate] = useState(payment.cheque_date ?? new Date().toISOString().slice(0, 10));
+  const [chequeDate, setChequeDate] = useState(payment.cheque_date ?? localDateKey(new Date()));
   const [notes, setNotes] = useState(payment.notes ?? "");
   const [receivedOn, setReceivedOn] = useState(localDay(payment.created_at));
   const [customer, setCustomer] = useState<Pick<Customer, "id" | "name" | "code"> | null>(payment.customer);

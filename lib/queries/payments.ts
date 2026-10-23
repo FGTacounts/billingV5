@@ -132,7 +132,7 @@ export async function createPayment(
   const row = {
     customer_id: input.customer_id,
     collector_id: input.collected_by,
-    amount: input.amount,
+    amount: money(input.amount),
     status: "pending",
     cheque_number: input.cheque_number || null,
     cheque_bank: input.bank || null,

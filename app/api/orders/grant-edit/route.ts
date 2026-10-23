@@ -47,10 +47,11 @@ export async function POST(req: NextRequest) {
       .select("stock_on_hand")
       .eq("id", productId)
       .maybeSingle();
-    if (!product) continue;
+    // No count kept for this article: approval took nothing off.
+    if (!product || product.stock_on_hand == null) continue;
     const { error: stockErr } = await supabase
       .from("products")
-      .update({ stock_on_hand: (product.stock_on_hand ?? 0) + qty })
+      .update({ stock_on_hand: product.stock_on_hand + qty })
       .eq("id", productId);
     if (stockErr) return NextResponse.json({ error: stockErr.message }, { status: 500 });
   }

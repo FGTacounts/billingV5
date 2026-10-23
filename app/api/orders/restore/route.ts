@@ -11,7 +11,9 @@ export const runtime = "nodejs";
 // Payments are deliberately not re-applied: deleting released them back to
 // the customer, and they may have been put against another invoice since.
 // The caller is told so it can say it.
-const STOCK_DEDUCTED = ["approved", "delivering", "delivered"];
+// edit_requested is an approved order waiting on an edit: its stock is
+// still off the shelf (grant-edit is what puts it back).
+const STOCK_DEDUCTED = ["approved", "edit_requested", "delivering", "delivered"];
 
 export async function POST(req: NextRequest) {
   const user = await getAppUser();
@@ -53,12 +55,14 @@ export async function POST(req: NextRequest) {
         .select("stock_on_hand")
         .eq("id", productId)
         .maybeSingle();
-      if (!product) continue;
+      // No count kept for this article: nothing to take off.
+      if (!product || product.stock_on_hand == null) continue;
       // Never below zero — the same floor the rest of the app keeps.
-      await supabase
+      const { error: stockErr } = await supabase
         .from("products")
-        .update({ stock_on_hand: Math.max(0, (product.stock_on_hand ?? 0) - qty) })
+        .update({ stock_on_hand: Math.max(0, product.stock_on_hand - qty) })
         .eq("id", productId);
+      if (stockErr) return NextResponse.json({ error: stockErr.message }, { status: 500 });
       stockTaken += qty;
     }
   }

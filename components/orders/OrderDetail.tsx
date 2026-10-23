@@ -295,6 +295,8 @@ export default function OrderDetail({
     setEditingQtyId(null);
     setEditingPriceId(null);
     setEditingDiscountId(null);
+    // An emptied box is a change of mind, not a 0 (draftNumber gives NaN).
+    if (Object.values(patch).some((v) => !Number.isFinite(v))) return;
     const res = await fetch("/api/orders/update-item", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1036,9 +1038,16 @@ export default function OrderDetail({
                           type="number"
                           min={0}
                           className="w-16 px-2 py-1 rounded-inner border border-hairline text-right tabular-nums"
+                          // Keyed on the pick so a refused save or another
+                          // picker's change shows, rather than what was typed.
+                          key={`${it.id}:${it.picked_qty ?? ""}`}
                           defaultValue={it.picked_qty ?? it.ordered_qty}
                           onBlur={(e) => {
-                            const v = Math.max(0, Number(e.target.value));
+                            const v = draftNumber(e.target.value);
+                            if (!Number.isFinite(v)) {
+                              e.target.value = String(it.picked_qty ?? it.ordered_qty);
+                              return;
+                            }
                             if (v !== (it.picked_qty ?? it.ordered_qty)) {
                               tap();
                               changeQty(it, v);
@@ -1055,8 +1064,8 @@ export default function OrderDetail({
                           className="w-16 px-2 py-1 rounded-inner border border-hairline text-right tabular-nums"
                           value={qtyDraft}
                           onChange={(e) => setQtyDraft(e.target.value)}
-                          onKeyDown={(e) => e.key === "Enter" && saveItemField(it.id, { orderedQty: Math.max(0, Number(qtyDraft)) })}
-                          onBlur={() => saveItemField(it.id, { orderedQty: Math.max(0, Number(qtyDraft)) })}
+                          onKeyDown={(e) => e.key === "Enter" && saveItemField(it.id, { orderedQty: draftNumber(qtyDraft) })}
+                          onBlur={() => saveItemField(it.id, { orderedQty: draftNumber(qtyDraft) })}
                         />
                       ) : (
                         <button
@@ -1103,9 +1112,9 @@ export default function OrderDetail({
                             value={priceDraft}
                             onChange={(e) => setPriceDraft(e.target.value)}
                             onKeyDown={(e) =>
-                              e.key === "Enter" && saveItemField(it.id, { priceBeforeDiscount: Math.max(0, Number(priceDraft)) })
+                              e.key === "Enter" && saveItemField(it.id, { priceBeforeDiscount: draftNumber(priceDraft) })
                             }
-                            onBlur={() => saveItemField(it.id, { priceBeforeDiscount: Math.max(0, Number(priceDraft)) })}
+                            onBlur={() => saveItemField(it.id, { priceBeforeDiscount: draftNumber(priceDraft) })}
                           />
                         ) : (
                           <button
@@ -1189,9 +1198,9 @@ export default function OrderDetail({
                             value={gpDraft}
                             onChange={(e) => setGpDraft(e.target.value)}
                             onKeyDown={(e) =>
-                              e.key === "Enter" && saveLineGpPercent(it, Number(gpDraft))
+                              e.key === "Enter" && saveLineGpPercent(it, gpDraft.trim() === "" ? NaN : Number(gpDraft))
                             }
-                            onBlur={() => saveLineGpPercent(it, Number(gpDraft))}
+                            onBlur={() => saveLineGpPercent(it, gpDraft.trim() === "" ? NaN : Number(gpDraft))}
                           />
                         ) : (
                           <button
@@ -1662,6 +1671,12 @@ function EditOrderFieldsSheet({
 // the due date and the discount on the whole order. Manager and admin, at
 // any stage. Only the fields actually changed are sent, so an un-migrated
 // database still takes a change to the ones it has.
+// A typed number from an inline editor: NaN when the box was emptied, so the
+// caller cancels rather than saving 0; never below 0.
+function draftNumber(s: string): number {
+  return s.trim() === "" ? NaN : Math.max(0, Number(s));
+}
+
 type VatMode = "standard" | "none" | "other";
 type VatNoMode = "own" | "none" | "other";
 

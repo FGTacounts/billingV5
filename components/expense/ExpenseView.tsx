@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState, useMemo } from "react";
 import { Plus, CreditCard, Search, SlidersHorizontal, ArrowUpDown } from "lucide-react";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { fetchExpenses, createExpense, updateExpense, deleteExpense, fetchSalesmen } from "@/lib/queries/expenses";
-import { fetchExpenseBreakdown, type ExpenseSlice } from "@/lib/queries/dashboard";
+import { fetchExpenseBreakdown, localDateKey, type ExpenseSlice } from "@/lib/queries/dashboard";
 import type { AppUser, Expense, ExpenseType } from "@/lib/types/db";
 import type { Seller } from "@/lib/queries/sales";
 import { toast } from "@/lib/toast";
@@ -409,7 +409,7 @@ function ExpenseEditor({
   const [category, setCategory] = useState(expense?.category ?? "");
   const [description, setDescription] = useState(expense?.description ?? "");
   const [amount, setAmount] = useState(expense ? String(expense.amount) : "");
-  const [date, setDate] = useState(expense?.date ?? new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(expense?.date ?? localDateKey(new Date()));
   const [notes, setNotes] = useState(expense?.notes ?? "");
   const [salesmanId, setSalesmanId] = useState(expense?.salesman_id ?? defaultSalesmanId ?? "");
   const [saving, setSaving] = useState(false);

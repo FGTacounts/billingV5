@@ -46,12 +46,15 @@ export async function POST(req: NextRequest) {
   }
 
   const admin = supabaseAdmin();
-  if (unpick) {
-    // Before approval nothing has been billed or deducted, so clearing a pick
-    // is only a tick coming off. After it, it moves stock and totals, which
-    // is manager_edit_order's job and a manager's.
+  if (!isManager) {
+    // Before approval nothing has been billed or deducted, so a pick, or
+    // clearing one, is only the tick. After it, the picked figure is what is
+    // billed: changing it moves stock and totals, which is
+    // manager_edit_order's job and a manager's — even from a picking screen
+    // left open while the order was approved.
     const { data: line } = await admin.from("order_items").select("orders(status)").eq("id", itemId).maybeSingle();
-    const status = (line?.orders as { status?: string } | null)?.status;
+    if (!line) return NextResponse.json({ error: t("orders.orderItemNotFound") }, { status: 404 });
+    const status = (line.orders as { status?: string } | null)?.status;
     if (!status || !["accepted", "waiting", "picking"].includes(status)) {
       return NextResponse.json({ error: t("common.warehouseOrManagerAccessRequired") }, { status: 403 });
     }

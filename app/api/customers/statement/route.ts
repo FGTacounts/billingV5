@@ -8,6 +8,9 @@ import { InvoiceTemplate } from "@/lib/invoice-template";
 import { FALLBACK_VAT_RATE } from "@/lib/money";
 import { t } from "@/lib/i18n";
 
+// The server runs in UTC; "today" on a statement is the day in Dubai.
+const BUSINESS_TIME_ZONE = "Asia/Dubai";
+
 export const runtime = "nodejs";
 
 // Statement of Account (Order Flow & Additions §2/§12 — matches the
@@ -79,13 +82,13 @@ export async function GET(req: NextRequest) {
   const scopeParam = req.nextUrl.searchParams.get("scope");
   const scope: StatementScope = scopeParam === "paid" || scopeParam === "all" ? scopeParam : "outstanding";
   const statement = await buildStatement(supabase, statementIds, vatRate, scope);
-  const statementDate = new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+  const statementDate = new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric", timeZone: BUSINESS_TIME_ZONE });
   // Named after the customer, the way the owner's own statement sheets are
   // ("M&SAVE_31.08.2026") — a folder of "Statement-20001" files says nothing
   // about whose they are. Characters a file system or a header cannot carry
   // are dropped; the code keeps two shops with one name apart.
   const safeName = (group ?? customer.name).replace(/[^\w&.() -]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 60);
-  const day = new Date().toLocaleDateString("en-GB").replace(/\//g, ".");
+  const day = new Date().toLocaleDateString("en-GB", { timeZone: BUSINESS_TIME_ZONE }).replace(/\//g, ".");
   const kind = scope === "paid" ? "Paid statement" : "Statement";
   const fileBase = group ? `${kind} ${safeName} ${day}` : `${kind} ${safeName} (${customer.code}) ${day}`;
 
@@ -124,7 +127,7 @@ async function buildStatementExcel(
   // The tab carries the customer's name and the date, as the owner's own
   // sheets do. Excel allows 31 characters and none of \ / ? * [ ] :
   const tab = `${customer.name.replace(/[\\/?*[\]:]/g, " ").trim().slice(0, 20)}_${new Date()
-    .toLocaleDateString("en-GB")
+    .toLocaleDateString("en-GB", { timeZone: BUSINESS_TIME_ZONE })
     .replace(/\//g, ".")}`;
   const sheet = wb.addWorksheet(tab || t("customers.statement"));
 

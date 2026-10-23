@@ -3,6 +3,7 @@ import { billingDateColumn, billedAtSelect } from "@/lib/billingDate";
 import { fetchApprovedGrvCreditByCustomer, fetchGrvAllocations } from "@/lib/queries/grv";
 import { BILLED_STATUSES } from "@/lib/billedStatuses";
 import { fetchAllForIds, fetchAllPages } from "@/lib/paging";
+import { invalidateOrderFacts } from "@/lib/queries/dashboard";
 
 // Reconstructs each customer's outstanding balance and aging. `orders`
 // stores `total` directly, so this doesn't need to sum order_items itself.
@@ -32,6 +33,10 @@ export async function extendOrderDueDate(
 ) {
   const { error } = await supabase.from("orders").update({ extended_due_date: dueDate }).eq("id", orderId);
   if (error) throw error;
+  // The statement reloads straight after, and the aging copy it reads is
+  // held for a few seconds: drop it, or the old due date comes back.
+  invalidateAging();
+  invalidateOrderFacts();
 }
 
 // The one number the whole app ages against when nothing more specific is

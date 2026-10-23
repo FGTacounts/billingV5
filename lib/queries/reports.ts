@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { billingDateColumn } from "@/lib/billingDate";
 import { BILLED_STATUSES } from "@/lib/billedStatuses";
+import { localDateKey } from "@/lib/queries/dashboard";
 
 function startOfMonthIso(): string {
   const d = new Date();
@@ -49,7 +50,11 @@ export async function fetchBalanceSheet(supabase: SupabaseClient): Promise<Balan
   // and 400s on every anon-key query; see app/api/expenses/route.ts.
   const expensesRes = await fetch("/api/expenses");
   const expensesJson = await expensesRes.json();
-  const monthStart = start.slice(0, 10);
+  // The 1st as a calendar day here. Slicing the ISO instant gave the last
+  // day of the month before (local midnight is 20:00 UTC the day before in
+  // Dubai), so a month's expenses took in the previous month's last day.
+  const now = new Date();
+  const monthStart = localDateKey(new Date(now.getFullYear(), now.getMonth(), 1));
   const monthlyExpense = ((expensesJson.expenses ?? []) as { amount: number; date: string }[])
     .filter((e) => e.date >= monthStart)
     .reduce((s, e) => s + e.amount, 0);

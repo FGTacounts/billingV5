@@ -97,7 +97,8 @@ export async function POST(req: NextRequest) {
   // up rather than overwrite it, and so a blank stock cell leaves the
   // existing quantity alone instead of zeroing it.
   const skus = clean.map((r) => r.sku);
-  const existingStock = new Map<string, number>();
+  // null: the article is known but no count is kept for it.
+  const existingStock = new Map<string, number | null>();
   type Held = {
     sku: string;
     stock_on_hand: number | null;
@@ -111,12 +112,15 @@ export async function POST(req: NextRequest) {
   };
   const held = new Map<string, Held>();
   for (let i = 0; i < skus.length; i += 500) {
-    const { data } = await admin
+    const { data, error: heldErr } = await admin
       .from("products")
       .select('sku, stock_on_hand, "Product_category", price, cost, default_qty, barcode, rack_location, is_active')
       .in("sku", skus.slice(i, i + 500));
+    // Without this every existing SKU would be taken for new, and its stock,
+    // price and cost overwritten from the sheet or with 0.
+    if (heldErr) return NextResponse.json({ error: heldErr.message }, { status: 500 });
     for (const row of (data ?? []) as unknown as Held[]) {
-      existingStock.set(row.sku, row.stock_on_hand ?? 0);
+      existingStock.set(row.sku, row.stock_on_hand ?? null);
       held.set(row.sku, row);
     }
   }
@@ -159,13 +163,14 @@ export async function POST(req: NextRequest) {
     const isNew = known === undefined;
     const fromFile = r.stock_on_hand;
 
-    let stock: number;
+    // An article with no count stays without one unless the sheet gives it.
+    let stock: number | null;
     if (isNew) {
       stock = fromFile ?? 0;
     } else if (fromFile == null) {
       stock = known; // file said nothing — keep what we have
     } else if (stockMode === "add") {
-      stock = known + fromFile;
+      stock = (known ?? 0) + fromFile;
     } else if (stockMode === "replace") {
       stock = fromFile;
     } else {
@@ -188,7 +193,7 @@ export async function POST(req: NextRequest) {
       barcode: r.barcode ?? was?.barcode ?? null,
       rack_location: r.rack_location ?? was?.rack_location ?? null,
       is_active: r.is_active ?? was?.is_active ?? true,
-      stock_on_hand: Math.max(0, stock),
+      stock_on_hand: stock == null ? null : Math.max(0, stock),
     };
   });
 

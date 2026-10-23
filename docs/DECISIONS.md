@@ -4738,3 +4738,49 @@ this is the only difference in how the two pick invoices.
 - Same day, owner said yes: the Customers list's order count and last
   order date (ManagerCustomersView.loadBalances) now group by customer id
   too, by code only for an order cached before it carried one.
+
+## 2026-10-23 — Bug sweep of the web app
+
+The owner asked to find and fix bugs in the web. Fixed:
+
+- **Log payment:** changing the customer cleared the invoices but kept the
+  first customer's cheque bank and payer details, which were then saved on
+  the second customer's cheque and remembered for them.
+- **Customer statement, extend due date:** the saved date did not show for
+  ~10 s because the aging copy was not dropped (now `invalidateAging()` and
+  `invalidateOrderFacts()` in `extendOrderDueDate`).
+- **Dates after midnight:** a new cheque date, a new expense date, a payment
+  switched to cheque, and the date picker's latest day used the UTC day, so
+  00:00–03:59 Dubai gave yesterday. Now `localDateKey`. The Reports balance
+  sheet's month took in the last day of the month before, for the same reason.
+  Customer and salesman statements print "today" in Asia/Dubai.
+- **Order lines:** clearing a qty, price or GP box and clicking away saved 0
+  (and a cleared picking box recorded a pick of 0). An emptied box now
+  cancels. The picking box re-reads the saved pick after a refused save or
+  another picker's change.
+- **Payment amount** is rounded to two places on create, as on edit.
+- **Warehouse picks after approval:** `update-picked-qty` checked the stage
+  only for an unpick. A warehouse pick on an approved/delivering/delivered
+  order changed what its invoice bills without moving stock or totals. A
+  warehouse pick or unpick is now accepted only while the order is accepted,
+  waiting or picking; managers are unchanged (they go through
+  manager_edit_order).
+- **Trash and restore of an `edit_requested` order** now return and retake
+  its stock: it is an approved order, its stock is off the shelf (grant-edit
+  is what puts it back).
+- **Articles with no stock count** (`stock_on_hand` null, which approval
+  skips) stay without one: trash, restore and grant-edit no longer write a
+  count for them, and an Excel import in "keep" mode no longer turns them
+  into 0. Their stock writes now report failure instead of being ignored.
+  The import now stops if it cannot read the existing articles, instead of
+  taking every SKU for new.
+- **Backup** read each table once, which stops at 1,000 rows: it held the
+  oldest 1,000 orders and none of the recent ones. It now pages.
+- **Sign-in with an email** escaped `%` and `_` before matching, so a
+  wildcard can no longer walk the staff list to a username.
+
+Found, not changed (changes what printed invoices say — for the owner):
+invoices print VAT at the order's rate else the app-wide rate, while stored
+totals use the customer's zone; without an order discount the invoice adds
+VAT per line, the stored total rounds it once, so they can differ by fils;
+server-made PDFs date invoices in UTC.

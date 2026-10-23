@@ -24,7 +24,10 @@ export async function POST(req: NextRequest) {
   const { data } = await admin
     .from("users")
     .select("username")
-    .ilike("email", identifier.trim())
+    // Case-insensitive, but a match on the whole address only: % and _ are
+    // wildcards to ilike, and unescaped they let anyone signed out walk the
+    // staff list to a username.
+    .ilike("email", identifier.trim().replace(/[\\%_]/g, "\\$&"))
     .eq("is_active", true)
     .maybeSingle();
 

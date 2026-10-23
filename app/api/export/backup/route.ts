@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAppUser } from "@/lib/auth";
 import { supabaseCaller } from "@/lib/supabase/server";
+import { fetchAllPages } from "@/lib/paging";
 
 export const runtime = "nodejs";
 
@@ -75,10 +76,18 @@ export async function GET() {
 
   const results = await Promise.all(
     DATASETS.map(async (set) => {
-      let query = supabase.from(set.table).select(set.columns);
-      if (set.orderBy) query = query.order(set.orderBy);
-      const { data, error } = await query;
-      return { set, data, error };
+      // A single read stops at 1,000 rows, which left the newest orders out
+      // of the backup. Paged, with id breaking ties so no row is skipped.
+      try {
+        const data = await fetchAllPages((from, to) => {
+          let query = supabase.from(set.table).select(set.columns);
+          if (set.orderBy) query = query.order(set.orderBy);
+          return query.order("id").range(from, to);
+        });
+        return { set, data, error: null as { message: string } | null };
+      } catch (e) {
+        return { set, data: null, error: { message: (e as { message?: string })?.message ?? String(e) } };
+      }
     })
   );
 

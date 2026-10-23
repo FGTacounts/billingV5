@@ -4713,3 +4713,28 @@ characters. The order is marked Imported, where such marks come from.)
   asked for, so not done.
 - The phone and Mac draw their own PDFs with the system's text engine, which
   prints every character; nothing to change there.
+
+## 2026-10-23 — The phone's statement takes a customer's invoices by id, as the web does
+
+The owner: the web shows a customer's statement correctly, the iPhone app
+shows only some of it, with the wrong amount. The web reads a statement's
+invoices by `customer_id` (lib/statement.ts, CustomerDetailView's aging).
+The phone picked them from its synced order list by `customerCode` — and
+that is the code in the order's `customer_snapshot`, the one the shop had
+when the order was taken. Every invoice taken under a shop's earlier code
+(or with a different case: the customer sheet compared exactly) dropped off
+the phone's statement, its export and its total. The live data was not read;
+this is the only difference in how the two pick invoices.
+
+- `Order.customerId` (orders.customer_id) now comes down with every order,
+  and `Order.belongs(toCustomerIds:codes:)` decides whose an order is: by id,
+  and by code only for an order cached on the phone before this version,
+  until its next sync.
+- Used by the customer sheet's on-screen statement and by the PDF/Excel
+  statement export (single shop and shop group).
+- The customer sheet's balance per invoice is now aging's own `balance`,
+  the figure the web prints, instead of the order's total minus aging's
+  `paid` worked out again on the phone.
+- Same day, owner said yes: the Customers list's order count and last
+  order date (ManagerCustomersView.loadBalances) now group by customer id
+  too, by code only for an order cached before it carried one.

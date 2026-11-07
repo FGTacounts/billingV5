@@ -31,9 +31,9 @@ interface ImportRow {
 // (the natural unique key) rather than inserting blind, so re-importing an
 // updated price list corrects existing rows instead of duplicating them.
 //
-// Only sku + description are required to accept a row (§Products: "if the
-// user doesn't fill in all data, only require the essential items... the
-// rest can be done by auto") — price/cost/stock default to 0, default_qty
+// Only the sku is required to accept a row, plus a description when the SKU
+// is new (§Products: "if the user doesn't fill in all data, only require the
+// essential items... the rest can be done by auto") — price/cost/stock default to 0, default_qty
 // to 12 (matching the product editor's own default), category/rack/barcode
 // to null, is_active to true.
 //
@@ -62,10 +62,16 @@ export async function POST(req: NextRequest) {
   }
 
   const stated = (v: unknown) => v !== undefined && v !== null && String(v).trim() !== "";
+  // Only the SKU is needed to read a row. A description is needed only to
+  // CREATE a product: a SKU we already hold keeps its description when the
+  // sheet leaves it out, like every other column. Asking for it on every row
+  // refused a sheet of article codes and new stock counts outright — "Every
+  // row needs at least a SKU and description" — for products that already
+  // had one (2026-11-07).
   const clean = dedupeSkus(
     rows
-      .map((r) => ({ ...r, sku: r.sku?.trim(), description: (r.description ?? r.name)?.trim() }))
-      .filter((r): r is ImportRow & { sku: string; description: string } => !!(r.sku && r.description))
+      .map((r) => ({ ...r, sku: r.sku?.trim(), description: (r.description ?? r.name)?.trim() || null }))
+      .filter((r): r is ImportRow & { sku: string; description: string | null } => !!r.sku)
       .map((r) => ({
         sku: r.sku,
         description: r.description,
@@ -88,7 +94,7 @@ export async function POST(req: NextRequest) {
   );
 
   if (clean.length === 0) {
-    return NextResponse.json({ error: t("products.rowsNeedSkuAndDescription") }, { status: 400 });
+    return NextResponse.json({ error: t("products.rowsNeedSku") }, { status: 400 });
   }
 
   const admin = supabaseAdmin();
@@ -101,6 +107,7 @@ export async function POST(req: NextRequest) {
   const existingStock = new Map<string, number | null>();
   type Held = {
     sku: string;
+    description: string | null;
     stock_on_hand: number | null;
     Product_category: string | null;
     price: number;
@@ -114,7 +121,7 @@ export async function POST(req: NextRequest) {
   for (let i = 0; i < skus.length; i += 500) {
     const { data, error: heldErr } = await admin
       .from("products")
-      .select('sku, stock_on_hand, "Product_category", price, cost, default_qty, barcode, rack_location, is_active')
+      .select('sku, description, stock_on_hand, "Product_category", price, cost, default_qty, barcode, rack_location, is_active')
       .in("sku", skus.slice(i, i + 500));
     // Without this every existing SKU would be taken for new, and its stock,
     // price and cost overwritten from the sheet or with 0.
@@ -125,13 +132,26 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // A NEW SKU has to be called something; one with no description is left
+  // out and named, and the rest of the sheet still imports. Dropped before
+  // the cost check, so nobody is asked about the cost of a row that will not
+  // be written anyway.
+  const noDescription = clean.filter((r) => !held.has(r.sku) && !r.description).map((r) => r.sku);
+  const described = clean.filter((r) => held.has(r.sku) || !!r.description);
+  if (described.length === 0) {
+    return NextResponse.json(
+      { error: t("products.descriptionRequiredSkus", { skus: listSkus(noDescription) }), code: "description_required", skus: noDescription },
+      { status: 422 }
+    );
+  }
+
   // A NEW SKU needs a cost, and a SKU that has a cost does not lose it to a
   // 0 in the sheet (lib/articleCost.ts); a blank cell already keeps it. A
   // manager's sheet still imports everything else — a new SKU with no cost
   // is left out, a cleared cost is kept — and the toast names them. An admin
   // is asked first.
-  const noCost = clean.filter((r) => !held.has(r.sku) && !hasCost(r.cost)).map((r) => r.sku);
-  const clearing = clean
+  const noCost = described.filter((r) => !held.has(r.sku) && !hasCost(r.cost)).map((r) => r.sku);
+  const clearing = described
     .filter((r) => r.cost !== null && !hasCost(r.cost) && hasCost(held.get(r.sku)?.cost))
     .map((r) => r.sku);
   const verdict = noCostVerdict(user.role, noCost.length + clearing.length, confirmed === true);
@@ -147,7 +167,7 @@ export async function POST(req: NextRequest) {
   }
   const refused = new Set(verdict === "refuse" ? noCost : []);
   const keptCost = new Set(verdict === "refuse" ? clearing : []);
-  const accepted = clean
+  const accepted = described
     .filter((r) => !refused.has(r.sku))
     // null is "the sheet did not say", which keeps what we hold.
     .map((r) => (keptCost.has(r.sku) ? { ...r, cost: null } : r));
@@ -183,7 +203,8 @@ export async function POST(req: NextRequest) {
     // settles at zero.
     return {
       sku: r.sku,
-      description: r.description,
+      // Only an existing SKU can arrive here without one (see noDescription).
+      description: r.description ?? was?.description ?? "",
       Product_category: r.Product_category ?? was?.Product_category ?? null,
       price: r.price ?? was?.price ?? 0,
       // cost is NOT NULL on this table (confirmed live) — null would
@@ -209,6 +230,7 @@ export async function POST(req: NextRequest) {
     // ImportCsvButton appends this sentence to the toast.
     note:
       [
+        noDescription.length > 0 ? t("products.descriptionRequiredSkipped", { skus: listSkus(noDescription) }) : "",
         refused.size > 0 ? t("products.costRequiredSkipped", { skus: listSkus([...refused]) }) : "",
         keptCost.size > 0 ? t("products.costKeptSkus", { skus: listSkus([...keptCost]) }) : "",
       ]

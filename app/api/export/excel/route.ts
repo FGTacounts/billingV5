@@ -8,6 +8,7 @@ import { fetchProductsServer } from "@/lib/products-server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { fetchPayments } from "@/lib/queries/payments";
 import { subtotal, vat, total } from "@/lib/money";
+import { PRODUCT_SAMPLE_HEADERS } from "@/lib/importSamples";
 
 export const runtime = "nodejs";
 
@@ -89,34 +90,30 @@ export async function GET(req: NextRequest) {
       });
     }
   } else if (type === "products") {
-    // Column names match Articles & Stock V5.0.xlsx's STOCK sheet
-    // (§FGT_Billing_Supabase_Schema.xlsx) so this export can be re-uploaded
-    // via Import as-is, round-trip.
+    // Every column the products import reads, under the sample sheet's own
+    // headings and in its order (lib/importSamples.ts), so this file can be
+    // edited and uploaded straight back. Active was missing: the export holds
+    // inactive products too, and nothing in it said which they were.
     const sheet = wb.addWorksheet("Products");
-    sheet.columns = [
-      { header: "ARTICLE", key: "sku", width: 14 },
-      { header: "DESCRIPTION", key: "name", width: 32 },
-      { header: "Category", key: "category", width: 18 },
-      { header: "PRICE", key: "price", width: 12 },
-      { header: "Cost", key: "cost", width: 12 },
-      { header: "Stock", key: "soh", width: 12 },
-      { header: "Default Qty", key: "defaultQty", width: 12 },
-      { header: "Rack", key: "rack", width: 12 },
-      { header: "BARCODE", key: "barcode", width: 18 },
-    ];
+    const widths: Record<string, number> = { ARTICLE: 14, DESCRIPTION: 32, BARCODE: 18, Category: 18 };
+    sheet.columns = PRODUCT_SAMPLE_HEADERS.map(({ key }) => ({ header: key, key, width: widths[key] ?? 12 }));
     const products = await fetchProductsServer(supabaseAdmin(), { isManager: true, activeOnly: false });
     for (const p of products) {
-      sheet.addRow({
-        sku: p.sku,
-        name: p.name,
-        category: p.category ?? "",
-        price: p.price,
-        cost: p.cost ?? "",
-        soh: p.stock_on_hand ?? "",
-        defaultQty: p.default_qty,
-        rack: p.rack_location ?? "",
-        barcode: p.barcode ?? "",
-      });
+      // Keyed by heading; a heading the sample adds later and this misses
+      // comes out as a blank column, never a shifted one.
+      const row: Record<string, string | number> = {
+        ARTICLE: p.sku,
+        DESCRIPTION: p.name,
+        PRICE: p.price,
+        Cost: p.cost ?? "",
+        Stock: p.stock_on_hand ?? "",
+        "Default Qty": p.default_qty ?? "",
+        Rack: p.rack_location ?? "",
+        BARCODE: p.barcode ?? "",
+        Category: p.category ?? "",
+        Active: p.is_active ? "yes" : "no",
+      };
+      sheet.addRow(row);
     }
   } else if (type === "payments") {
     const sheet = wb.addWorksheet("Payments");

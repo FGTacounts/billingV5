@@ -4811,3 +4811,37 @@ The owner said yes to the three invoice findings of the web bug sweep above.
   runs in UTC, so an order billed 00:00–03:59 Dubai was dated, due-dated and
   file-named a day early (INVnnn.OCT26 for one billed just after midnight on
   1 Nov). Statement rows are dated the same way.
+
+## 2026-11-07 — A products sheet exported from either app uploads straight back
+
+The owner exported the products sheet, changed stock in it, uploaded it
+again, picked a stock option, and was refused for "not having description
+and other details". They asked that the export carry every detail and that
+the edited sheet be accepted.
+
+- **Description is needed only for a new SKU.** The web import refused every
+  row without a description, even for a product already in the catalogue,
+  so a sheet of article codes and stock counts failed outright with "Every
+  row needs at least a SKU and description". That contradicted the route's
+  own rule (a column left out keeps what is held) and the phone's import,
+  which already took such a sheet. Now an existing SKU keeps its
+  description, and a new SKU with none is left out and named in the toast
+  ("Not added, new and no description: …"); the rest still imports. A sheet
+  with no article codes at all says it needs an ARTICLE column.
+- **The web export is the sample sheet, filled in.** Its columns are
+  `PRODUCT_SAMPLE_HEADERS`, in that order: ARTICLE, DESCRIPTION, PRICE, Cost,
+  Stock, Default Qty, Rack, BARCODE, Category, Active. Active was missing,
+  though the export includes inactive products.
+- **The phone's (and Mac's) export** used its own headings (`article`,
+  `defaultQty`, `SOH`…) and left out Category and the four Additional Details
+  figures. It now writes `ImportSamples.products`' fourteen headings, the
+  web's ten plus VAC, VAC China, Stock Arrival Days and Stock Holding Days,
+  so a file from either app uploads in either. A figure of 0 (no cost, no
+  override) goes out blank, because blank on the way back keeps what is held
+  and 0 would clear it. The file is now products.csv.
+- **Not done:** the phone's import reads text files only. An .xlsx saved
+  from Excel can be picked but reads as nothing ("No products found in
+  file"); reading .xlsx there needs a zip reader, which is not built yet.
+  The web import reads .csv, .xls and .xlsx.
+- The computed figures on the Products screen (GP, Sale, Sold) are not in
+  either export: the import does not read them.

@@ -979,11 +979,6 @@ function ProductEditor({
   const [members, setMembers] = useState<StockGroupMember[]>([]);
   const [linkSearch, setLinkSearch] = useState("");
   const [linkBusy, setLinkBusy] = useState(false);
-  /// Set when the product picked is already on somebody else's shelf, so the
-  /// move has to be agreed to before it happens.
-  const [pendingMove, setPendingMove] = useState<
-    { picked: Product; sku: string; movingFrom: string[] } | null
-  >(null);
   // Combo (RUN-ME-39): the products this one is a set of, one of each, and
   // the combos this one is a part of. Written at once, like shared stock.
   const [comboParts, setComboParts] = useState<StockGroupMember[]>([]);
@@ -1045,10 +1040,10 @@ function ProductEditor({
   // The picked product joins THIS product's stock and takes this product's
   // figure — "add another product under the same shared stock". Shown at
   // once, taken back if the write fails.
-  async function addUnderThisStock(picked: Product, confirmMove = false) {
+  async function addUnderThisStock(picked: Product) {
     if (!product || linkBusy) return;
     const before = members;
-    // Shown at once, taken back if the server refuses or asks a question.
+    // Shown at once, taken back if the server refuses.
     // The shelf keeps the higher of the two figures (RUN-ME-39) — or, on a
     // combo shelf, the combo's own, which the server's answer confirms.
     const shelfFigure = isCombo
@@ -1062,21 +1057,15 @@ function ProductEditor({
     setLinkSearch("");
     setLinkBusy(true);
     try {
-      const result = await linkStock(picked.id, product.id, confirmMove);
-      if (!result.linked) {
-        // It already shares a shelf with somebody. Put the list back as it
-        // was and ask, rather than quietly taking it off theirs.
-        setMembers(before);
-        setPendingMove({ picked, ...result.confirm });
-        return;
-      }
+      // Whatever `picked` already shares stock with joins too: the answer
+      // lists the whole merged shelf (RUN-ME-39 link_stock).
+      const result = await linkStock(picked.id, product.id);
       setMembers(result.members.filter((m) => m.id !== product.id));
       // This product's figure may have gone up to the shelf's. The form
       // still holds the one it opened with, and Save writes it — which would
       // put the shelf back to the lower figure. Take the shelf's.
       const self = result.members.find((m) => m.id === product.id);
       if (self) setForm((f) => ({ ...f, stock_on_hand: self.stock_on_hand ?? 0 }));
-      setPendingMove(null);
       reloadCombo();
       onLinksChanged();
     } catch (e) {
@@ -1441,50 +1430,10 @@ function ProductEditor({
                 ))}
               </ul>
             )}
-            {linkSearch.trim() !== "" && linkCandidates.length === 0 && !pendingMove && (
+            {linkSearch.trim() !== "" && linkCandidates.length === 0 && (
               <p className="text-caption text-secondary mt-1">{t("products.noOtherProductMatches")}</p>
             )}
 
-            {/* The product picked already shares a shelf with somebody. Say
-                whose, and let them decide — a shelf is a physical thing and
-                taking a SKU off one is not what "add" sounds like. */}
-            {pendingMove && (
-              <div
-                role="alertdialog"
-                aria-live="polite"
-                className="mt-2 rounded-card border border-[--status-warning] bg-[--status-warning]/10 p-3"
-              >
-                <p className="text-subhead font-semibold">
-                  {t("products.moveShelfTitle", { sku: pendingMove.sku })}
-                </p>
-                <p className="text-caption text-secondary mt-1">
-                  {t("products.moveShelfBody", {
-                    sku: pendingMove.sku,
-                    partners: pendingMove.movingFrom.join(", "),
-                  })}
-                </p>
-                <div className="flex items-center justify-end gap-2 mt-2.5">
-                  <Button
-                    tier="plain"
-                    type="button"
-                    className="min-h-11"
-                    disabled={linkBusy}
-                    onClick={() => setPendingMove(null)}
-                  >
-                    {t("common.cancel")}
-                  </Button>
-                  <Button
-                    tier="primary"
-                    type="button"
-                    className="min-h-11"
-                    disabled={linkBusy}
-                    onClick={() => addUnderThisStock(pendingMove.picked, true)}
-                  >
-                    {t("products.moveShelfConfirm")}
-                  </Button>
-                </div>
-              </div>
-            )}
             {members.length > 0 && (
               <Button
                 tier="plain"

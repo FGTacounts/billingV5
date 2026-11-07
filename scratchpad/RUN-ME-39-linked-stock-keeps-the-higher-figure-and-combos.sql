@@ -205,6 +205,11 @@ begin
   if tg_op = 'UPDATE' and new.stock_group_id is not distinct from old.stock_group_id then
     return new;
   end if;
+  -- link_stock() (section 6) has already worked out the figure for
+  -- the whole merged shelf and writes it with the new group id.
+  if coalesce(current_setting('fgt.stock_link', true), '') = 'on' then
+    return new;
+  end if;
 
   -- One level of combo, kept across links as well.
   joiner_parts := exists (select 1 from public.product_combo_parts c where c.combo_id = new.id);
@@ -318,7 +323,10 @@ begin
     return null;
   end if;
 
+  -- link_stock() (section 6) sets the figure of a merged shelf
+  -- directly; that is not a sale, so no part moves.
   if pg_trigger_depth() = 1
+     and coalesce(current_setting('fgt.stock_link', true), '') <> 'on'
      and old.stock_on_hand is not null
      and new.stock_on_hand is not null
      and exists (select public.combo_shelf_parts(new.id)) then
@@ -372,6 +380,111 @@ create trigger product_combo_parts_refresh
 
 
 -- ------------------------------------------------------------
+-- 6. Linking merges shelves (owner, 2026-11-08)
+--
+-- "Multiple SKU and combo products should be able to link to the
+-- same stock." Adding a product that already shares stock used to
+-- take it off its shelf, after asking. Now both shelves become ONE:
+-- every SKU on either side ends up sharing the one figure, and
+-- nothing is asked.
+--
+--   link_stock(product, partner)
+--     -> {"result":"linked","stock_group_id":…,"members":[{id,sku,stock_on_hand},…]}
+--        {"result":"already"}   the two already share stock
+--
+-- The merged figure: on a combo shelf, the lowest part (it is
+-- worked out, not counted); otherwise the HIGHEST counted figure
+-- among every SKU joining, as on 2026-11-07. Linking moves no
+-- part's stock.
+--
+-- Refused (COMBO_LINK): a shelf holding a combo AND one of its own
+-- parts, or a combo AND part of any combo — one sale would then
+-- move the same stock twice.
+--
+-- One transaction, the rows locked, so both apps get the same
+-- answer and nothing is left half-merged. The phone and the web
+-- both call it.
+-- ------------------------------------------------------------
+create or replace function public.link_stock(p_product uuid, p_partner uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_target  uuid;
+  v_all     uuid[];
+  v_combo   boolean;
+  v_figure  integer;
+  v_members jsonb;
+begin
+  if not (public.current_role_is('manager') or public.current_user_is_admin()) then
+    raise exception 'Only a manager can link stock.' using errcode = '42501';
+  end if;
+  if p_product is null or p_partner is null or p_product = p_partner then
+    raise exception 'Pick two different products.' using errcode = '22023';
+  end if;
+
+  select array_agg(id) into v_all
+  from (select public.shelf_members(p_product) as id
+        union
+        select public.shelf_members(p_partner)) s;
+  if v_all is null or not (p_product = any(v_all)) or not (p_partner = any(v_all)) then
+    raise exception 'Product not found.' using errcode = 'P0002';
+  end if;
+  if p_product in (select public.shelf_members(p_partner)) then
+    return jsonb_build_object('result', 'already');
+  end if;
+
+  -- Lock every SKU of both shelves, in one fixed order.
+  perform 1 from public.products p where p.id = any(v_all) order by p.id for update;
+
+  -- One level of combo on the merged shelf.
+  if exists (select 1 from public.product_combo_parts c
+              where c.combo_id = any(v_all) and c.part_id = any(v_all))
+     or (exists (select 1 from public.product_combo_parts c where c.combo_id = any(v_all))
+         and exists (select 1 from public.product_combo_parts c where c.part_id = any(v_all))) then
+    raise exception 'COMBO_LINK: a combo cannot share stock with a product it is made of, or with part of another combo.'
+      using errcode = '23514';
+  end if;
+
+  v_combo := exists (select 1 from public.product_combo_parts c where c.combo_id = any(v_all));
+  if v_combo then
+    select min(greatest(0, p.stock_on_hand))::integer into v_figure
+    from public.products p
+    where p.id in (select c.part_id from public.product_combo_parts c where c.combo_id = any(v_all));
+  else
+    select max(p.stock_on_hand) into v_figure
+    from public.products p
+    where p.id = any(v_all);
+  end if;
+
+  -- The partner's shelf keeps its id; a partner on its own starts one.
+  select coalesce(p.stock_group_id, gen_random_uuid()) into v_target
+  from public.products p where p.id = p_partner;
+
+  perform set_config('fgt.stock_link', 'on', true);
+  update public.products p
+     set stock_group_id = v_target,
+         stock_on_hand  = coalesce(v_figure, p.stock_on_hand)
+   where p.id = any(v_all);
+  perform set_config('fgt.stock_link', 'off', true);
+
+  select coalesce(jsonb_agg(jsonb_build_object('id', p.id, 'sku', p.sku, 'stock_on_hand', p.stock_on_hand)
+                            order by p.sku), '[]'::jsonb)
+    into v_members
+  from public.products p
+  where p.stock_group_id = v_target;
+
+  return jsonb_build_object('result', 'linked', 'stock_group_id', v_target, 'members', v_members);
+end;
+$$;
+
+revoke all on function public.link_stock(uuid, uuid) from public, anon;
+grant execute on function public.link_stock(uuid, uuid) to authenticated;
+
+
+-- ------------------------------------------------------------
 -- Check it worked. Every row below should say OK.
 -- ------------------------------------------------------------
 select 'product_combo_parts table' as item,
@@ -386,6 +499,10 @@ select 'product_combo_parts has forced RLS',
 union all
 select 'combo stock trigger',
        case when exists (select 1 from pg_trigger where tgname = 'products_combo_stock')
+            then 'OK' else 'MISSING' end
+union all
+select 'link_stock function',
+       case when exists (select 1 from pg_proc where proname = 'link_stock')
             then 'OK' else 'MISSING' end
 union all
 select 'combo parts check trigger',

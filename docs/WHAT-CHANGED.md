@@ -19,6 +19,10 @@ the products it is made of. Its stock shows the lowest of them (A 200,
 B 250 → 200) and can't be typed. Approving an order of 5 combos takes 5 of
 each product; undoing the approval puts them back.
 
+- **Linking never moves anything off a stock any more, and asks nothing.**
+  Add a product that already shares stock with others and they all join:
+  e.g. adding TTS5054 (shared with TTS5054-58 and TTS5058) puts all four on
+  one stock. The figure kept is the highest, or for a combo the combo's.
 - **One combo, several SKUs:** add the other SKUs under **Shared stock** on
   the combo. Every one of them shows the combo's stock, and selling any of
   them takes from the products.

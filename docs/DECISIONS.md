@@ -5011,3 +5011,42 @@ rely on. This closes the 2026-11-07 "web only" entry.
 revised -39 over stub tables: 35 checks, all pass, including a combo under
 three SKUs, an order across two of them and its undo, a part in two combos,
 a shared shelf turned into a combo, and every refusal above.
+
+## 2026-11-08 — Linking merges shelves; nothing is moved or asked
+
+2026-11-08 — Adding a product that already shares stock MERGES the two
+shelves: every SKU on either side ends up on one stock — Owner, on the "TTS5054
+already shares stock with something else … Move it here" prompt: "i don't want
+this. multiple SKU and combo products should be able to link to same stock".
+This REVERSES the 2026-09-13 entry "Adding a product that already shares
+another shelf now names what it is leaving and asks", including its rejection
+of merging. The prompt is gone from both apps. Merging is the only reading
+that holds together: if X is the same stock as TTS5054, and TTS5054 the same
+as TTS5058, then X is the same stock as TTS5058.
+
+2026-11-08 — Linking is one database function, `link_stock(product, partner)`
+(RUN-ME-39, section 6), called by the web route and the phone alike — It locks
+both shelves, works out one figure, and writes every SKU in one statement, so
+nothing is left half-merged and both apps behave the same. The figure is the
+highest counted one among all SKUs joining (the 2026-11-07 rule), or on a
+combo shelf the lowest part's; linking moves no part's stock (a session flag,
+`fgt.stock_link`, tells the combo trigger the write is not a sale). Refused:
+a merged shelf holding a combo together with one of its own parts or part of
+any combo (COMBO_LINK) — Rejected: merging SKU by SKU from the apps, which
+leaves a half-merged shelf when one write fails, and on the phone would be a
+second copy of the rule.
+
+2026-11-08 — Consequence accepted: a counted shelf merged into a combo shelf
+loses its own count — it is the combo now, and the combo's figure is worked
+out from its parts.
+
+2026-11-08 — The phone's old AppDataManager.linkStock(sku:toPartner:
+confirmMove:) is no longer called; the editor uses
+AppDataManager+LinkStock.swift. It was left in place, not deleted, because
+another session has uncommitted edits inside it — OWED: delete it, with
+`StockLinkOutcome`, once that work is committed.
+
+2026-11-08 — RUN-ME-39 re-proven on PGlite: 51 checks, all pass, adding two
+shelves (3 + 2 SKUs) merged from either side, an uncounted SKU joining, a
+plain shelf joining a combo, a second combo SKU joining, a sale after a
+merge, "already linked", and the COMBO_LINK refusals.

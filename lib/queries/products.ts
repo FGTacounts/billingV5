@@ -62,42 +62,21 @@ export interface StockGroupMember {
   stock_on_hand: number | null;
 }
 
-// Shared stock. Linking puts `productId` under `partnerId`'s stock: the
-// product takes the partner's figure and from then on the two move as one.
-// Returns every product now in that group, the linked one included.
-/**
- * Asked for when the product being added already shares a shelf with others.
- * Linking it here takes it off that one, so the caller names them and asks
- * before calling again with `confirmMove`.
- */
-export interface StockMoveNeedsConfirmation {
-  sku: string;
-  movingFrom: string[];
-}
-
+// Links `productId` and `partnerId` so they sell from one stock figure. Every
+// SKU already sharing with either side joins too (RUN-ME-39 link_stock);
+// nothing is taken off a shelf and nothing needs confirming.
 export async function linkStock(
   productId: string,
-  partnerId: string,
-  confirmMove = false
-): Promise<
-  | { linked: true; stockGroupId: string; members: StockGroupMember[] }
-  | { linked: false; confirm: StockMoveNeedsConfirmation }
-> {
+  partnerId: string
+): Promise<{ stockGroupId: string | null; members: StockGroupMember[] }> {
   const res = await fetch("/api/products/link-stock", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ productId, partnerId, confirmMove }),
+    body: JSON.stringify({ productId, partnerId }),
   });
   const data = await res.json();
-  if (res.status === 409 && data?.needsConfirmation) {
-    return { linked: false, confirm: { sku: data.sku, movingFrom: data.movingFrom ?? [] } };
-  }
   if (!res.ok) throw new Error(data.error ?? t("products.shareStockFailed"));
-  return {
-    linked: true,
-    stockGroupId: data.stockGroupId as string,
-    members: data.members as StockGroupMember[],
-  };
+  return { stockGroupId: (data.stockGroupId as string | null) ?? null, members: data.members as StockGroupMember[] };
 }
 
 export async function unlinkStock(productId: string): Promise<void> {

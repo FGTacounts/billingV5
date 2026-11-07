@@ -1,20 +1,19 @@
-import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { getAppUser } from "@/lib/auth";
 import { t } from "@/lib/i18n";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { comboRefusal } from "@/lib/combos-server";
+import { supabaseCaller } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 
-// Shared stock: put one product under another product's stock, or take it
-// back out. Two SKUs that are the same physical shelf keep one figure.
+// Shared stock: link two products so they sell from one stock figure, or
+// take one back out. Any number of SKUs — combos too — can share one stock.
 //
-// The database does the real work (scratchpad/RUN-ME-18-shared-stock.sql):
-// joining a group keeps the higher of the group's figure and the product's
-// own (RUN-ME-39; before it, the joiner simply took the group's), and any
-// later change to one member is copied to the rest. This route only decides
-// which group id the two rows carry.
+// Linking is one database function (scratchpad/RUN-ME-39 link_stock) that
+// merges the two shelves: every SKU already sharing with either side joins
+// too. Afterwards the RUN-ME-18 mirror keeps every SKU on the shelf at one
+// figure. Taking one out keeps the figure it had at that moment.
 //
 // Manager-only, like every other product edit.
 
@@ -32,13 +31,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: t("common.managerAccessRequired") }, { status: 403 });
   }
 
-  const { productId, partnerId, confirmMove } = (await req.json()) as {
-    productId?: string;
-    partnerId?: string;
-    // Set only after the person has been told what the move costs and said
-    // yes. Without it a product that already shares a shelf is not moved.
-    confirmMove?: boolean;
-  };
+  const { productId, partnerId } = (await req.json()) as { productId?: string; partnerId?: string };
   if (!productId || !partnerId) {
     return NextResponse.json({ error: t("products.productIdAndPartnerIdRequired") }, { status: 400 });
   }
@@ -46,77 +39,32 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: t("products.cannotShareWithItself") }, { status: 400 });
   }
 
-  const admin = supabaseAdmin();
-  const { data: rows, error: readErr } = await admin
-    .from("products")
-    .select("id, sku, stock_group_id")
-    .in("id", [productId, partnerId]);
-  if (readErr) {
+  // One database call does the whole link (RUN-ME-39 link_stock): every SKU
+  // on either side ends up on ONE shelf — "multiple SKU and combo products
+  // should be able to link to the same stock" (owner, 2026-11-08). Nothing is
+  // taken off a shelf and nothing is asked. The figure is the highest counted
+  // one, or on a combo shelf the lowest part's. Run as the caller, so the
+  // function's own manager check applies, exactly as it does for the phone.
+  const supabase = supabaseCaller();
+  const { data, error } = await supabase.rpc("link_stock", { p_product: productId, p_partner: partnerId });
+  if (error) {
+    const missing = error.message.includes("link_stock") || error.code === "PGRST202";
     return NextResponse.json(
-      { error: notReady(readErr.message) ? NOT_READY_MESSAGE : readErr.message },
+      { error: missing ? t("products.linkStockNeedsRunMe39") : comboRefusal(error.message) },
       { status: 400 }
     );
   }
-  const partner = rows?.find((r) => r.id === partnerId);
-  const product = rows?.find((r) => r.id === productId);
-  if (!partner || !product) return NextResponse.json({ error: t("products.notFound") }, { status: 404 });
-
-  // Moving a product off a shelf it already shares is never silent.
-  //
-  // A shelf holds any number of SKUs — that is the whole point, one physical
-  // stock sold as several models, sizes or colours. But a SKU belongs to ONE
-  // shelf, so adding one that is already on another takes it off that one,
-  // and whoever it was sharing with is left behind holding the figure it had
-  // at that moment. Nobody would guess that from "add a product", so it is
-  // named and asked about rather than done.
-  if (product.stock_group_id && product.stock_group_id !== partner.stock_group_id) {
-    const { data: current } = await admin
-      .from("products")
-      .select("sku")
-      .eq("stock_group_id", product.stock_group_id)
-      .neq("id", productId)
-      .order("sku");
-    const movingFrom = (current ?? []).map((r) => r.sku as string);
-    // A group of one is not a shelf anybody shares; moving out of it costs
-    // nothing and needs no confirmation.
-    if (movingFrom.length > 0 && !confirmMove) {
-      return NextResponse.json(
-        { needsConfirmation: true, sku: product.sku, movingFrom },
-        { status: 409 }
-      );
-    }
+  const outcome = data as { result: string; stock_group_id?: string; members?: unknown[] };
+  if (outcome.result === "already") {
+    // Already one shelf: answer with it as it stands.
+    const { data: me } = await supabase.from("products").select("stock_group_id").eq("id", productId).maybeSingle();
+    const groupId = (me?.stock_group_id as string | null) ?? null;
+    const { data: group } = groupId
+      ? await supabase.from("products").select("id, sku, stock_on_hand").eq("stock_group_id", groupId).order("sku")
+      : { data: [] };
+    return NextResponse.json({ ok: true, stockGroupId: groupId, members: group ?? [] });
   }
-
-  // The partner keeps its figure. If it has no group yet, it starts one —
-  // first member, nothing to adopt from, stock untouched.
-  let groupId: string = partner.stock_group_id ?? randomUUID();
-  if (!partner.stock_group_id) {
-    const { error } = await admin.from("products").update({ stock_group_id: groupId }).eq("id", partnerId);
-    if (error) return NextResponse.json({ error: comboRefusal(error.message) }, { status: 400 });
-  }
-
-  // The product joins it. The adopt trigger keeps the HIGHER of the two
-  // figures (RUN-ME-39, owner 2026-11-07) — or, on a combo shelf, the
-  // combo's — and the mirror trigger copies it to the whole shelf, so it no
-  // longer matters which of the two SKUs was open. Already there? Nothing
-  // to do.
-  if (product.stock_group_id !== groupId) {
-    // A combo can be sold under several SKUs, so a combo may join a shelf
-    // and a SKU may join a combo's — it then takes the combo's figure, which
-    // is worked out from the parts (RUN-ME-39). The database refuses only a
-    // combo sharing stock with what it is made of; comboRefusal() says so.
-    const { error } = await admin.from("products").update({ stock_group_id: groupId }).eq("id", productId);
-    if (error) return NextResponse.json({ error: comboRefusal(error.message) }, { status: 400 });
-  }
-
-  const { data: group, error: groupErr } = await admin
-    .from("products")
-    .select("id, sku, stock_on_hand")
-    .eq("stock_group_id", groupId)
-    .order("sku");
-  if (groupErr) return NextResponse.json({ error: groupErr.message }, { status: 400 });
-
-  return NextResponse.json({ ok: true, stockGroupId: groupId, members: group ?? [] });
+  return NextResponse.json({ ok: true, stockGroupId: outcome.stock_group_id, members: outcome.members ?? [] });
 }
 
 export async function DELETE(req: NextRequest) {

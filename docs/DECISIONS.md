@@ -4959,3 +4959,55 @@ Excel and saved as .xlsx should upload on the phone too.
   file saved by Microsoft Excel itself was made on this Mac but could not be
   read back for the test: Excel's sandbox writes only inside its own
   container, which the shell may not read.
+
+## 2026-11-08 — A combo can be sold under several SKUs; combos reach the app
+
+2026-11-08 — A combo can share stock with other SKUs, and a shared shelf can
+become a combo — Owner: "multiple SKU can have the same linked stock. not
+only one combo or one linked stock". This REVERSES the 2026-11-07 entry "One
+level, and no shared stock for a combo". The model is now the shelf: SKUs
+linked as shared stock are one shelf (any number of them, as before), and a
+shelf is a combo when any of its SKUs has parts. Its parts are the parts of
+every combo on it; every SKU on it holds the lowest part's figure; selling
+ANY of them takes one of each part, once per sale. A product can still be a
+part of any number of combos. RUN-ME-39 had not been run, so it was revised
+in place rather than followed by a RUN-ME-40 — Rejected: copying a combo's
+part list onto each of its SKUs, which would have to be kept identical by
+hand on two apps.
+
+2026-11-08 — What is still refused, and why — A combo inside a combo (a part
+whose shelf is a combo shelf), a combo containing a SKU it shares stock with,
+and linking a combo to a product it is made of or to part of another combo.
+Each would make one sale move the same stock twice or chase itself. The
+database refuses them with a code at the start of the message (COMBO_IN_COMBO,
+COMBO_IS_PART, COMBO_SAME_SHELF, COMBO_LINK) and both apps turn the code into
+a sentence from their own catalogue.
+
+2026-11-08 — Joining a combo shelf takes the combo's figure, not the higher —
+The 2026-11-07 "keep the higher" rule is for counted stock. A combo's figure
+is worked out from its parts, so a SKU linked to a combo (or a combo linked
+to a plain shelf, whose own count is then discarded) takes the lowest part's
+figure. Linking moves no part.
+
+2026-11-08 — The RUN-ME-18 mirror now copies the figure the row holds after
+every trigger has run, not the one it was written with — Selling a combo SKU
+writes its figure; the combo trigger then puts it back to the lowest part
+(different from the sale figure when a part was clamped at zero or was
+already lower). The mirror used to copy the earlier number to the other SKUs
+and the shelf disagreed with itself.
+
+2026-11-08 — Combos reach the iPhone and Mac app (one Swift target) — The
+product editor has the same Combo section as the web (add, remove, the
+combo's figure read-only), the product sheet says "Combo of …" and "Part of
+combo …", and three writers leave a combo shelf's figure alone: the editor's
+Save (`updateArticle(includeStock:)`), the warehouse stock correction
+(`updateStock` refuses with the catalogue sentence), and the products import.
+Calls live in `AppDataManager+Combos.swift`, beside rather than inside
+AppDataManager, and go straight to `product_combo_parts` like the phone's
+shared-stock links (2026-09-12) — the database's checks are what both apps
+rely on. This closes the 2026-11-07 "web only" entry.
+
+2026-11-08 — RUN-ME-39 re-proven on PGlite with RUN-ME-8, -18, -35 and the
+revised -39 over stub tables: 35 checks, all pass, including a combo under
+three SKUs, an order across two of them and its undo, a part in two combos,
+a shared shelf turned into a combo, and every refusal above.

@@ -1,6 +1,6 @@
 -- ============================================================
--- FGT Billing — linking two SKUs keeps the higher stock figure,
--- and a product can be a combo of other products.
+-- FGT Billing — linking SKUs keeps the higher stock figure, and
+-- a product can be a combo of other products.
 --
 -- Paste the whole thing into Supabase -> SQL Editor -> Run.
 -- Check the address bar says the BILLING project
@@ -9,82 +9,21 @@
 --
 -- Relies on RUN-ME-8 (stock floor), RUN-ME-18 (shared stock) and
 -- RUN-ME-29 (current_user_is_admin), all live.
+--
+-- Words used below:
+--   shelf  — one physical stock. A product with no stock_group_id
+--            is a shelf of its own; products sharing a
+--            stock_group_id are one shelf under several SKUs
+--            (RUN-ME-18). A shelf holds ANY number of SKUs.
+--   combo  — a product sold as a set of one of each of its parts.
+--            A combo can be sold under several SKUs too: link them
+--            as shared stock and they are one combo shelf.
+--            A product can be a part of any number of combos.
 -- ------------------------------------------------------------
 
 
 -- ------------------------------------------------------------
--- 1. Linking keeps the higher figure (owner, 2026-11-07)
---
--- Until now the product being added took the figure of the
--- product it joined. Opening a NEW SKU (0 in stock) and adding
--- the ORIGINAL SKU (200 in stock) to it therefore set the
--- original to 0 — the stock disappeared. That is what happened
--- to TSB220/TSB-220 and TTS5053/TTS5053-VC on 2026-11-07.
---
--- Now, when a product joins a shelf, the shelf keeps whichever
--- figure is higher: the shelf's or the product's own. A product
--- with no count kept (null) never lowers or replaces a count.
--- The mirror trigger (RUN-ME-18) then copies the result to every
--- other SKU on the shelf, so the whole shelf agrees.
---
--- A brand-new row inserted straight into a group still takes the
--- group's figure, as before: there is no count of its own to keep.
--- ------------------------------------------------------------
-create or replace function public.adopt_shared_stock()
-returns trigger
-language plpgsql
-as $$
-declare
-  group_stock integer;
-begin
-  if new.stock_group_id is null then
-    return new;
-  end if;
-  if tg_op = 'UPDATE' and new.stock_group_id is not distinct from old.stock_group_id then
-    return new;
-  end if;
-  -- A combo's figure is worked out from its parts (section 2), so
-  -- it has no shelf of its own to share.
-  if to_regclass('public.product_combo_parts') is not null
-     and exists (select 1 from public.product_combo_parts c where c.combo_id = new.id) then
-    raise exception 'A combo cannot share stock with another SKU.' using errcode = '23514';
-  end if;
-  select max(p.stock_on_hand) into group_stock
-  from public.products p
-  where p.stock_group_id = new.stock_group_id
-    and p.id <> new.id;
-  if not found or group_stock is null then
-    -- Nobody else on the shelf has a count: keep our own.
-    return new;
-  end if;
-  if tg_op = 'INSERT' then
-    new.stock_on_hand := group_stock;
-  else
-    -- greatest() ignores a null, so an uncounted product takes
-    -- the shelf's figure and a counted one keeps the higher.
-    new.stock_on_hand := greatest(group_stock, new.stock_on_hand);
-  end if;
-  return new;
-end;
-$$;
-
-
--- ------------------------------------------------------------
--- 2. Combos
---
--- A combo is a product sold as a set of other products: one of
--- each part. It keeps no stock of its own. Its figure is the
--- LOWEST of its parts' figures, because you can only make as
--- many sets as the scarcest part allows (A 200, B 250 -> 200).
---
--- Selling a combo takes one of each part; giving it back (undo
--- an approval, restore, delete) puts one of each back. This is
--- done here rather than in the apps, so every path that already
--- moves stock — the approve and unapprove functions, the phone,
--- the stock route — works for combos without being changed:
--- whatever amount a combo's figure is moved by, each part is
--- moved by the same amount, and the combo's figure is then put
--- back to the lowest part.
+-- 1. The combo table
 -- ------------------------------------------------------------
 create table if not exists public.product_combo_parts (
   combo_id   uuid not null references public.products(id) on delete cascade,
@@ -95,16 +34,15 @@ create table if not exists public.product_combo_parts (
 );
 
 comment on table public.product_combo_parts is
-  'A combo product and the products it is made of, one of each. The combo''s stock is the lowest of its parts.';
+  'A combo product and the products it is made of, one of each. The combo''s stock (and every SKU sharing it) is the lowest of its parts.';
 
 create index if not exists product_combo_parts_part_idx
   on public.product_combo_parts (part_id);
 
-
 -- Rule 3: every table has RLS, forced. Anyone signed in may see
--- what a combo is made of (it is not a cost figure: whoever may
--- see the stock may see where it comes from); only a manager or
--- an admin may change it. Nothing for anon.
+-- what a combo is made of (not a cost figure: whoever may see the
+-- stock may see where it comes from); only a manager or an admin
+-- may change it. Nothing for anon.
 alter table public.product_combo_parts enable row level security;
 alter table public.product_combo_parts force row level security;
 
@@ -127,11 +65,82 @@ create policy "manager removes combo parts"
   using (public.current_role_is('manager') or public.current_user_is_admin());
 
 
--- One level only: a combo is not a part of another combo, a part
--- is not itself a combo, and a combo does not share a shelf with
--- another SKU (its figure is worked out, not counted, so there is
--- no shelf to share). Checked here as well as in the web route,
--- because the phone writes tables directly.
+-- ------------------------------------------------------------
+-- 2. Shelves and combo shelves
+-- ------------------------------------------------------------
+
+-- Every product on the same shelf as p_product, itself included.
+create or replace function public.shelf_members(p_product uuid)
+returns setof uuid
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select q.id
+  from public.products me
+  join public.products q
+    on coalesce(q.stock_group_id, q.id) = coalesce(me.stock_group_id, me.id)
+  where me.id = p_product;
+$$;
+
+-- The parts of every combo on p_product's shelf. Empty means the
+-- shelf is not a combo.
+create or replace function public.combo_shelf_parts(p_product uuid)
+returns setof uuid
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select distinct c.part_id
+  from public.product_combo_parts c
+  where c.combo_id in (select public.shelf_members(p_product));
+$$;
+
+-- What a combo shelf can make: the lowest of its parts. Null when
+-- no part keeps a count.
+create or replace function public.combo_stock(p_product uuid)
+returns integer
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select min(greatest(0, p.stock_on_hand))::integer
+  from public.products p
+  where p.id in (select public.combo_shelf_parts(p_product));
+$$;
+
+-- Put a combo shelf's figure back to its lowest part. One row is
+-- written; the shared-stock mirror copies it to the other SKUs.
+create or replace function public.refresh_combo_stock(p_product uuid)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  update public.products p
+     set stock_on_hand = public.combo_stock(p_product)
+   where p.id = p_product
+     and exists (select public.combo_shelf_parts(p_product))
+     and p.stock_on_hand is distinct from public.combo_stock(p_product);
+$$;
+
+revoke all on function public.shelf_members(uuid) from public, anon;
+revoke all on function public.combo_shelf_parts(uuid) from public, anon;
+revoke all on function public.combo_stock(uuid) from public, anon;
+revoke all on function public.refresh_combo_stock(uuid) from public, anon;
+grant execute on function public.combo_stock(uuid) to authenticated;
+
+
+-- ------------------------------------------------------------
+-- 3. One level of combo
+--
+-- A combo is not a part of another combo, and nothing on a combo's
+-- shelf is a part of it. Checked here because the phone writes
+-- tables directly; the web route asks first for a readable reply.
+-- ------------------------------------------------------------
 create or replace function public.check_combo_part()
 returns trigger
 language plpgsql
@@ -139,14 +148,18 @@ security definer
 set search_path = ''
 as $$
 begin
-  if exists (select 1 from public.product_combo_parts c where c.combo_id = new.part_id) then
-    raise exception 'A combo cannot be a part of another combo.' using errcode = '23514';
+  if new.part_id in (select public.shelf_members(new.combo_id)) then
+    raise exception 'COMBO_SAME_SHELF: a combo cannot contain itself or a SKU it shares stock with.'
+      using errcode = '23514';
   end if;
-  if exists (select 1 from public.product_combo_parts c where c.part_id = new.combo_id) then
-    raise exception 'This product is a part of a combo, so it cannot be a combo itself.' using errcode = '23514';
+  if exists (select public.combo_shelf_parts(new.part_id)) then
+    raise exception 'COMBO_IN_COMBO: a combo cannot be a part of another combo.'
+      using errcode = '23514';
   end if;
-  if exists (select 1 from public.products p where p.id = new.combo_id and p.stock_group_id is not null) then
-    raise exception 'A product that shares stock with another SKU cannot be a combo. Stop sharing first.' using errcode = '23514';
+  if exists (select 1 from public.product_combo_parts c
+              where c.part_id in (select public.shelf_members(new.combo_id))) then
+    raise exception 'COMBO_IS_PART: a product that is part of a combo cannot be a combo itself.'
+      using errcode = '23514';
   end if;
   return new;
 end;
@@ -158,45 +171,139 @@ create trigger product_combo_parts_check
   for each row execute function public.check_combo_part();
 
 
--- The combo's figure, worked out from its parts. Null only when
--- no part keeps a count. least()/min() ignore uncounted parts.
-create or replace function public.combo_stock(p_combo_id uuid)
-returns integer
-language sql
-stable
-security definer
-set search_path = ''
+-- ------------------------------------------------------------
+-- 4. Linking keeps the higher figure (owner, 2026-11-07)
+--
+-- Until now the product being added took the figure of the
+-- product it joined, so opening a NEW SKU (0) and adding the
+-- ORIGINAL (200) set the original to 0. Now the shelf keeps the
+-- higher of the two. A product with no count kept (null) never
+-- lowers or replaces a count.
+--
+-- A combo shelf is the exception: its figure is worked out, not
+-- counted, so a SKU joining it (or a combo joining a plain shelf)
+-- takes the combo's figure. The mirror trigger then copies the
+-- result to every other SKU on the shelf.
+--
+-- A brand-new row inserted straight into a group still takes the
+-- group's figure, as before: it has no count of its own to keep.
+-- ------------------------------------------------------------
+create or replace function public.adopt_shared_stock()
+returns trigger
+language plpgsql
 as $$
-  select min(greatest(0, p.stock_on_hand))::integer
-  from public.product_combo_parts c
-  join public.products p on p.id = c.part_id
-  where c.combo_id = p_combo_id;
+declare
+  group_stock  integer;
+  joiner_parts boolean;
+  group_parts  boolean;
+  joiner_is_part boolean;
+  group_has_part boolean;
+begin
+  if new.stock_group_id is null then
+    return new;
+  end if;
+  if tg_op = 'UPDATE' and new.stock_group_id is not distinct from old.stock_group_id then
+    return new;
+  end if;
+
+  -- One level of combo, kept across links as well.
+  joiner_parts := exists (select 1 from public.product_combo_parts c where c.combo_id = new.id);
+  group_parts := exists (select 1 from public.product_combo_parts c
+                          join public.products p on p.id = c.combo_id
+                         where p.stock_group_id = new.stock_group_id and p.id <> new.id);
+  joiner_is_part := exists (select 1 from public.product_combo_parts c where c.part_id = new.id);
+  group_has_part := exists (select 1 from public.product_combo_parts c
+                             join public.products p on p.id = c.part_id
+                            where p.stock_group_id = new.stock_group_id and p.id <> new.id);
+  if (joiner_parts and group_has_part) or (group_parts and joiner_is_part) then
+    raise exception 'COMBO_LINK: a combo cannot share stock with a product it is made of, or with part of another combo.'
+      using errcode = '23514';
+  end if;
+  if joiner_parts or group_parts then
+    -- A combo shelf: the lowest part across every combo on it.
+    select min(greatest(0, p.stock_on_hand))::integer into group_stock
+    from public.products p
+    where p.id in (
+      select c.part_id
+      from public.product_combo_parts c
+      join public.products k on k.id = c.combo_id
+      where k.stock_group_id = new.stock_group_id or k.id = new.id
+    );
+    if group_stock is not null then
+      new.stock_on_hand := group_stock;
+    end if;
+    return new;
+  end if;
+
+  select max(p.stock_on_hand) into group_stock
+  from public.products p
+  where p.stock_group_id = new.stock_group_id
+    and p.id <> new.id;
+  if group_stock is null then
+    -- Nobody else on the shelf has a count: keep our own.
+    return new;
+  end if;
+  if tg_op = 'INSERT' then
+    new.stock_on_hand := group_stock;
+  else
+    -- greatest() ignores a null, so an uncounted product takes
+    -- the shelf's figure and a counted one keeps the higher.
+    new.stock_on_hand := greatest(group_stock, new.stock_on_hand);
+  end if;
+  return new;
+end;
 $$;
 
-revoke all on function public.combo_stock(uuid) from public, anon;
-grant execute on function public.combo_stock(uuid) to authenticated;
 
-
--- Put a combo's stored figure back to its lowest part.
-create or replace function public.refresh_combo_stock(p_combo_id uuid)
-returns void
-language sql
-security definer
-set search_path = ''
+-- The RUN-ME-18 mirror, copying what the row holds NOW rather than
+-- the figure it was written with. A combo's own trigger can put
+-- the row back to its lowest part in between, and the other SKUs
+-- must get that, not the number before it.
+create or replace function public.mirror_shared_stock()
+returns trigger
+language plpgsql
 as $$
+declare
+  current_stock integer;
+begin
+  if new.stock_group_id is null then
+    return null;
+  end if;
+  if new.stock_on_hand is not distinct from old.stock_on_hand
+     and new.stock_group_id is not distinct from old.stock_group_id then
+    return null;
+  end if;
+  select p.stock_on_hand into current_stock from public.products p where p.id = new.id;
   update public.products p
-     set stock_on_hand = public.combo_stock(p_combo_id)
-   where p.id = p_combo_id
-     and exists (select 1 from public.product_combo_parts c where c.combo_id = p_combo_id)
-     and p.stock_on_hand is distinct from public.combo_stock(p_combo_id);
+  set stock_on_hand = current_stock
+  where p.stock_group_id = new.stock_group_id
+    and p.id <> new.id
+    and p.stock_on_hand is distinct from current_stock;
+  return null;
+end;
 $$;
 
-revoke all on function public.refresh_combo_stock(uuid) from public, anon;
 
-
--- A part's figure changed: every combo it belongs to is refreshed.
--- Also runs when a combo's own figure is moved, AFTER its parts
--- have been moved (see below), which puts it back to the lowest.
+-- ------------------------------------------------------------
+-- 5. Combo stock follows its parts, and a sale takes the parts
+--
+-- Every path that moves stock — approving, undoing an approval,
+-- restoring, deleting, the phone — writes one row's figure. None
+-- of them need to know about combos:
+--
+--   • a PART moved: every combo shelf it is in is refreshed to its
+--     lowest part;
+--   • a SKU on a COMBO shelf moved (any of its SKUs): each part is
+--     moved by the same amount — one write per part shelf, so two
+--     parts sharing a shelf are not moved twice — and the combo is
+--     refreshed.
+--
+-- pg_trigger_depth() = 1 means the write came from a statement,
+-- not from one of these triggers. The refresh and the shared-stock
+-- mirror write at a deeper level, so they are never taken for a
+-- sale. A shelf is moved by ONE row per statement (the approve
+-- function pools by shelf), so a sale is applied once.
+-- ------------------------------------------------------------
 create or replace function public.combo_stock_follows_parts()
 returns trigger
 language plpgsql
@@ -211,29 +318,18 @@ begin
     return null;
   end if;
 
-  -- This row is a combo, and somebody moved its figure directly
-  -- (an approval, an undo, the phone) rather than this trigger
-  -- refreshing it. Move each part by the same amount — one write
-  -- per physical shelf, so two parts that share a shelf are not
-  -- moved twice — then refresh the combo from its parts.
-  --
-  -- pg_trigger_depth() = 1 means the write came from a statement,
-  -- not from one of these triggers; the refresh below and the
-  -- shared-stock mirror both write at a deeper level, so they are
-  -- never mistaken for a sale.
   if pg_trigger_depth() = 1
      and old.stock_on_hand is not null
      and new.stock_on_hand is not null
-     and exists (select 1 from public.product_combo_parts c where c.combo_id = new.id) then
+     and exists (select public.combo_shelf_parts(new.id)) then
     v_delta := new.stock_on_hand - old.stock_on_hand;
     update public.products p
        set stock_on_hand = greatest(0, p.stock_on_hand + v_delta)
      where p.stock_on_hand is not null
        and p.id in (
          select distinct on (coalesce(q.stock_group_id, q.id)) q.id
-         from public.product_combo_parts c
-         join public.products q on q.id = c.part_id
-         where c.combo_id = new.id
+         from public.products q
+         where q.id in (select public.combo_shelf_parts(new.id))
          order by coalesce(q.stock_group_id, q.id), q.id
        );
     perform public.refresh_combo_stock(new.id);
@@ -296,6 +392,15 @@ select 'combo parts check trigger',
        case when exists (select 1 from pg_trigger where tgname = 'product_combo_parts_check')
             then 'OK' else 'MISSING' end
 union all
-select 'shared-stock adopt trigger (RUN-ME-18) still live',
+select 'shared-stock triggers (RUN-ME-18) still live',
        case when exists (select 1 from pg_trigger where tgname = 'products_stock_group_adopt')
-            then 'OK' else 'MISSING' end;
+             and exists (select 1 from pg_trigger where tgname = 'products_stock_group_mirror')
+            then 'OK' else 'MISSING' end
+union all
+select 'no shelf disagrees with itself',
+       case when not exists (
+              select 1 from public.products
+              where stock_group_id is not null
+              group by stock_group_id
+              having count(distinct coalesce(stock_on_hand, -1)) > 1)
+            then 'OK' else 'MISMATCH' end;

@@ -1,25 +1,34 @@
 # What changed, and what you need to do
 
-## 2026-11-07 — Linked stock fixed, and combos
+## 2026-11-07 / 08 — Linked stock fixed, and combos
 
 **Run `scratchpad/RUN-ME-39-linked-stock-keeps-the-higher-figure-and-combos.sql`
 in Supabase** (billing project — check the address bar says
-`isdeheipdfmwzmmnnidr`). The web needs deploying. Until the SQL is run,
-linking behaves as before and the Combo section does not appear.
+`isdeheipdfmwzmmnnidr`). The web needs deploying and the app needs a new
+build. Until the SQL is run, linking behaves as before and the Combo section
+does not appear.
 
 **Linking.** Linking two SKUs used to give both the stock of the product you
 had open. Opening a new SKU (0) and adding the original (200) set the
 original to 0. Now the shared stock keeps the **higher** figure, whichever one
 you open. **Recount TSB220 / TSB-220 and TTS5053 / TTS5053-VC**: they were
-linked that way today and both pairs are at 0. The old figures can't be
-recovered.
+linked that way and both pairs are at 0. The old figures can't be recovered.
 
 **Combo.** Open a product → **Combo** (under Shared stock) → search and add
 the products it is made of. Its stock shows the lowest of them (A 200,
 B 250 → 200) and can't be typed. Approving an order of 5 combos takes 5 of
-each product; undoing the approval puts them back. A combo can't contain
-another combo and can't share stock. Making combos is web-only for now. The
-phone still takes the right stock when it approves a combo.
+each product; undoing the approval puts them back.
+
+- **One combo, several SKUs:** add the other SKUs under **Shared stock** on
+  the combo. Every one of them shows the combo's stock, and selling any of
+  them takes from the products.
+- A product can be part of any number of combos.
+- A shared-stock product can be made into a combo; all its SKUs become the
+  combo.
+- Refused: a combo inside another combo, and a combo sharing stock with a
+  product it is made of.
+
+Works the same on the web, the iPhone and the Mac app.
 
 ## 2026-10-22 — Export PDF failing on some orders
 

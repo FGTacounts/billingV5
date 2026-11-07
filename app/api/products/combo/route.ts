@@ -2,36 +2,61 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAppUser } from "@/lib/auth";
 import { t } from "@/lib/i18n";
 import { supabaseAdmin } from "@/lib/supabase/admin";
-import { comboTableMissing } from "@/lib/combos-server";
+import { comboRefusal, comboTableMissing, shelfMembers } from "@/lib/combos-server";
 
 export const runtime = "nodejs";
 
 // Combos (scratchpad/RUN-ME-39): a product sold as one of each of several
-// other products. The database keeps the combo's stock at the lowest of its
+// other products. The database keeps a combo's stock at the lowest of its
 // parts and moves every part when a combo is sold or given back; this route
 // only says which products a combo is made of.
+//
+// A combo can be sold under several SKUs: they share stock (RUN-ME-18) and
+// are one combo shelf. So everything here works on the SHELF the product is
+// on — its parts are the parts of every combo on that shelf, and taking a
+// part out takes it out wherever on the shelf it was added.
 //
 // Reading is open to anyone signed in — it is not a cost figure, and whoever
 // may see the stock may see where it comes from. Changing it is manager-only,
 // like every other product edit.
 
-type Part = { id: string; sku: string; stock_on_hand: number | null };
+type Member = { id: string; sku: string; stock_on_hand: number | null };
+type Admin = ReturnType<typeof supabaseAdmin>;
 
-function notReady(message: string | undefined) {
-  return comboTableMissing(message) ? t("products.comboNotEnabled") : message ?? "";
+function bySku(a: Member, b: Member) {
+  return a.sku.localeCompare(b.sku);
 }
 
-async function partsOf(admin: ReturnType<typeof supabaseAdmin>, comboId: string) {
-  const { data, error } = await admin
+async function productsById(admin: Admin, ids: string[]): Promise<Member[]> {
+  if (ids.length === 0) return [];
+  const { data, error } = await admin.from("products").select("id, sku, stock_on_hand").in("id", ids);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as Member[];
+}
+
+/** The parts of the combo shelf `productId` is on, and the combos it is in. */
+async function comboOf(admin: Admin, productId: string) {
+  const shelf = (await shelfMembers(admin, productId)).map((m) => m.id);
+  if (shelf.length === 0) return { parts: [] as Member[], partOf: [] as Member[], shelf };
+  const { data: own, error } = await admin
     .from("product_combo_parts")
-    .select("part:products!product_combo_parts_part_id_fkey(id, sku, stock_on_hand)")
-    .eq("combo_id", comboId);
-  if (error) return { error: error.message };
-  const parts = (data ?? [])
-    .map((r) => r.part as unknown as Part | null)
-    .filter((p): p is Part => p != null)
-    .sort((a, b) => a.sku.localeCompare(b.sku));
-  return { parts };
+    .select("part_id")
+    .in("combo_id", shelf);
+  if (error) throw new Error(error.message);
+  const { data: inCombos, error: e2 } = await admin
+    .from("product_combo_parts")
+    .select("combo_id")
+    .in("part_id", shelf);
+  if (e2) throw new Error(e2.message);
+  const parts = await productsById(admin, [...new Set((own ?? []).map((r) => r.part_id as string))]);
+  const partOf = await productsById(admin, [...new Set((inCombos ?? []).map((r) => r.combo_id as string))]);
+  return { parts: parts.sort(bySku), partOf: partOf.sort(bySku), shelf };
+}
+
+async function answer(admin: Admin, productId: string) {
+  const { parts } = await comboOf(admin, productId);
+  const { data: fresh } = await admin.from("products").select("stock_on_hand").eq("id", productId).maybeSingle();
+  return NextResponse.json({ ok: true, parts, comboStock: fresh?.stock_on_hand ?? null });
 }
 
 async function managerOrRefuse() {
@@ -42,34 +67,32 @@ async function managerOrRefuse() {
   return null;
 }
 
-// ?productId= → the parts it is made of, and the combos it is a part of.
+function failed(e: unknown, status = 400) {
+  const message = e instanceof Error ? e.message : String(e);
+  return NextResponse.json({ error: comboRefusal(message) }, { status });
+}
+
+// ?productId= → the parts of its combo shelf, and the combos it is a part of.
 export async function GET(req: NextRequest) {
   const user = await getAppUser();
   if (!user) return NextResponse.json({ error: t("common.unauthorized") }, { status: 401 });
   const productId = req.nextUrl.searchParams.get("productId");
   if (!productId) return NextResponse.json({ error: t("products.productIdRequired") }, { status: 400 });
 
-  const admin = supabaseAdmin();
-  const own = await partsOf(admin, productId);
-  if (own.error !== undefined) {
+  try {
+    const { parts, partOf } = await comboOf(supabaseAdmin(), productId);
+    return NextResponse.json({ parts, partOf, ready: true });
+  } catch (e) {
     // Not run yet: nothing is a combo, and the page carries on.
-    if (comboTableMissing(own.error)) return NextResponse.json({ parts: [], partOf: [], ready: false });
-    return NextResponse.json({ error: own.error }, { status: 400 });
+    if (comboTableMissing(e instanceof Error ? e.message : String(e))) {
+      return NextResponse.json({ parts: [], partOf: [], ready: false });
+    }
+    return failed(e);
   }
-  const { data: inCombos, error } = await admin
-    .from("product_combo_parts")
-    .select("combo:products!product_combo_parts_combo_id_fkey(id, sku, stock_on_hand)")
-    .eq("part_id", productId);
-  if (error) return NextResponse.json({ error: notReady(error.message) }, { status: 400 });
-  const partOf = (inCombos ?? [])
-    .map((r) => r.combo as unknown as Part | null)
-    .filter((p): p is Part => p != null)
-    .sort((a, b) => a.sku.localeCompare(b.sku));
-  return NextResponse.json({ parts: own.parts, partOf, ready: true });
 }
 
-// { comboId, partId } → adds one part. The combo's stock becomes the lowest
-// of its parts at once (database trigger).
+// { comboId, partId } → adds one part. Every SKU on the combo's shelf takes
+// the lowest part's figure at once (database trigger).
 export async function POST(req: NextRequest) {
   const refused = await managerOrRefuse();
   if (refused) return refused;
@@ -82,48 +105,24 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: t("products.comboCannotContainItself") }, { status: 400 });
   }
 
+  // One level of combo. The database refuses the rest (a combo inside a
+  // combo, a part that is a combo's own SKU) and comboRefusal() turns its
+  // answer into a sentence.
   const admin = supabaseAdmin();
-  const { data: rows, error: readErr } = await admin
-    .from("products")
-    .select("id, sku, stock_group_id")
-    .in("id", [comboId, partId]);
-  if (readErr) return NextResponse.json({ error: readErr.message }, { status: 400 });
-  const combo = rows?.find((r) => r.id === comboId);
-  const part = rows?.find((r) => r.id === partId);
-  if (!combo || !part) return NextResponse.json({ error: t("products.notFound") }, { status: 404 });
-
-  // One level only, and a combo has no shelf to share. The database checks
-  // the same things (the phone writes tables directly); asking here first
-  // gives the person a sentence instead of a constraint name.
-  if (combo.stock_group_id) {
-    return NextResponse.json({ error: t("products.comboCannotShareStock") }, { status: 400 });
-  }
-  const { data: links, error: linkErr } = await admin
-    .from("product_combo_parts")
-    .select("combo_id, part_id")
-    .or(`combo_id.eq.${partId},part_id.eq.${comboId}`)
-    .limit(1);
-  if (linkErr) return NextResponse.json({ error: notReady(linkErr.message) }, { status: 400 });
-  if ((links ?? []).some((l) => l.combo_id === partId)) {
-    return NextResponse.json({ error: t("products.comboPartIsCombo", { sku: part.sku }) }, { status: 400 });
-  }
-  if ((links ?? []).some((l) => l.part_id === comboId)) {
-    return NextResponse.json({ error: t("products.comboIsAPart", { sku: combo.sku }) }, { status: 400 });
-  }
-
   const { error } = await admin
     .from("product_combo_parts")
     .upsert({ combo_id: comboId, part_id: partId }, { onConflict: "combo_id,part_id", ignoreDuplicates: true });
-  if (error) return NextResponse.json({ error: notReady(error.message) }, { status: 400 });
-
-  const after = await partsOf(admin, comboId);
-  if (after.error !== undefined) return NextResponse.json({ error: notReady(after.error) }, { status: 400 });
-  const { data: fresh } = await admin.from("products").select("stock_on_hand").eq("id", comboId).maybeSingle();
-  return NextResponse.json({ ok: true, parts: after.parts, comboStock: fresh?.stock_on_hand ?? null });
+  if (error) return failed(new Error(error.message));
+  try {
+    return await answer(admin, comboId);
+  } catch (e) {
+    return failed(e);
+  }
 }
 
-// { comboId, partId } → removes one part. Removing the last one makes it an
-// ordinary product again, holding the figure it had at that moment.
+// { comboId, partId } → takes one part out of the combo shelf `comboId` is
+// on, from whichever of its SKUs it was added to. Taking the last one out
+// makes it ordinary shared stock, holding the figure it had at that moment.
 export async function DELETE(req: NextRequest) {
   const refused = await managerOrRefuse();
   if (refused) return refused;
@@ -133,15 +132,16 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ error: t("products.productIdRequired") }, { status: 400 });
   }
   const admin = supabaseAdmin();
-  const { error } = await admin
-    .from("product_combo_parts")
-    .delete()
-    .eq("combo_id", comboId)
-    .eq("part_id", partId);
-  if (error) return NextResponse.json({ error: notReady(error.message) }, { status: 400 });
-
-  const after = await partsOf(admin, comboId);
-  if (after.error !== undefined) return NextResponse.json({ error: notReady(after.error) }, { status: 400 });
-  const { data: fresh } = await admin.from("products").select("stock_on_hand").eq("id", comboId).maybeSingle();
-  return NextResponse.json({ ok: true, parts: after.parts, comboStock: fresh?.stock_on_hand ?? null });
+  try {
+    const shelf = (await shelfMembers(admin, comboId)).map((m) => m.id);
+    const { error } = await admin
+      .from("product_combo_parts")
+      .delete()
+      .in("combo_id", shelf.length > 0 ? shelf : [comboId])
+      .eq("part_id", partId);
+    if (error) throw new Error(error.message);
+    return await answer(admin, comboId);
+  } catch (e) {
+    return failed(e);
+  }
 }

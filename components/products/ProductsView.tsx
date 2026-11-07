@@ -993,7 +993,10 @@ function ProductEditor({
   const [comboBusy, setComboBusy] = useState(false);
   const isCombo = comboParts.length > 0;
 
-  useEffect(() => {
+  // A combo is a shelf (RUN-ME-39): linking this product to a combo's SKU,
+  // or taking it off one, changes what it is made of — so this is re-read
+  // after every shared-stock change as well as on open.
+  const reloadCombo = useCallback(() => {
     if (!product) return;
     fetchCombo(product.id)
       .then((c) => {
@@ -1003,6 +1006,10 @@ function ProductEditor({
       })
       .catch(() => {});
   }, [product]);
+
+  useEffect(() => {
+    reloadCombo();
+  }, [reloadCombo]);
 
   useEffect(() => {
     const supabase = supabaseBrowser();
@@ -1042,9 +1049,11 @@ function ProductEditor({
     if (!product || linkBusy) return;
     const before = members;
     // Shown at once, taken back if the server refuses or asks a question.
-    // The shelf keeps the higher of the two figures (RUN-ME-39).
-    const shelfFigure =
-      product.stock_on_hand == null
+    // The shelf keeps the higher of the two figures (RUN-ME-39) — or, on a
+    // combo shelf, the combo's own, which the server's answer confirms.
+    const shelfFigure = isCombo
+      ? product.stock_on_hand
+      : product.stock_on_hand == null
         ? picked.stock_on_hand
         : picked.stock_on_hand == null
           ? product.stock_on_hand
@@ -1068,6 +1077,7 @@ function ProductEditor({
       const self = result.members.find((m) => m.id === product.id);
       if (self) setForm((f) => ({ ...f, stock_on_hand: self.stock_on_hand ?? 0 }));
       setPendingMove(null);
+      reloadCombo();
       onLinksChanged();
     } catch (e) {
       setMembers(before);
@@ -1087,6 +1097,7 @@ function ProductEditor({
     setLinkBusy(true);
     try {
       await unlinkStock(id);
+      reloadCombo();
       onLinksChanged();
     } catch (e) {
       setMembers(before);
@@ -1096,17 +1107,17 @@ function ProductEditor({
     }
   }
 
-  // Candidates for the combo: not this product, not already in it, not on
-  // this product's own shelf. The server refuses a combo inside a combo.
+  // Candidates for the combo: not this product, not already in it, not a SKU
+  // sharing its stock. The server refuses a combo inside a combo.
   const comboCandidates = useMemo(() => {
     const term = comboSearch.trim().toLowerCase();
     if (!term || !product) return [];
-    const taken = new Set([product.id, ...comboParts.map((p) => p.id)]);
+    const taken = new Set([product.id, ...comboParts.map((p) => p.id), ...members.map((m) => m.id)]);
     return catalogue
       .filter((p) => !taken.has(p.id))
       .filter((p) => p.sku.toLowerCase().includes(term) || p.name.toLowerCase().includes(term))
       .slice(0, 8);
-  }, [comboSearch, catalogue, comboParts, product]);
+  }, [comboSearch, catalogue, comboParts, members, product]);
 
   function lowestOf(parts: StockGroupMember[]): number | null {
     const counted = parts.map((p) => p.stock_on_hand).filter((n): n is number => n != null);
@@ -1402,9 +1413,6 @@ function ProductEditor({
                 ))}
               </ul>
             )}
-            {isCombo ? (
-              <p className="text-caption text-secondary">{t("products.comboCannotShareStock")}</p>
-            ) : (
             <TextInput
               value={linkSearch}
               placeholder={t("products.linkStockPlaceholder")}
@@ -1412,7 +1420,6 @@ function ProductEditor({
               onChange={(e) => setLinkSearch(e.target.value)}
               aria-label={t("products.linkStockLabel")}
             />
-            )}
             {linkCandidates.length > 0 && (
               <ul className="rounded-card border border-hairline bg-surface divide-y divide-hairline mt-1 overflow-hidden">
                 {linkCandidates.map((p) => (
@@ -1502,8 +1509,6 @@ function ProductEditor({
               <p className="text-caption text-secondary">
                 {t("products.comboPartOf", { names: partOf.map((p) => p.sku).join(", ") })}
               </p>
-            ) : members.length > 0 ? (
-              <p className="text-caption text-secondary">{t("products.comboSharedStockBlocked")}</p>
             ) : (
               <>
                 {comboParts.length > 0 && (

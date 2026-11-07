@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAppUser } from "@/lib/auth";
 import { t } from "@/lib/i18n";
 import { supabaseAdmin } from "@/lib/supabase/admin";
-import { fetchComboIds } from "@/lib/combos-server";
+import { comboRefusal } from "@/lib/combos-server";
 
 export const runtime = "nodejs";
 
@@ -61,17 +61,6 @@ export async function POST(req: NextRequest) {
   const product = rows?.find((r) => r.id === productId);
   if (!partner || !product) return NextResponse.json({ error: t("products.notFound") }, { status: 404 });
 
-  // A combo's figure is worked out from its parts (RUN-ME-39); it has no
-  // shelf of its own to share. The database refuses it too.
-  try {
-    const combos = await fetchComboIds(admin, [productId, partnerId]);
-    if (combos.has(productId) || combos.has(partnerId)) {
-      return NextResponse.json({ error: t("products.comboCannotShareStock") }, { status: 400 });
-    }
-  } catch (e) {
-    return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
-  }
-
   // Moving a product off a shelf it already shares is never silent.
   //
   // A shelf holds any number of SKUs — that is the whole point, one physical
@@ -103,16 +92,21 @@ export async function POST(req: NextRequest) {
   let groupId: string = partner.stock_group_id ?? randomUUID();
   if (!partner.stock_group_id) {
     const { error } = await admin.from("products").update({ stock_group_id: groupId }).eq("id", partnerId);
-    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+    if (error) return NextResponse.json({ error: comboRefusal(error.message) }, { status: 400 });
   }
 
   // The product joins it. The adopt trigger keeps the HIGHER of the two
-  // figures (RUN-ME-39, owner 2026-11-07) and the mirror trigger copies it
-  // to the whole shelf — so it no longer matters which of the two SKUs was
-  // open when they were linked. Already there? Nothing to do.
+  // figures (RUN-ME-39, owner 2026-11-07) — or, on a combo shelf, the
+  // combo's — and the mirror trigger copies it to the whole shelf, so it no
+  // longer matters which of the two SKUs was open. Already there? Nothing
+  // to do.
   if (product.stock_group_id !== groupId) {
+    // A combo can be sold under several SKUs, so a combo may join a shelf
+    // and a SKU may join a combo's — it then takes the combo's figure, which
+    // is worked out from the parts (RUN-ME-39). The database refuses only a
+    // combo sharing stock with what it is made of; comboRefusal() says so.
     const { error } = await admin.from("products").update({ stock_group_id: groupId }).eq("id", productId);
-    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+    if (error) return NextResponse.json({ error: comboRefusal(error.message) }, { status: 400 });
   }
 
   const { data: group, error: groupErr } = await admin

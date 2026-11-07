@@ -4839,7 +4839,7 @@ the edited sheet be accepted.
   so a file from either app uploads in either. A figure of 0 (no cost, no
   override) goes out blank, because blank on the way back keeps what is held
   and 0 would clear it. The file is now products.csv.
-- **Not done:** the phone's import reads text files only. An .xlsx saved
+- **Not done (done 2026-11-08, below):** the phone's import reads text files only. An .xlsx saved
   from Excel can be picked but reads as nothing ("No products found in
   file"); reading .xlsx there needs a zip reader, which is not built yet.
   The web import reads .csv, .xls and .xlsx.
@@ -4925,3 +4925,37 @@ move its parts — to be closed when combos reach the app.
 WebAssembly, scratchpad only, not a project dependency) with RUN-ME-8, -18,
 -35 and -39 loaded over stub tables: 20 checks, all pass, including running
 the file twice.
+
+## 2026-11-08 — The phone and Mac read .xlsx imports
+
+The owner said yes to the follow-up in the entry above: a sheet edited in
+Excel and saved as .xlsx should upload on the phone too.
+
+- Every phone import read the picked file as UTF-8 text: products, customers
+  and the data grid (`importCSV` / `importArticlesFromURL`), expenses, and an
+  order's lines (`OrderExcelImporter`). The pickers let an .xlsx through, so
+  it was picked and read as nothing. All four now go through
+  `SpreadsheetFile.text(at:)`, which turns an .xlsx's first sheet into the
+  CSV text the importers already take, so nothing downstream changed.
+- **No new dependency.** An .xlsx is a zip of XML; it is opened with Apple's
+  own Compression (raw DEFLATE) and XMLParser, in Billing/SpreadsheetFile.swift.
+  A Swift package (CoreXLSX, ZIPFoundation) would have meant asking first,
+  and the format an import needs is small: shared and inline text, rich-text
+  runs, numbers, TRUE/FALSE, and dates.
+- **First sheet, as on the web**, found from the workbook's own order (not
+  "sheet1.xml"). Cells are placed by their reference, so a skipped cell
+  stays under its own heading.
+- **Numbers as Excel shows them**: 15.3, not the 15.300000000000001 a float
+  can be stored as. **Dates** (a serial day number in a date-formatted cell)
+  come out as yyyy-MM-dd, which ImportSheet.date reads. A line break inside
+  a cell becomes a space, because the importers read a line at a time.
+- Plain text still reads as before, and UTF-16 text (Excel's "Unicode Text"
+  and "CSV UTF-16") now reads too.
+- **Still not read:** the old binary .xls (Excel 97–2003). The web reads it
+  through SheetJS. The phone's own ".xls" invoice export is an HTML table,
+  which is text, and still imports.
+- Tested on real .xlsx files from two writers, ExcelJS (what the web exports
+  with) and SheetJS, embedded in BillingTests/SpreadsheetFileTests.swift. A
+  file saved by Microsoft Excel itself was made on this Mac but could not be
+  read back for the test: Excel's sandbox writes only inside its own
+  container, which the shell may not read.

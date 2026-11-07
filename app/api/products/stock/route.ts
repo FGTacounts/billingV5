@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAppUser } from "@/lib/auth";
 import { t } from "@/lib/i18n";
 import { supabaseAdmin } from "@/lib/supabase/admin";
+import { isCombo } from "@/lib/combos-server";
 
 export const runtime = "nodejs";
 
@@ -29,6 +30,14 @@ export async function PATCH(req: NextRequest) {
   }
 
   const admin = supabaseAdmin();
+  // A combo's figure comes from its parts (RUN-ME-39); count the parts.
+  try {
+    if (await isCombo(admin, productId)) {
+      return NextResponse.json({ error: t("products.comboStockIsWorkedOut") }, { status: 400 });
+    }
+  } catch (e) {
+    return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+  }
   const { error } = await admin
     .from("products")
     .update({ stock_on_hand: Math.round(stock) })

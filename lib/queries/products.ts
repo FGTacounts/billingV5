@@ -110,6 +110,46 @@ export async function unlinkStock(productId: string): Promise<void> {
   if (!res.ok) throw new Error(data.error ?? t("products.stopSharingStockFailed"));
 }
 
+// Combos (RUN-ME-39): a product sold as one of each of its parts. Its stock
+// is the lowest of theirs, kept by the database.
+export interface ComboInfo {
+  parts: StockGroupMember[];
+  partOf: StockGroupMember[];
+  /** false until RUN-ME-39 has been run. */
+  ready: boolean;
+}
+
+export async function fetchCombo(productId: string): Promise<ComboInfo> {
+  const res = await fetch(`/api/products/combo?productId=${encodeURIComponent(productId)}`);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? t("products.comboLoadFailed"));
+  return { parts: data.parts ?? [], partOf: data.partOf ?? [], ready: data.ready !== false };
+}
+
+async function changeCombo(
+  method: "POST" | "DELETE",
+  comboId: string,
+  partId: string,
+  fallback: string
+): Promise<{ parts: StockGroupMember[]; comboStock: number | null }> {
+  const res = await fetch("/api/products/combo", {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ comboId, partId }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? fallback);
+  return { parts: data.parts ?? [], comboStock: data.comboStock ?? null };
+}
+
+export function addComboPart(comboId: string, partId: string) {
+  return changeCombo("POST", comboId, partId, t("products.comboAddFailed"));
+}
+
+export function removeComboPart(comboId: string, partId: string) {
+  return changeCombo("DELETE", comboId, partId, t("products.comboRemoveFailed"));
+}
+
 export interface TopSeller {
   productId: string | null;
   sku: string;

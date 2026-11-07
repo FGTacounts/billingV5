@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAppUser } from "@/lib/auth";
 import { t } from "@/lib/i18n";
 import { supabaseAdmin } from "@/lib/supabase/admin";
+import { fetchComboIds } from "@/lib/combos-server";
 
 export const runtime = "nodejs";
 
@@ -10,10 +11,10 @@ export const runtime = "nodejs";
 // back out. Two SKUs that are the same physical shelf keep one figure.
 //
 // The database does the real work (scratchpad/RUN-ME-18-shared-stock.sql):
-// joining a group adopts the group's stock_on_hand, and any later change to
-// one member is copied to the rest. This route only decides which group id
-// the two rows carry, so the rule "the product being linked joins the
-// partner's stock" lives in one place.
+// joining a group keeps the higher of the group's figure and the product's
+// own (RUN-ME-39; before it, the joiner simply took the group's), and any
+// later change to one member is copied to the rest. This route only decides
+// which group id the two rows carry.
 //
 // Manager-only, like every other product edit.
 
@@ -60,6 +61,17 @@ export async function POST(req: NextRequest) {
   const product = rows?.find((r) => r.id === productId);
   if (!partner || !product) return NextResponse.json({ error: t("products.notFound") }, { status: 404 });
 
+  // A combo's figure is worked out from its parts (RUN-ME-39); it has no
+  // shelf of its own to share. The database refuses it too.
+  try {
+    const combos = await fetchComboIds(admin, [productId, partnerId]);
+    if (combos.has(productId) || combos.has(partnerId)) {
+      return NextResponse.json({ error: t("products.comboCannotShareStock") }, { status: 400 });
+    }
+  } catch (e) {
+    return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+  }
+
   // Moving a product off a shelf it already shares is never silent.
   //
   // A shelf holds any number of SKUs — that is the whole point, one physical
@@ -94,8 +106,10 @@ export async function POST(req: NextRequest) {
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
   }
 
-  // The product joins it and, via the adopt trigger, takes the partner's
-  // stock. Already there? Nothing to do.
+  // The product joins it. The adopt trigger keeps the HIGHER of the two
+  // figures (RUN-ME-39, owner 2026-11-07) and the mirror trigger copies it
+  // to the whole shelf — so it no longer matters which of the two SKUs was
+  // open when they were linked. Already there? Nothing to do.
   if (product.stock_group_id !== groupId) {
     const { error } = await admin.from("products").update({ stock_group_id: groupId }).eq("id", productId);
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAppUser } from "@/lib/auth";
 import { t } from "@/lib/i18n";
 import { supabaseAdmin } from "@/lib/supabase/admin";
+import { fetchComboIds } from "@/lib/combos-server";
 import { cleanDashPlaceholder, dedupeSkus } from "@/lib/importAliases";
 import { hasCost, listSkus, noCostVerdict } from "@/lib/articleCost";
 
@@ -106,6 +107,7 @@ export async function POST(req: NextRequest) {
   // null: the article is known but no count is kept for it.
   const existingStock = new Map<string, number | null>();
   type Held = {
+    id: string;
     sku: string;
     description: string | null;
     stock_on_hand: number | null;
@@ -121,7 +123,7 @@ export async function POST(req: NextRequest) {
   for (let i = 0; i < skus.length; i += 500) {
     const { data, error: heldErr } = await admin
       .from("products")
-      .select('sku, description, stock_on_hand, "Product_category", price, cost, default_qty, barcode, rack_location, is_active')
+      .select('id, sku, description, stock_on_hand, "Product_category", price, cost, default_qty, barcode, rack_location, is_active')
       .in("sku", skus.slice(i, i + 500));
     // Without this every existing SKU would be taken for new, and its stock,
     // price and cost overwritten from the sheet or with 0.
@@ -178,10 +180,21 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // A combo's stock is worked out from its parts (RUN-ME-39), and moving it
+  // moves every part, so a sheet never sets it: an exported figure that has
+  // gone stale would otherwise be read as that many sets sold or delivered.
+  let combos: Set<string>;
+  try {
+    combos = await fetchComboIds(admin, [...held.values()].map((h) => h.id));
+  } catch (e) {
+    return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+  }
+
   const payload = accepted.map((r) => {
     const known = existingStock.get(r.sku);
     const isNew = known === undefined;
-    const fromFile = r.stock_on_hand;
+    const isComboRow = !isNew && combos.has(held.get(r.sku)!.id);
+    const fromFile = isComboRow ? null : r.stock_on_hand;
 
     // An article with no count stays without one unless the sheet gives it.
     let stock: number | null;

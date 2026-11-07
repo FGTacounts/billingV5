@@ -5,7 +5,7 @@ import { t } from "@/lib/i18n";
 import { Fragment, useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { List, Search, Plus, Package, GalleryHorizontal, Images, Pencil, SlidersHorizontal, Folder, ChevronLeft } from "lucide-react";
 import { supabaseBrowser } from "@/lib/supabase/client";
-import { fetchProducts, createProduct, updateProduct, fetchProductInsights, fetchLastSoldPrice, resolveProductFigures, linkStock, unlinkStock, type ProductInsight, type LastSoldPrice, type StockGroupMember } from "@/lib/queries/products";
+import { fetchProducts, createProduct, updateProduct, fetchProductInsights, fetchLastSoldPrice, resolveProductFigures, linkStock, unlinkStock, fetchCombo, addComboPart, removeComboPart, type ProductInsight, type LastSoldPrice, type StockGroupMember } from "@/lib/queries/products";
 import type { Product } from "@/lib/types/db";
 import { formatAed } from "@/lib/money";
 import { EmptyState, SkeletonList } from "@/components/ui/Empty";
@@ -984,6 +984,25 @@ function ProductEditor({
   const [pendingMove, setPendingMove] = useState<
     { picked: Product; sku: string; movingFrom: string[] } | null
   >(null);
+  // Combo (RUN-ME-39): the products this one is a set of, one of each, and
+  // the combos this one is a part of. Written at once, like shared stock.
+  const [comboParts, setComboParts] = useState<StockGroupMember[]>([]);
+  const [partOf, setPartOf] = useState<StockGroupMember[]>([]);
+  const [comboReady, setComboReady] = useState(false);
+  const [comboSearch, setComboSearch] = useState("");
+  const [comboBusy, setComboBusy] = useState(false);
+  const isCombo = comboParts.length > 0;
+
+  useEffect(() => {
+    if (!product) return;
+    fetchCombo(product.id)
+      .then((c) => {
+        setComboParts(c.parts);
+        setPartOf(c.partOf);
+        setComboReady(c.ready);
+      })
+      .catch(() => {});
+  }, [product]);
 
   useEffect(() => {
     const supabase = supabaseBrowser();
@@ -1023,7 +1042,14 @@ function ProductEditor({
     if (!product || linkBusy) return;
     const before = members;
     // Shown at once, taken back if the server refuses or asks a question.
-    setMembers([...before, { id: picked.id, sku: picked.sku, stock_on_hand: product.stock_on_hand }]);
+    // The shelf keeps the higher of the two figures (RUN-ME-39).
+    const shelfFigure =
+      product.stock_on_hand == null
+        ? picked.stock_on_hand
+        : picked.stock_on_hand == null
+          ? product.stock_on_hand
+          : Math.max(product.stock_on_hand, picked.stock_on_hand);
+    setMembers([...before, { id: picked.id, sku: picked.sku, stock_on_hand: shelfFigure }]);
     setLinkSearch("");
     setLinkBusy(true);
     try {
@@ -1036,6 +1062,11 @@ function ProductEditor({
         return;
       }
       setMembers(result.members.filter((m) => m.id !== product.id));
+      // This product's figure may have gone up to the shelf's. The form
+      // still holds the one it opened with, and Save writes it — which would
+      // put the shelf back to the lower figure. Take the shelf's.
+      const self = result.members.find((m) => m.id === product.id);
+      if (self) setForm((f) => ({ ...f, stock_on_hand: self.stock_on_hand ?? 0 }));
       setPendingMove(null);
       onLinksChanged();
     } catch (e) {
@@ -1062,6 +1093,51 @@ function ProductEditor({
       toast.error(e instanceof Error ? e.message : t("products.stopSharingStockFailed"));
     } finally {
       setLinkBusy(false);
+    }
+  }
+
+  // Candidates for the combo: not this product, not already in it, not on
+  // this product's own shelf. The server refuses a combo inside a combo.
+  const comboCandidates = useMemo(() => {
+    const term = comboSearch.trim().toLowerCase();
+    if (!term || !product) return [];
+    const taken = new Set([product.id, ...comboParts.map((p) => p.id)]);
+    return catalogue
+      .filter((p) => !taken.has(p.id))
+      .filter((p) => p.sku.toLowerCase().includes(term) || p.name.toLowerCase().includes(term))
+      .slice(0, 8);
+  }, [comboSearch, catalogue, comboParts, product]);
+
+  function lowestOf(parts: StockGroupMember[]): number | null {
+    const counted = parts.map((p) => p.stock_on_hand).filter((n): n is number => n != null);
+    return counted.length > 0 ? Math.max(0, Math.min(...counted)) : null;
+  }
+
+  async function changeComboPart(part: StockGroupMember, adding: boolean) {
+    if (!product || comboBusy) return;
+    const before = comboParts;
+    const beforeStock = form.stock_on_hand;
+    const next = adding ? [...before, part] : before.filter((p) => p.id !== part.id);
+    // Shown at once, taken back if the write fails.
+    setComboParts(next);
+    if (next.length > 0) setForm((f) => ({ ...f, stock_on_hand: lowestOf(next) ?? f.stock_on_hand }));
+    setComboSearch("");
+    setComboBusy(true);
+    try {
+      const result = adding
+        ? await addComboPart(product.id, part.id)
+        : await removeComboPart(product.id, part.id);
+      setComboParts(result.parts);
+      if (result.comboStock != null) setForm((f) => ({ ...f, stock_on_hand: result.comboStock ?? 0 }));
+      onLinksChanged();
+    } catch (e) {
+      setComboParts(before);
+      setForm((f) => ({ ...f, stock_on_hand: beforeStock }));
+      toast.error(
+        e instanceof Error ? e.message : t(adding ? "products.comboAddFailed" : "products.comboRemoveFailed")
+      );
+    } finally {
+      setComboBusy(false);
     }
   }
 
@@ -1268,7 +1344,26 @@ function ProductEditor({
           </div>
           <div>
             <Label>{t("products.stockOnHand")}</Label>
-            <TextInput type="number" min={0} value={form.stock_on_hand} onChange={(e) => setForm({ ...form, stock_on_hand: Math.max(0, Number(e.target.value) || 0) })} />
+            {/* A combo's figure is the lowest of its parts and is not typed:
+                the server ignores it on Save (RUN-ME-39). */}
+            <TextInput
+              type="number"
+              min={0}
+              value={form.stock_on_hand}
+              readOnly={isCombo}
+              aria-readonly={isCombo || undefined}
+              aria-describedby={isCombo ? "combo-stock-hint" : undefined}
+              className="tabular-nums"
+              onChange={(e) => {
+                if (isCombo) return;
+                setForm({ ...form, stock_on_hand: Math.max(0, Number(e.target.value) || 0) });
+              }}
+            />
+            {isCombo && (
+              <p id="combo-stock-hint" className="text-caption text-secondary mt-1">
+                {t("products.comboStockHint")}
+              </p>
+            )}
           </div>
           <div>
             <Label>{t("products.rack")}</Label>
@@ -1307,6 +1402,9 @@ function ProductEditor({
                 ))}
               </ul>
             )}
+            {isCombo ? (
+              <p className="text-caption text-secondary">{t("products.comboCannotShareStock")}</p>
+            ) : (
             <TextInput
               value={linkSearch}
               placeholder={t("products.linkStockPlaceholder")}
@@ -1314,6 +1412,7 @@ function ProductEditor({
               onChange={(e) => setLinkSearch(e.target.value)}
               aria-label={t("products.linkStockLabel")}
             />
+            )}
             {linkCandidates.length > 0 && (
               <ul className="rounded-card border border-hairline bg-surface divide-y divide-hairline mt-1 overflow-hidden">
                 {linkCandidates.map((p) => (
@@ -1389,6 +1488,80 @@ function ProductEditor({
               >
                 {t("products.takeOffSharedStock")}
               </Button>
+            )}
+          </div>
+        )}
+
+        {/* Combo — this product is sold as one of each product listed. Only
+            for a saved product, and only once RUN-ME-39 is in the database. */}
+        {product && comboReady && (
+          <div>
+            <Label>{t("products.combo")}</Label>
+            <p className="text-caption text-secondary mb-2">{t("products.comboHint")}</p>
+            {partOf.length > 0 ? (
+              <p className="text-caption text-secondary">
+                {t("products.comboPartOf", { names: partOf.map((p) => p.sku).join(", ") })}
+              </p>
+            ) : members.length > 0 ? (
+              <p className="text-caption text-secondary">{t("products.comboSharedStockBlocked")}</p>
+            ) : (
+              <>
+                {comboParts.length > 0 && (
+                  <ul className="rounded-card border border-hairline bg-canvas divide-y divide-hairline mb-2">
+                    {comboParts.map((p) => (
+                      <li key={p.id} className="flex items-center justify-between gap-3 ps-3.5 pe-1 min-h-11">
+                        <span className="text-subhead truncate">{p.sku}</span>
+                        <span className="flex items-center gap-2 shrink-0">
+                          <span className="text-caption text-secondary tabular-nums">
+                            {t("products.soh", { value: p.stock_on_hand ?? t("common.notSet") })}
+                          </span>
+                          <Button
+                            tier="plain"
+                            type="button"
+                            className="min-h-11"
+                            disabled={comboBusy}
+                            onClick={() => changeComboPart(p, false)}
+                            aria-label={t("products.comboRemovePart", { sku: p.sku })}
+                          >
+                            {t("common.remove")}
+                          </Button>
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <TextInput
+                  value={comboSearch}
+                  placeholder={t("products.comboSearchPlaceholder")}
+                  disabled={comboBusy}
+                  onChange={(e) => setComboSearch(e.target.value)}
+                  aria-label={t("products.comboSearchLabel")}
+                />
+                {comboCandidates.length > 0 && (
+                  <ul className="rounded-card border border-hairline bg-surface divide-y divide-hairline mt-1 overflow-hidden">
+                    {comboCandidates.map((p) => (
+                      <li key={p.id}>
+                        <button
+                          type="button"
+                          className="w-full flex items-center justify-between gap-3 px-3.5 min-h-11 text-start hover:bg-primary/[0.04] transition-colors"
+                          onClick={() => changeComboPart({ id: p.id, sku: p.sku, stock_on_hand: p.stock_on_hand }, true)}
+                        >
+                          <span className="text-subhead truncate">
+                            <span className="font-semibold">{p.sku}</span>
+                            <span className="text-secondary"> · {p.name}</span>
+                          </span>
+                          <span className="text-caption text-secondary tabular-nums shrink-0">
+                            {t("products.soh", { value: p.stock_on_hand ?? t("common.notSet") })}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {comboSearch.trim() !== "" && comboCandidates.length === 0 && (
+                  <p className="text-caption text-secondary mt-1">{t("products.noOtherProductMatches")}</p>
+                )}
+              </>
             )}
           </div>
         )}
@@ -1559,6 +1732,8 @@ function ProductDetailSheet({
   // The other SKUs on this product's shelf, if it shares one. Everyone who
   // may see the stock figure may see whose it also is.
   const [sharedWith, setSharedWith] = useState<string[]>([]);
+  // What a combo is made of (RUN-ME-39), or the combos this product is in.
+  const [combo, setCombo] = useState<{ parts: string[]; partOf: string[] }>({ parts: [], partOf: [] });
   // The sheet shows one photo large and zooms it, so this is the one place
   // that genuinely wants the original.
   const photoUrl = `/api/product-photo?sku=${encodeURIComponent(product.sku)}`;
@@ -1576,6 +1751,13 @@ function ProductDetailSheet({
       .then((group) => setSharedWith(group.filter((p) => p.id !== product.id).map((p) => p.sku)))
       .catch(() => {});
   }, [product.id, product.stock_group_id]);
+
+  useEffect(() => {
+    setCombo({ parts: [], partOf: [] });
+    fetchCombo(product.id)
+      .then((c) => setCombo({ parts: c.parts.map((p) => p.sku), partOf: c.partOf.map((p) => p.sku) }))
+      .catch(() => {});
+  }, [product.id]);
 
   return (
     <>
@@ -1640,6 +1822,16 @@ function ProductDetailSheet({
           {sharedWith.length > 0 && (
             <p className="text-caption text-secondary mt-2">
               {t("products.stockSharedWith", { names: sharedWith.join(", ") })}
+            </p>
+          )}
+          {combo.parts.length > 0 && (
+            <p className="text-caption text-secondary mt-2">
+              {t("products.comboOf", { names: combo.parts.join(" + ") })}
+            </p>
+          )}
+          {combo.partOf.length > 0 && (
+            <p className="text-caption text-secondary mt-2">
+              {t("products.comboPartOf", { names: combo.partOf.join(", ") })}
             </p>
           )}
           {isManager && lastSold !== undefined && (

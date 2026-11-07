@@ -1,4 +1,5 @@
 import "server-only";
+import { fetchComboIds } from "@/lib/combos-server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Product } from "@/lib/types/db";
 import type { ProductSummary, TopSeller } from "@/lib/queries/products";
@@ -38,7 +39,12 @@ interface StockTotals {
  * disagree the stock is worth at least that much, and nobody has said which
  * SKU's figure is the shelf's.
  */
-export function stockTotals(products: Pick<Product, "id" | "price" | "cost" | "stock_on_hand" | "stock_group_id">[]): StockTotals {
+export function stockTotals(
+  products: Pick<Product, "id" | "price" | "cost" | "stock_on_hand" | "stock_group_id">[],
+  // A combo's figure is how many sets its parts make (RUN-ME-39); the pieces
+  // are already counted under the parts, so a combo adds no units or value.
+  comboIds: ReadonlySet<string> = new Set()
+): StockTotals {
   const totals: StockTotals = {
     articles: products.length,
     inStock: 0,
@@ -55,6 +61,7 @@ export function stockTotals(products: Pick<Product, "id" | "price" | "cost" | "s
     if (units > 0) totals.inStock += 1;
     else totals.outOfStock += 1;
     if (units === 0) continue;
+    if (comboIds.has(p.id)) continue;
 
     const costFils = hasCost(p.cost) ? toFils(Number(p.cost)) : null;
     if (costFils === null) totals.inStockNoCost += 1;
@@ -127,12 +134,13 @@ export async function fetchProductSummaryServer(
   admin: SupabaseClient,
   window: { from: string; to: string }
 ): Promise<ProductSummary> {
-  const [products, lines] = await Promise.all([
+  const [products, lines, combos] = await Promise.all([
     fetchProductsServer(admin, { isManager: true }),
     soldLines(admin, window.from, window.to),
+    fetchComboIds(admin),
   ]);
 
-  const stock = stockTotals(products);
+  const stock = stockTotals(products, combos);
   const catalogue = new Map(products.map((p) => [p.id, p]));
 
   // Picked quantity when there is one, as on the invoice.

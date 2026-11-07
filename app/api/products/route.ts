@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAppUser } from "@/lib/auth";
 import { t } from "@/lib/i18n";
 import { supabaseAdmin } from "@/lib/supabase/admin";
+import { isCombo } from "@/lib/combos-server";
 import { productFromRow, fetchProductsServer } from "@/lib/products-server";
 import type { Product } from "@/lib/types/db";
 import { hasCost, noCostVerdict } from "@/lib/articleCost";
@@ -130,6 +131,17 @@ export async function PATCH(req: NextRequest) {
   if (!id) return NextResponse.json({ error: t("common.idRequired") }, { status: 400 });
   const payload = toDbPayload(rest);
   const admin = supabaseAdmin();
+  // A combo's stock comes from its parts (RUN-ME-39) and moving it moves
+  // them, so the figure the form opened with is never written back: if a
+  // sale happened while the form was open, writing it would undo the sale
+  // on every part.
+  if ("stock_on_hand" in payload) {
+    try {
+      if (await isCombo(admin, id)) delete payload.stock_on_hand;
+    } catch (e) {
+      return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+    }
+  }
   // A cost, once there, is not cleared (lib/articleCost.ts): a manager is
   // refused, an admin asked first. An article that has no cost yet is edited
   // as before.

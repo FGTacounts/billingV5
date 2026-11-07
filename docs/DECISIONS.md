@@ -4845,3 +4845,83 @@ the edited sheet be accepted.
   The web import reads .csv, .xls and .xlsx.
 - The computed figures on the Products screen (GP, Sale, Sold) are not in
   either export: the import does not read them.
+
+## 2026-11-07 — Linked stock keeps the higher figure; combos
+
+2026-11-07 — Linking two SKUs keeps the HIGHER of the two stock figures,
+whichever product was open — Owner's choice, asked and answered, and it
+REVERSES the 2026-09-12 entry "Joining takes the existing figure; the
+newcomer's own count is discarded". Reported as "the stock is not linking
+together": the product open in the editor kept its figure and the product
+added took it, so opening a NEW SKU (0) and adding the ORIGINAL (200) set the
+original to 0. TSB220/TSB-220 and TTS5053/TTS5053-VC were linked that way on
+2026-11-07 and both pairs are at 0; there is no stock history table, so their
+earlier figures cannot be recovered and need a recount. The rule lives in the
+adopt trigger (scratchpad/RUN-ME-39), so the phone, which writes
+`stock_group_id` directly, follows it without an app change. An uncounted
+product (null) never lowers or replaces a count. A row INSERTED straight into
+a group still takes the group's figure — it has no count of its own — Rejected
+by the owner: asking each time, and adding the two together.
+
+2026-11-07 — After a link, the open editor takes the shelf's figure into its
+form — The form still held the figure it opened with, and Save writes
+`stock_on_hand`; once linking could RAISE this product's figure, Save would
+have put the whole shelf back to the lower number.
+
+2026-11-07 — Combos: a product sold as one of each of several other products
+— Added at explicit request ("an option > combo, where multiple product stock
+is linked … A 200, B 250 → it will show A's stock"). Its stock is the LOWEST
+of its parts. Selling a combo takes one of each part and giving it back
+returns one of each (owner's choice, asked: one of each, no per-part
+quantity) — Rejected: a quantity per part (not asked for), and display-only
+(selling a set would leave its parts' stock wrong).
+
+2026-11-07 — Combos are kept by the database, not resolved in the apps — the
+same reasoning as shared stock on 2026-09-12. New table `product_combo_parts`
+(RLS forced; read by anyone signed in, written by manager/admin). The combo's
+`stock_on_hand` is stored and refreshed to the lowest part whenever a part
+moves; when anything moves the COMBO's own figure (approve, undo approval,
+delete, restore, the phone) each part moves by the same amount and the combo
+is refreshed. `pg_trigger_depth() = 1` tells a real write from the trigger's
+own refresh or the shared-stock mirror. Parts on one shared shelf are moved
+once, not once per SKU. So none of the ten stock writers changed, and the
+phone's approvals take parts with no app change — Rejected: teaching every
+writer (approve RPC, unapprove RPC, delete, restore, grant-edit, GRV, phone)
+about combos, which is ten places on two apps to keep in step.
+
+2026-11-07 — Nobody types a combo's figure — Save drops `stock_on_hand` for a
+combo, the stock route refuses it, the import keeps what is held. Because
+moving a combo's figure moves its parts, a stale figure from an open form or
+an old spreadsheet would otherwise read as that many sets sold or received.
+The editor shows the figure read-only with "Worked out from the combo's
+products".
+
+2026-11-07 — One level, and no shared stock for a combo — A combo cannot be a
+part of another combo, a part cannot itself be a combo, and a combo cannot
+share stock with another SKU (its figure is worked out, so there is no shelf
+to share; a product that shares stock must leave the shelf before it can be
+a combo). Checked in the web routes for a readable message AND in the
+database, because the phone writes tables directly. Removing a combo's last
+part makes it an ordinary product holding the figure it had then.
+
+2026-11-07 — Consequence accepted: at approval a combo and one of its parts
+on the SAME order are checked against the shelf separately — the short-stock
+check pools by shelf, and a combo is not the parts' shelf. Both are still
+taken correctly (2 sets + 3 of A take 5 of A and 2 of B, proven in the test
+below); only the "short" warning can miss that together they exceed A.
+
+2026-11-07 — Products summary counts no units or value for a combo — the
+pieces are already counted under the parts. Reports' stock snapshot is left
+as it is (a specified feature, rule 1) and will list a combo at its set
+count, the same accepted double-count as shared stock on 2026-09-12.
+
+2026-11-07 — Web only, as asked. The phone and Mac app get the new linking
+rule and combo stock movements through the database, but have no screen to
+make a combo, and do not show "Combo of …". Their article editor still writes
+`stock_on_hand` on Save, so editing a combo there while a sale lands could
+move its parts — to be closed when combos reach the app.
+
+2026-11-07 — RUN-ME-39 was proven before hand-off on PGlite (Postgres 16 in
+WebAssembly, scratchpad only, not a project dependency) with RUN-ME-8, -18,
+-35 and -39 loaded over stub tables: 20 checks, all pass, including running
+the file twice.

@@ -5050,3 +5050,48 @@ another session has uncommitted edits inside it — OWED: delete it, with
 shelves (3 + 2 SKUs) merged from either side, an uncounted SKU joining, a
 plain shelf joining a combo, a second combo SKU joining, a sale after a
 merge, "already linked", and the COMBO_LINK refusals.
+
+## 2026-11-08 — Supabase egress: the apps stop re-downloading everything
+
+2026-11-08 — Supabase put the Famlist organisation in a grace period ending
+17 Nov: egress (data the database sends out) was over the free plan's 5 GB in
+the previous cycle, and this cycle stood at 7.07 GB with 18 days left. The
+database is 32 MB with 3 users, so the volume is repetition, not size. The
+owner asked for it fixed (2026-11-08).
+
+2026-11-08 — Cause, from the code: the phone/Mac app ran a full sync — every
+order, every order line, the whole catalogue, all customers and users — every
+2 s while the pick screen was open (WarehouseOrderPickView) and every 5 s on
+the manager's Warehouse tab (ManagerDashboardView). On the Mac the app is
+never suspended, so a window left on either screen did this all day. On top
+of that, every live change to an order or a line (each pick tick writes a
+line) made every signed-in device download the whole order book again, and
+every time the Mac window regained focus started another full sync.
+
+2026-11-08 — Fix, phone and Mac (same Billing target):
+- Both timers are removed. Live updates already carried the same changes.
+- A live change to `orders` or `order_items` now re-reads only the orders it
+  names (id / order_id from the change), laid over the list held. A change
+  that names no order (a deleted line carries only its own id) or a burst
+  naming more than 50 orders falls back to the full read.
+- Becoming active only syncs after the app was really in the background
+  (`didEnterBackground`), where the phone suspends the live connection — not
+  on every Mac focus change.
+- When the live connection drops and comes back, one full sync catches
+  anything missed (changes made while it was down are never replayed). This
+  replaces the safety the timers gave by accident.
+- A partial read whose line fetch fails throws instead of returning orders
+  with no lines; the full read keeps its old behaviour (orders without
+  detail) — another session's uncommitted work changes that separately.
+
+2026-11-08 — Not changed, and why: customer and product changes still reload
+those whole lists (one change → one list, less frequent than picks); the web
+app's server reads the full product list per /api/products call (556 such
+requests in a sample day). Both are smaller than the order book and can be
+narrowed later if egress stays high.
+
+2026-11-08 — The fix cannot save this billing cycle: it is already over 5 GB,
+so the owner is to upgrade the organisation to Pro (about $25/month) before
+17 Nov or every request is refused with 402. Moving back to Free is the owner's
+call once a cycle stays well under 5 GB — Rejected: waiting it out, which
+stops both apps for the rest of the cycle.

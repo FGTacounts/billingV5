@@ -57,6 +57,14 @@ export function moveStock(productId: string, from: string | null, to: string | n
   return send("POST", { action: "move", productId, from, to, qty });
 }
 
+/** Every overseas warehouse, for choosing where an order's stock comes from. Empty until RUN-ME-41. */
+export async function fetchStockWarehouses(): Promise<StockWarehouse[]> {
+  const res = await fetch("/api/products/country-stock?warehouses=1");
+  if (!res.ok) return [];
+  const data = (await res.json().catch(() => ({}))) as { warehouses?: StockWarehouse[] };
+  return data.warehouses ?? [];
+}
+
 /** Overseas total per product id, for the Products list. Empty until RUN-ME-41. */
 export async function fetchOverseasTotals(): Promise<Map<string, number>> {
   const res = await fetch("/api/products/country-stock?totals=1");

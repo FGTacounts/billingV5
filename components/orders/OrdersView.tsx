@@ -46,6 +46,7 @@ import { formatAed, toAed, toFils } from "@/lib/money";
 import NewOrderSheet from "./NewOrderSheet";
 import OrderDetail from "./OrderDetail";
 import ImportCsvButton from "@/components/ui/ImportCsvButton";
+import { fetchStockWarehouses, type StockWarehouse } from "@/lib/queries/countryStock";
 import { ORDER_ALIASES } from "@/lib/importAliases";
 import { ORDER_SAMPLE_EXAMPLE, ORDER_SAMPLE_HEADERS } from "@/lib/importSamples";
 
@@ -354,6 +355,15 @@ export default function OrdersView({ user }: { user: AppUser }) {
 
   const isManager = (user.role === "manager" || user.role === "admin");
 
+  // Where an imported sheet's stock comes from (RUN-ME-42): "" is the UAE.
+  // Shown beside Import only once a warehouse abroad exists.
+  const [importWarehouses, setImportWarehouses] = useState<StockWarehouse[]>([]);
+  const [importFrom, setImportFrom] = useState("");
+  useEffect(() => {
+    if (!isManager) return;
+    fetchStockWarehouses().then(setImportWarehouses).catch(() => {});
+  }, [isManager]);
+
   // What the Adjust View offers this person, and what they have chosen. GP
   // is taken out for anyone but a manager, whatever their saved choice says.
   const offeredColumns = isManager ? ALL_ORDER_COLUMNS : ALL_ORDER_COLUMNS.filter((c) => c !== "gp");
@@ -509,9 +519,26 @@ export default function OrdersView({ user }: { user: AppUser }) {
         <div className="flex items-center gap-4 flex-wrap">
           {/* A day's orders taken on paper or in a supplier's sheet, brought
               in as whole orders for review rather than typed again. */}
+          {isManager && importWarehouses.length > 0 && (
+            <select
+              className="px-3 min-h-11 rounded-card border border-hairline bg-canvas text-subhead"
+              value={importFrom}
+              aria-label={t("countryStock.importFrom")}
+              title={t("countryStock.importFrom")}
+              onChange={(e) => setImportFrom(e.target.value)}
+            >
+              <option value="">{t("countryStock.importFromUae")}</option>
+              {importWarehouses.map((w) => (
+                <option key={w.id} value={w.id}>
+                  {t("countryStock.importFromPlace", { place: t("countryStock.place", { country: w.country, name: w.name }) })}
+                </option>
+              ))}
+            </select>
+          )}
           {isManager && (
             <ImportCsvButton
               endpoint="/api/orders/import"
+              extra={importFrom ? { stockWarehouseId: importFrom } : undefined}
               onImported={load}
               jobKind="orders.import"
               label={t("orders.importOrders")}

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAppUser } from "@/lib/auth";
 import { supabaseCaller } from "@/lib/supabase/server";
 import { t } from "@/lib/i18n";
+import { moveOverseasOrderStock, orderStockWarehouse } from "@/lib/orders-server";
 
 export const runtime = "nodejs";
 
@@ -29,10 +30,24 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: t("orders.notAwaitingEditDecision") }, { status: 409 });
   }
 
-  const { data: items, error: itemsErr } = await supabase
-    .from("order_items")
-    .select("product_id, ordered_qty, picked_qty")
-    .eq("order_id", orderId);
+  // An order from another country (RUN-ME-42) gives its stock back to that
+  // warehouse, in the database. Warehouse staff never see such an order, so
+  // this is not expected to happen; it is here so it cannot go to the UAE.
+  const overseas = await orderStockWarehouse(supabase, orderId);
+  if (overseas) {
+    try {
+      await moveOverseasOrderStock(supabase, orderId, true);
+    } catch (e) {
+      return NextResponse.json({ error: (e as Error).message }, { status: 500 });
+    }
+  }
+
+  const { data: items, error: itemsErr } = overseas
+    ? { data: [] as { product_id: string; ordered_qty: number | null; picked_qty: number | null }[], error: null }
+    : await supabase
+        .from("order_items")
+        .select("product_id, ordered_qty, picked_qty")
+        .eq("order_id", orderId);
   if (itemsErr) return NextResponse.json({ error: itemsErr.message }, { status: 500 });
 
   const qtyByProduct = new Map<string, number>();

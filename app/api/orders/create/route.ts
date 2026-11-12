@@ -17,8 +17,10 @@ export async function POST(req: NextRequest) {
   if (!caller) return NextResponse.json({ error: t("common.unauthorized") }, { status: 401 });
 
   const body = await req.json();
-  const { customer_id, new_customer_note, status, hold_reason, warehouse_note, salesman_note, manager_note, lines } = body as {
+  const { customer_id, new_customer_note, status, hold_reason, warehouse_note, salesman_note, manager_note, lines, stock_warehouse_id } = body as {
     customer_id: string | null;
+    /** RUN-ME-42: the overseas warehouse the stock comes from; absent/null = UAE. Managers only. */
+    stock_warehouse_id?: string | null;
     new_customer_note: string | null;
     status: "draft" | "pending";
     hold_reason?: string | null;
@@ -52,11 +54,21 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: t("orders.createStatusInvalid") }, { status: 400 });
   }
 
+  // An order from another country (RUN-ME-42) is a manager's: this insert
+  // runs with the server key, so the database's own guard does not see a
+  // person, and the role is checked here.
+  const fromWarehouse = typeof stock_warehouse_id === "string" && stock_warehouse_id ? stock_warehouse_id : null;
+  if (fromWarehouse && caller.role !== "manager" && caller.role !== "admin") {
+    return NextResponse.json({ error: t("countryStock.ordersManagerOnly") }, { status: 403 });
+  }
+
   const admin = supabaseAdmin();
 
   const { data: order, error: orderErr } = await admin
     .from("orders")
     .insert({
+      // Only sent when set, so a UAE order still saves before RUN-ME-42.
+      ...(fromWarehouse ? { stock_warehouse_id: fromWarehouse } : {}),
       customer_id: customer_id ?? null,
       new_customer_note: new_customer_note ?? null,
       warehouse_note: warehouse_note?.trim() || null,

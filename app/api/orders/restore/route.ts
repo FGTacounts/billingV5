@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAppUser } from "@/lib/auth";
 import { supabaseCaller } from "@/lib/supabase/server";
 import { t } from "@/lib/i18n";
+import { moveOverseasOrderStock, orderStockWarehouse } from "@/lib/orders-server";
 
 export const runtime = "nodejs";
 
@@ -38,7 +39,16 @@ export async function POST(req: NextRequest) {
   const back = (order.deleted_from_status as string | null) ?? "pending";
 
   let stockTaken = 0;
-  if (STOCK_DEDUCTED.includes(back)) {
+  // An order from another country (RUN-ME-42) takes its stock from that
+  // warehouse again, in the database; the UAE stock is not touched.
+  const overseas = STOCK_DEDUCTED.includes(back) ? await orderStockWarehouse(supabase, orderId) : null;
+  if (overseas) {
+    try {
+      stockTaken = await moveOverseasOrderStock(supabase, orderId, false);
+    } catch (e) {
+      return NextResponse.json({ error: (e as Error).message }, { status: 500 });
+    }
+  } else if (STOCK_DEDUCTED.includes(back)) {
     const { data: items } = await supabase
       .from("order_items")
       .select("product_id, ordered_qty, picked_qty")

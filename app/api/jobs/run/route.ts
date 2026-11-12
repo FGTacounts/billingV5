@@ -106,7 +106,13 @@ async function runSlice(job: JobRow, file: File | null, callerId: string): Promi
 
     case "orders.import": {
       const rows = (job.params?.rows ?? []) as ImportRow[];
-      const outcome = await importOrders(supabaseAdmin(), rows, callerId);
+      const from = job.params?.stockWarehouseId;
+      const outcome = await importOrders(
+        supabaseAdmin(),
+        rows,
+        callerId,
+        typeof from === "string" && from ? from : null
+      );
       return {
         complete: true,
         state: { ...outcome },

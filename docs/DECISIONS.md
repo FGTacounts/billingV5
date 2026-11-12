@@ -5193,3 +5193,70 @@ figure also updates the editor's Stock on hand box, so Save does not write
 the old figure back. The Products list shows "+N overseas" under the stock
 column and "Overseas: N" on cards, managers only. Until RUN-ME-41 is run the
 section and the totals simply do not appear.
+
+## 2026-11-13 — Orders from another country (step 2 of 3)
+
+Owner, 2026-11-13: "Only the manager can make orders from other countries,
+by default it is UAE. Manager has option to change country when importing or
+making an order." "There is no warehouse steps for overseas orders. Only
+stock and orders which only the manager and admin manages." Combos: "UAE only
+for now". Migration: `scratchpad/RUN-ME-42-orders-from-another-country.sql`,
+run after RUN-ME-41.
+
+2026-11-13 — The country is per ORDER, not per line: `orders.stock_warehouse_id`,
+null = UAE. That is how the owner described it ("change country when
+importing or making an order"). It is set when the order is made or
+imported and the web offers no way to change it afterwards; the database
+refuses a change once the stock has been taken (approved, edit requested,
+delivering, delivered, in the Trash), and refuses it from anyone signed in
+who is not a manager or admin. The web's create and import routes run with
+the server key, so they check the role themselves.
+
+2026-11-13 — The stock moves inside the same database functions as before:
+`approve_order_take_stock`, `unapprove_order_give_stock` (RUN-ME-35) and
+`manager_edit_order` (RUN-ME-38) are redefined with one added branch for an
+overseas order — same rules (one figure per shared shelf, short lines
+reported unless approving anyway, never below zero), against the
+warehouse's figure instead of `stock_on_hand`. A UAE order runs the original
+code unchanged; the functions were copied from those files, not rewritten.
+Doing it in the functions means the phone, which calls the same three, takes
+an overseas order's stock from the right place without an app update. —
+Rejected: a trigger that re-routes `stock_on_hand` writes to a warehouse;
+the short check and the "no count kept" rule would still have read the UAE
+figure.
+
+2026-11-13 — Delete, restore and granting an edit move UAE stock in the web
+app itself (read-then-write, older code). For an overseas order they now call
+`order_warehouse_stock_move` instead; the UAE code is unchanged.
+
+2026-11-13 — Hidden from salesmen and warehouse staff by one RESTRICTIVE RLS
+policy on `orders` (ANDed with the existing ones, so nothing changes for UAE
+orders or managers). Lines, payments, reports and dashboards are all read by
+order id from `orders`, so they hide with it. Not covered: `order_items`
+itself and `order_items_safe` (security-definer view) are not filtered, so a
+read of lines by product rather than by order — the salesman's "last sold
+price" — can include an overseas sale's price. Left as is: filtering
+order_items per row would slow every line read.
+
+2026-11-13 — An overseas order has no warehouse steps because nobody but a
+manager can see it; its statuses are unchanged (a manager accepts and
+approves it as any other). Goods returns still go back to UAE stock: a GRV
+belongs to a customer, not an order.
+
+2026-11-13 — Web: "Stock from" (UAE or a warehouse abroad) on the new-order
+sheet and beside Import on Orders, managers only, shown once a warehouse
+exists. The order screen shows "From India · Warehouse 1" to managers, and
+the line's UAE shelf count is not shown on an overseas order. No country
+column on the orders list — not asked for.
+
+2026-11-13 — RUN-ME-41 and -42 proven on PGlite (Postgres in WebAssembly,
+session scratchpad only) over stubs of the live functions: 32 checks, all
+pass — both files run twice; linked SKUs share country stock; moves and
+their refusals; overseas approve / edit / unapprove / short / approve anyway
+/ delete / restore move only the warehouse; a UAE order still moves only the
+UAE; staff cannot see, update or create an overseas order; combos refused.
+
+2026-11-13 — Known gap until step 3 (iPhone/Mac): the phone's own delete,
+restore and grant-edit write `stock_on_hand` directly, so deleting or
+restoring an approved overseas order ON THE PHONE would move UAE stock. Do
+those on the web until the app is updated.

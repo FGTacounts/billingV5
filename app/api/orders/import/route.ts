@@ -33,10 +33,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: (e as Error).message }, { status: 501 });
   }
 
-  const { rows } = (await req.json().catch(() => ({}))) as { rows?: ImportRow[] };
+  const { rows, stockWarehouseId } = (await req.json().catch(() => ({}))) as {
+    rows?: ImportRow[];
+    stockWarehouseId?: string | null;
+  };
 
   try {
-    const outcome = await importOrders(admin, rows ?? [], caller.id);
+    const outcome = await importOrders(admin, rows ?? [], caller.id, stockWarehouseId || null);
     return NextResponse.json({ ok: true, ...outcome });
   } catch (e) {
     if (e instanceof JobInputError) {

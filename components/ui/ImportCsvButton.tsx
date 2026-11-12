@@ -21,7 +21,11 @@ export default function ImportCsvButton({
   askStockMode = false,
   jobKind,
   unit = "row",
+  extra,
 }: {
+  // Sent with the rows, to the queued job and to the endpoint alike (the
+  // order import's "Stock from", RUN-ME-42).
+  extra?: Record<string, unknown>;
   endpoint: string;
   onImported: () => void;
   // Rule 8. An import that names a job kind is queued instead of being done
@@ -130,7 +134,7 @@ export default function ImportCsvButton({
       // when a migration has not been run.
       let data: Record<string, unknown> | null = null;
       if (jobKind) {
-        const job = await runQueuedJob(jobKind, { rows });
+        const job = await runQueuedJob(jobKind, { rows, ...extra });
         if (job) data = job.result ?? {};
       }
 
@@ -138,7 +142,7 @@ export default function ImportCsvButton({
         const res = await fetch(endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ rows }),
+          body: JSON.stringify({ rows, ...extra }),
         });
         data = await res.json();
         if (!res.ok) throw new Error((data?.error as string) ?? t("ui.importFailed"));

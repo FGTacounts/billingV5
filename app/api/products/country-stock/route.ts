@@ -78,10 +78,22 @@ async function answer(supabase: ReturnType<typeof supabaseCaller>, productId: st
 
 // ?productId=  → { ready, rows, warehouses, uae }
 // ?totals=1    → { ready, totals: { [productId]: n } } for the Products list
+// ?warehouses=1 → { ready, warehouses }
 export async function GET(req: NextRequest) {
   const supabase = supabaseCaller();
   const { data: auth } = await supabase.auth.getUser();
   if (!auth.user) return NextResponse.json({ error: t("common.unauthorized") }, { status: 401 });
+
+  // ?warehouses=1 → every overseas warehouse, for the "Stock from" picker
+  // on a new order or an import (RUN-ME-42).
+  if (req.nextUrl.searchParams.get("warehouses")) {
+    const { data, error } = await supabase.rpc("list_stock_warehouses");
+    if (error) {
+      if (notRun(error)) return NextResponse.json({ ready: false, warehouses: [] });
+      return failed(error);
+    }
+    return NextResponse.json({ ready: true, warehouses: (data ?? []) as Warehouse[] });
+  }
 
   if (req.nextUrl.searchParams.get("totals")) {
     const { data, error } = await supabase.rpc("overseas_stock_totals");

@@ -147,6 +147,34 @@ export default function OrderDetail({
     load();
   }, [load]);
 
+  // An order from another country (RUN-ME-42), managers only: where its
+  // stock comes from, e.g. "India · Warehouse 1". Null for a UAE order, and
+  // before the SQL is run (the column is not there and the read just fails).
+  // Above the loading return on purpose: a hook below it breaks every order.
+  const [overseasPlace, setOverseasPlace] = useState<string | null>(null);
+  useEffect(() => {
+    if (user.role !== "manager" && user.role !== "admin") return;
+    let live = true;
+    (async () => {
+      const supabase = supabaseBrowser();
+      const { data } = await supabase.from("orders").select("stock_warehouse_id").eq("id", orderId).maybeSingle();
+      const warehouseId = (data as { stock_warehouse_id?: string | null } | null)?.stock_warehouse_id;
+      if (!warehouseId) {
+        if (live) setOverseasPlace(null);
+        return;
+      }
+      const { data: w } = await supabase
+        .from("stock_warehouses")
+        .select("country, name")
+        .eq("id", warehouseId)
+        .maybeSingle();
+      if (live) setOverseasPlace(w ? t("countryStock.place", { country: w.country, name: w.name }) : t("countryStock.overseasOrder"));
+    })().catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [orderId, user.role]);
+
   // Bug fix (Order Flow & Additions §8): with more than one Warehouse
   // picker on the same order, this sheet had no way to learn about a
   // concurrent picker's tick — each session's `items` snapshot only ever
@@ -644,6 +672,11 @@ export default function OrderDetail({
       }
       headerExtra={
         <div className="flex items-center gap-3">
+          {overseasPlace && (
+            <span className="px-3 py-1.5 rounded-card bg-accent/12 text-accent text-caption font-semibold">
+              {t("countryStock.orderFrom", { place: overseasPlace })}
+            </span>
+          )}
           {order.status !== "draft" && (
             <>
               <a
@@ -992,7 +1025,11 @@ export default function OrderDetail({
                       is how the figure stays wrong. */}
                   {canPick && (
                     <td className="px-3 py-2.5 text-right tabular-nums">
-                      {editingStockId === it.id ? (
+                      {/* The figure here is the UAE shelf; an order from
+                          another country (RUN-ME-42) does not draw on it. */}
+                      {overseasPlace ? (
+                        <span className="text-secondary">{t("common.notSet")}</span>
+                      ) : editingStockId === it.id ? (
                         <input
                           autoFocus
                           type="number"

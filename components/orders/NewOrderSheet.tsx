@@ -21,6 +21,7 @@ import BarcodeScanButton from "@/components/ui/BarcodeScanButton";
 import LogPaymentSheet from "@/components/payments/LogPaymentSheet";
 import ImportOrderLinesButton, { type ImportedLine } from "./ImportOrderLinesButton";
 import ScanOrderButton, { type ScannedOrderLine } from "./ScanOrderButton";
+import { fetchStockWarehouses, type StockWarehouse } from "@/lib/queries/countryStock";
 
 interface Line {
   product: Product;
@@ -75,6 +76,15 @@ export default function NewOrderSheet({
   const [orderDiscountPct, setOrderDiscountPct] = useState(100);
   const [appliedPct, setAppliedPct] = useState(100);
   const isManager = (user.role === "manager" || user.role === "admin");
+  // Where the stock comes from (RUN-ME-42): "" is the UAE, as every order
+  // has been until now. Only a manager can choose another country, and the
+  // choice only shows once a warehouse abroad exists.
+  const [warehouses, setWarehouses] = useState<StockWarehouse[]>([]);
+  const [stockFrom, setStockFrom] = useState("");
+  useEffect(() => {
+    if (!isManager) return;
+    fetchStockWarehouses().then(setWarehouses).catch(() => {});
+  }, [isManager]);
 
   const [holdWarning, setHoldWarning] = useState<{ condition: string; oldestDays: number } | null>(null);
   const [holdReason, setHoldReason] = useState<string | null>(null);
@@ -364,6 +374,7 @@ export default function NewOrderSheet({
           manager_note: !isManager ? noteText.trim() || null : null,
           status,
           hold_reason: holdReason,
+          ...(isManager && stockFrom ? { stock_warehouse_id: stockFrom } : {}),
           lines: lines.map((line) => ({
             product_id: line.product.id,
             sku: line.product.sku,
@@ -501,6 +512,26 @@ export default function NewOrderSheet({
           >
             {t("orders.useLastPrices", { name: customer.name })}
           </button>
+        )}
+
+        {isManager && warehouses.length > 0 && (
+          <div>
+            <Label>{t("countryStock.stockFrom")}</Label>
+            <select
+              className="w-full px-3.5 py-2.5 rounded-card border border-hairline bg-canvas text-subhead"
+              value={stockFrom}
+              aria-label={t("countryStock.stockFrom")}
+              onChange={(e) => setStockFrom(e.target.value)}
+            >
+              <option value="">{t("countryStock.uae")}</option>
+              {warehouses.map((w) => (
+                <option key={w.id} value={w.id}>
+                  {t("countryStock.place", { country: w.country, name: w.name })}
+                </option>
+              ))}
+            </select>
+            {stockFrom && <p className="text-caption text-secondary mt-1">{t("countryStock.stockFromHint")}</p>}
+          </div>
         )}
 
         {isManager && customer && (

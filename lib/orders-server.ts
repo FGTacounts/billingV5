@@ -168,3 +168,42 @@ export async function managerEditOrder(
   }
   return { ok: false, missing: false, message: error.message };
 }
+
+// ---------------------------------------------------------------------------
+// Orders from another country (scratchpad/RUN-ME-42)
+// ---------------------------------------------------------------------------
+
+/**
+ * The overseas warehouse an order's stock comes from, or null for a UAE
+ * order. Null too on a database without RUN-ME-42 (the column is not there),
+ * where every order is a UAE order. Asked on its own, so the routes' own
+ * reads keep working before the SQL is run.
+ */
+export async function orderStockWarehouse(supabase: SupabaseClient, orderId: string): Promise<string | null> {
+  const { data, error } = await supabase
+    .from("orders")
+    .select("stock_warehouse_id")
+    .eq("id", orderId)
+    .maybeSingle();
+  if (error) return null;
+  return (data?.stock_warehouse_id as string | null | undefined) ?? null;
+}
+
+/**
+ * Gives an overseas order's stock back to its warehouse (`giveBack`) or takes
+ * it again, in one database transaction (order_warehouse_stock_move). The
+ * caller decides from the order's status whether stock moves at all, exactly
+ * as it does for a UAE order. Returns the pieces moved.
+ */
+export async function moveOverseasOrderStock(
+  supabase: SupabaseClient,
+  orderId: string,
+  giveBack: boolean
+): Promise<number> {
+  const { data, error } = await supabase.rpc("order_warehouse_stock_move", {
+    p_order_id: orderId,
+    p_give_back: giveBack,
+  });
+  if (error) throw new Error(error.message);
+  return (data as number | null) ?? 0;
+}

@@ -187,7 +187,13 @@ function num(v: string | undefined): number {
 export async function importOrders(
   admin: SupabaseClient,
   rows: ImportRow[],
-  callerId: string
+  callerId: string,
+  /**
+   * RUN-ME-42: the overseas warehouse every imported order's stock comes
+   * from, picked by the manager beside Import; null or absent = the UAE.
+   * Both routes that reach here are manager-only.
+   */
+  stockWarehouseId: string | null = null
 ): Promise<ImportOutcome> {
   if (!Array.isArray(rows) || rows.length === 0) {
     throw new JobInputError("That file had no rows to import.");
@@ -344,6 +350,8 @@ export async function importOrders(
         salesman_id: salesmanId ?? callerId,
         status: "pending",
         po_number: poNumber,
+        // Only sent when set, so a UAE import still works before RUN-ME-42.
+        ...(stockWarehouseId ? { stock_warehouse_id: stockWarehouseId } : {}),
         // Says where it came from, so a manager reviewing it knows it was
         // not typed in by a salesman on the road.
         manager_note: sheetNote ? `${importedTag} — ${sheetNote}` : importedTag,

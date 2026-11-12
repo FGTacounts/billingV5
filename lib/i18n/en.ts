@@ -1939,6 +1939,16 @@ export const en = {
   "countryStock.warehouseNameInvalid": "Enter a country and a warehouse name.",
   "countryStock.notEnabled": "Stock in other countries is not switched on yet: run RUN-ME-41 in Supabase.",
   "countryStock.failed": "Could not change the stock in other countries.",
+  // orders from another country (RUN-ME-42)
+  "countryStock.stockFrom": "Stock from",
+  "countryStock.stockFromHint":
+    "Approving this order takes its stock from that warehouse, not the UAE. Only managers see this order; it has no warehouse steps.",
+  "countryStock.importFrom": "Stock for imported orders comes from",
+  "countryStock.importFromUae": "Import from UAE stock",
+  "countryStock.importFromPlace": "Import from {place}",
+  "countryStock.orderFrom": "From {place}",
+  "countryStock.overseasOrder": "another country",
+  "countryStock.ordersManagerOnly": "Only a manager can make an order from another country.",
 } as const;
 
 export type MessageKey = keyof typeof en;

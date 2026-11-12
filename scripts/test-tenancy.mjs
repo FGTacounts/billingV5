@@ -98,8 +98,8 @@ const KNOWN_TABLES = [
   "customer_prices", "customers", "expenses", "grv_allocations", "grv_items", "grv_returns",
   "news_posts", "notifications", "order_items", "order_status_log", "orders",
   "payment_delay_notes", "payment_extension_requests", "payment_orders",
-  "payments", "products", "purchases", "route_visits", "users",
-  "zone_countries", "zones",
+  "payments", "product_warehouse_stock", "products", "purchases", "route_visits",
+  "stock_warehouses", "users", "zone_countries", "zones",
 ];
 
 /** Asks PostgREST what exists. Returns null when this key may not ask. */

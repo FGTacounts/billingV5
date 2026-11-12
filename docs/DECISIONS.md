@@ -5139,3 +5139,57 @@ all pass — run twice; existing parts kept at 1; sets after a quantity change;
 a sale and a return through the combo and through a second SKU; link_stock and
 the adopt trigger taking the sets figure; two parts on one shelf moved once by
 the larger quantity; 0 and 1000 refused.
+
+## 2026-11-13 — Stock in other countries, per SKU (step 1 of 3: stock and moves)
+
+Owner, 2026-11-12/13: "add countries stock … we have 100 piece stock for an
+item in India warehouse 1 … I want to be able to add multiple countries."
+Agreed before building: "Current stock is only UAE. Stock can be moved."
+"Only some products will have stock overseas. Same SKU might be used, so put
+that option under each SKU." Managers and admins only. Overseas orders have
+no warehouse steps; combos sell from the UAE only for now. Selling from an
+overseas warehouse (the manager picks the country when making or importing
+an order, default UAE; those orders are hidden from warehouse staff) is the
+NEXT step and not built yet. The iPhone/Mac app comes after that.
+
+2026-11-13 — `products.stock_on_hand` stays the UAE stock, untouched; the
+UAE is not a row in the new tables. Two new tables (RUN-ME-41):
+`stock_warehouses` (country + name, unique ignoring case) and
+`product_warehouse_stock` (SKU × warehouse → qty ≥ 0). — Rejected: turning
+every stock figure into per-warehouse rows, which would have touched every
+one of the ~26 places that move `stock_on_hand` on web and phone at once.
+
+2026-11-13 — SKUs sharing stock share their overseas stock too. Rows are
+kept per SKU; every write puts the same figure on every SKU of the shelf and
+a read takes the HIGHEST per warehouse — the 2026-11-07 "linking keeps the
+higher figure" rule, so linking two SKUs that both carried India stock does
+not double it. — Rejected: keying rows by shelf id, which goes stale when
+shelves are linked, merged or split.
+
+2026-11-13 — Nobody writes the two tables directly. Managers/admins may
+SELECT them (forced RLS); every write goes through SECURITY DEFINER functions
+that check the role first (`set_warehouse_stock`, `remove_warehouse_stock`,
+`add_stock_warehouse`, `move_stock`), so the shared-SKU copies cannot drift
+and the phone will call the same functions. The web route
+`/api/products/country-stock` runs as the caller (`supabaseCaller`, never
+the service key) so it works with the phone's Bearer token too.
+
+2026-11-13 — `move_stock(product, from, to, qty)` — null is the UAE — runs
+in one transaction with the shelf's product and warehouse rows locked, and
+refuses: fewer there than asked; the same place twice; a UAE side that keeps
+no count ("an uncounted shelf is not an empty one" — moving 30 into an
+uncounted UAE shelf would have made it 30). The UAE side is written as one
+`products` row so the existing floor, shared-stock mirror and combo-part
+triggers still apply. No movement history is kept — not asked for; worth
+adding if the owner wants to see who moved what.
+
+2026-11-13 — Web: "Stock in other countries" sits in the product editor
+under Shared stock (not for combos). Rows show "India · Warehouse 1" with an
+editable quantity (written on blur/Enter), Remove (asks first), "Add a
+country" (pick a warehouse already used on other SKUs or type a new country
++ name) and "Move stock" (any two of UAE and the warehouses). Each write is
+shown at once and put back if refused (rule 9). A move that changes the UAE
+figure also updates the editor's Stock on hand box, so Save does not write
+the old figure back. The Products list shows "+N overseas" under the stock
+column and "Overseas: N" on cards, managers only. Until RUN-ME-41 is run the
+section and the totals simply do not appear.

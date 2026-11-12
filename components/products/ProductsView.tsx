@@ -22,6 +22,8 @@ import type { AppUser } from "@/lib/types/db";
 import NewOrderSheet from "@/components/orders/NewOrderSheet";
 import DrivePhotoBrowser from "./DrivePhotoBrowser";
 import ProductsSummary from "./ProductsSummary";
+import CountryStock from "./CountryStock";
+import { fetchOverseasTotals } from "@/lib/queries/countryStock";
 import PinnableOptionsButton from "@/components/ui/PinnableOptions";
 import { usePagination, Pagination } from "@/components/ui/Pagination";
 import SegmentedControl from "@/components/ui/SegmentedControl";
@@ -343,6 +345,14 @@ export default function ProductsView({ isManager, user }: { isManager: boolean; 
   // the summary card is read again along with the list. A search only
   // narrows the list, so it goes through `load` and leaves the summary be.
   const [summaryKey, setSummaryKey] = useState(0);
+
+  // Stock in other countries (RUN-ME-41), manager-only: one total per
+  // product, shown beside the UAE figure. Read again with the summary.
+  const [overseas, setOverseas] = useState<Map<string, number>>(new Map());
+  useEffect(() => {
+    if (!isManager) return;
+    fetchOverseasTotals().then(setOverseas).catch(() => {});
+  }, [isManager, summaryKey]);
   const reload = useCallback(() => {
     setSummaryKey((k) => k + 1);
     return load();
@@ -637,6 +647,11 @@ export default function ProductsView({ isManager, user }: { isManager: boolean; 
                 {isManager && p.stock_on_hand != null && (
                   <div className="text-caption text-secondary tabular-nums mt-1">{t("products.sohWithColon", { value: p.stock_on_hand })}</div>
                 )}
+                {isManager && (overseas.get(p.id) ?? 0) > 0 && (
+                  <div className="text-caption text-secondary tabular-nums">
+                    {t("countryStock.overseasWithColon", { n: overseas.get(p.id) ?? 0 })}
+                  </div>
+                )}
                 {isManager && (
                   <ExtraFieldsLine product={p} columns={activeColumns} insight={insights.get(p.id)} insightDays={insightDays} />
                 )}
@@ -719,6 +734,11 @@ export default function ProductsView({ isManager, user }: { isManager: boolean; 
                         activeColumns.map((col) => (
                           <td key={col} className="px-4 py-3 text-right tabular-nums whitespace-nowrap">
                             {renderProductColumn(p, col, insight)}
+                            {col === "stock_on_hand" && (overseas.get(p.id) ?? 0) > 0 && (
+                              <div className="text-caption text-secondary">
+                                {t("countryStock.overseas", { n: overseas.get(p.id) ?? 0 })}
+                              </div>
+                            )}
                           </td>
                         ))}
                       {isManager && (
@@ -1518,6 +1538,18 @@ function ProductEditor({
               </Button>
             )}
           </div>
+        )}
+
+        {/* Stock in other countries (RUN-ME-41). Only for a saved product,
+            and not for a combo: combos sell from the UAE only. A move into
+            or out of the UAE changes Stock on hand at once, so the form
+            takes the new figure and Save does not write the old one back. */}
+        {product && comboReady && !isCombo && (
+          <CountryStock
+            productId={product.id}
+            onUaeChanged={(uae) => setForm((f) => ({ ...f, stock_on_hand: uae ?? f.stock_on_hand }))}
+            onChanged={onLinksChanged}
+          />
         )}
 
         {/* Combo — this product is sold as one of each product listed. Only

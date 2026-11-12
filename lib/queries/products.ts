@@ -89,32 +89,54 @@ export async function unlinkStock(productId: string): Promise<void> {
   if (!res.ok) throw new Error(data.error ?? t("products.stopSharingStockFailed"));
 }
 
-// Combos (RUN-ME-39): a product sold as one of each of its parts. Its stock
-// is the lowest of theirs, kept by the database.
+// Combos (RUN-ME-39): a product sold as a set of its parts, `qty` of each
+// (RUN-ME-40). Its stock is how many whole sets they make, kept by the
+// database.
+export interface ComboPart extends StockGroupMember {
+  /** How many of this part go into one set. 1 until RUN-ME-40 is run. */
+  qty: number;
+}
+
 export interface ComboInfo {
-  parts: StockGroupMember[];
+  parts: ComboPart[];
   partOf: StockGroupMember[];
   /** false until RUN-ME-39 has been run. */
   ready: boolean;
+  /** false until RUN-ME-40 has been run: no quantity to change yet. */
+  quantities: boolean;
+}
+
+/** How many whole sets `parts` make; null when no part keeps a count. */
+export function comboSets(parts: ComboPart[]): number | null {
+  const sets = parts
+    .filter((p) => p.stock_on_hand != null)
+    .map((p) => Math.floor(Math.max(0, p.stock_on_hand as number) / Math.max(1, p.qty)));
+  return sets.length > 0 ? Math.min(...sets) : null;
 }
 
 export async function fetchCombo(productId: string): Promise<ComboInfo> {
   const res = await fetch(`/api/products/combo?productId=${encodeURIComponent(productId)}`);
   const data = await res.json();
   if (!res.ok) throw new Error(data.error ?? t("products.comboLoadFailed"));
-  return { parts: data.parts ?? [], partOf: data.partOf ?? [], ready: data.ready !== false };
+  return {
+    parts: data.parts ?? [],
+    partOf: data.partOf ?? [],
+    ready: data.ready !== false,
+    quantities: data.quantities === true,
+  };
 }
 
 async function changeCombo(
-  method: "POST" | "DELETE",
+  method: "POST" | "DELETE" | "PATCH",
   comboId: string,
   partId: string,
-  fallback: string
-): Promise<{ parts: StockGroupMember[]; comboStock: number | null }> {
+  fallback: string,
+  qty?: number
+): Promise<{ parts: ComboPart[]; comboStock: number | null }> {
   const res = await fetch("/api/products/combo", {
     method,
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ comboId, partId }),
+    body: JSON.stringify({ comboId, partId, qty }),
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error ?? fallback);
@@ -127,6 +149,11 @@ export function addComboPart(comboId: string, partId: string) {
 
 export function removeComboPart(comboId: string, partId: string) {
   return changeCombo("DELETE", comboId, partId, t("products.comboRemoveFailed"));
+}
+
+/** How many of `partId` go into one set of the combo (RUN-ME-40). */
+export function setComboPartQty(comboId: string, partId: string, qty: number) {
+  return changeCombo("PATCH", comboId, partId, t("products.comboQtyFailed"), qty);
 }
 
 export interface TopSeller {

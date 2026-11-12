@@ -6,10 +6,12 @@ import { comboRefusal, comboTableMissing, shelfMembers } from "@/lib/combos-serv
 
 export const runtime = "nodejs";
 
-// Combos (scratchpad/RUN-ME-39): a product sold as one of each of several
-// other products. The database keeps a combo's stock at the lowest of its
-// parts and moves every part when a combo is sold or given back; this route
-// only says which products a combo is made of.
+// Combos (scratchpad/RUN-ME-39): a product sold as a set of several other
+// products. Since RUN-ME-40 each part carries how many of it go into one set
+// (owner, 2026-11-12: "some combos might have 2pcs"). The database keeps a
+// combo's stock at how many whole sets its parts make and moves every part by
+// that many when a combo is sold or given back; this route only says which
+// products a combo is made of, and how many of each.
 //
 // A combo can be sold under several SKUs: they share stock (RUN-ME-18) and
 // are one combo shelf. So everything here works on the SHELF the product is
@@ -21,9 +23,17 @@ export const runtime = "nodejs";
 // like every other product edit.
 
 type Member = { id: string; sku: string; stock_on_hand: number | null };
+type Part = Member & { qty: number };
 type Admin = ReturnType<typeof supabaseAdmin>;
 
-function bySku(a: Member, b: Member) {
+/** PostgREST saying product_combo_parts has no qty — RUN-ME-40 not run. */
+function qtyMissing(message: string | undefined): boolean {
+  return Boolean(message && message.includes("qty") && message.includes("product_combo_parts"));
+}
+
+const MAX_QTY = 999;
+
+function bySku<T extends Member>(a: T, b: T) {
   return a.sku.localeCompare(b.sku);
 }
 
@@ -37,26 +47,43 @@ async function productsById(admin: Admin, ids: string[]): Promise<Member[]> {
 /** The parts of the combo shelf `productId` is on, and the combos it is in. */
 async function comboOf(admin: Admin, productId: string) {
   const shelf = (await shelfMembers(admin, productId)).map((m) => m.id);
-  if (shelf.length === 0) return { parts: [] as Member[], partOf: [] as Member[], shelf };
-  const { data: own, error } = await admin
-    .from("product_combo_parts")
-    .select("part_id")
-    .in("combo_id", shelf);
-  if (error) throw new Error(error.message);
+  if (shelf.length === 0) return { parts: [] as Part[], partOf: [] as Member[], shelf, quantities: false };
+  // With the quantity (RUN-ME-40); before it is run, every part is one.
+  let quantities = true;
+  let own: { part_id: string; qty?: number }[] | null;
+  {
+    const first = await admin.from("product_combo_parts").select("part_id, qty").in("combo_id", shelf);
+    if (first.error && qtyMissing(first.error.message)) {
+      quantities = false;
+      const second = await admin.from("product_combo_parts").select("part_id").in("combo_id", shelf);
+      if (second.error) throw new Error(second.error.message);
+      own = second.data;
+    } else if (first.error) {
+      throw new Error(first.error.message);
+    } else {
+      own = first.data;
+    }
+  }
   const { data: inCombos, error: e2 } = await admin
     .from("product_combo_parts")
     .select("combo_id")
     .in("part_id", shelf);
   if (e2) throw new Error(e2.message);
-  const parts = await productsById(admin, [...new Set((own ?? []).map((r) => r.part_id as string))]);
+  // A part listed by two SKUs of the same combo counts at the larger
+  // quantity, as the database does.
+  const qtyOf = new Map<string, number>();
+  for (const r of own ?? []) {
+    qtyOf.set(r.part_id, Math.max(qtyOf.get(r.part_id) ?? 1, r.qty ?? 1));
+  }
+  const parts = (await productsById(admin, [...qtyOf.keys()])).map((p) => ({ ...p, qty: qtyOf.get(p.id) ?? 1 }));
   const partOf = await productsById(admin, [...new Set((inCombos ?? []).map((r) => r.combo_id as string))]);
-  return { parts: parts.sort(bySku), partOf: partOf.sort(bySku), shelf };
+  return { parts: parts.sort(bySku), partOf: partOf.sort(bySku), shelf, quantities };
 }
 
 async function answer(admin: Admin, productId: string) {
-  const { parts } = await comboOf(admin, productId);
+  const { parts, quantities } = await comboOf(admin, productId);
   const { data: fresh } = await admin.from("products").select("stock_on_hand").eq("id", productId).maybeSingle();
-  return NextResponse.json({ ok: true, parts, comboStock: fresh?.stock_on_hand ?? null });
+  return NextResponse.json({ ok: true, parts, quantities, comboStock: fresh?.stock_on_hand ?? null });
 }
 
 async function managerOrRefuse() {
@@ -80,12 +107,12 @@ export async function GET(req: NextRequest) {
   if (!productId) return NextResponse.json({ error: t("products.productIdRequired") }, { status: 400 });
 
   try {
-    const { parts, partOf } = await comboOf(supabaseAdmin(), productId);
-    return NextResponse.json({ parts, partOf, ready: true });
+    const { parts, partOf, quantities } = await comboOf(supabaseAdmin(), productId);
+    return NextResponse.json({ parts, partOf, quantities, ready: true });
   } catch (e) {
     // Not run yet: nothing is a combo, and the page carries on.
     if (comboTableMissing(e instanceof Error ? e.message : String(e))) {
-      return NextResponse.json({ parts: [], partOf: [], ready: false });
+      return NextResponse.json({ parts: [], partOf: [], quantities: false, ready: false });
     }
     return failed(e);
   }
@@ -140,6 +167,41 @@ export async function DELETE(req: NextRequest) {
       .in("combo_id", shelf.length > 0 ? shelf : [comboId])
       .eq("part_id", partId);
     if (error) throw new Error(error.message);
+    return await answer(admin, comboId);
+  } catch (e) {
+    return failed(e);
+  }
+}
+
+// { comboId, partId, qty } → how many of that part go into one set of the
+// combo shelf `comboId` is on (RUN-ME-40), on whichever of its SKUs the part
+// was added to. Every SKU on the shelf takes the new number of whole sets at
+// once (database trigger). Moves no stock.
+export async function PATCH(req: NextRequest) {
+  const refused = await managerOrRefuse();
+  if (refused) return refused;
+
+  const { comboId, partId, qty } = (await req.json()) as { comboId?: string; partId?: string; qty?: number };
+  if (!comboId || !partId) {
+    return NextResponse.json({ error: t("products.productIdRequired") }, { status: 400 });
+  }
+  if (typeof qty !== "number" || !Number.isInteger(qty) || qty < 1 || qty > MAX_QTY) {
+    return NextResponse.json({ error: t("products.comboQtyOutOfRange", { max: MAX_QTY }) }, { status: 400 });
+  }
+  const admin = supabaseAdmin();
+  try {
+    const shelf = (await shelfMembers(admin, comboId)).map((m) => m.id);
+    const { error } = await admin
+      .from("product_combo_parts")
+      .update({ qty })
+      .in("combo_id", shelf.length > 0 ? shelf : [comboId])
+      .eq("part_id", partId);
+    if (error) {
+      if (qtyMissing(error.message)) {
+        return NextResponse.json({ error: t("products.comboQtyNotEnabled") }, { status: 400 });
+      }
+      throw new Error(error.message);
+    }
     return await answer(admin, comboId);
   } catch (e) {
     return failed(e);

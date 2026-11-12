@@ -5095,3 +5095,47 @@ so the owner is to upgrade the organisation to Pro (about $25/month) before
 17 Nov or every request is refused with 402. Moving back to Free is the owner's
 call once a cycle stays well under 5 GB — Rejected: waiting it out, which
 stops both apps for the rest of the cycle.
+
+## 2026-11-12 — A combo can hold more than one of a product
+
+Owner: "in the combo section, add a + and - on each model number when
+entered, because some combos might have 2pcs combo."
+
+2026-11-12 — Each part of a combo carries a quantity: `product_combo_parts.qty`
+(1–999, default 1), added by scratchpad/RUN-ME-40. RUN-ME-39 was already live
+(probed), so this is a new file, not a revision. Every existing part keeps 1,
+which is what it meant until now, so no combo's figure moves when it is run.
+
+2026-11-12 — The combo's figure is how many WHOLE sets the parts make: each
+part's stock divided by its quantity, rounded down, the lowest of those
+(A 7 ×2, B 10 ×1 → 3). A sale of n sets takes n × qty of each part, a return
+puts the same back. Changing a quantity moves no stock; it only changes how
+many sets the parts make. — Rejected: rounding up or showing a fraction; half
+a set cannot be sold.
+
+2026-11-12 — Two parts that share one stock are still moved once (RUN-ME-39's
+rule), by the LARGER of their two quantities, not the sum. That keeps today's
+behaviour for every combo built so far. Likewise a part listed by two SKUs of
+one combo shelf counts at the larger quantity. A quantity change is written
+to every SKU of the shelf the part was added to, as taking a part out is.
+
+2026-11-12 — Only `qty` can be updated in place (column grant plus a
+manager/admin UPDATE policy); which combo and which part stay fixed. RLS stays
+forced on the table.
+
+2026-11-12 — − and + sit on each part row, web and app (one Swift change for
+iPhone, iPad and Mac), each button 44pt, − off at 1, + off at 999. Taps are
+shown at once and gathered for 400 ms, then the final number is written, so
+three taps on + is one write; a refused write puts the part back to its last
+saved number (rule 9). Closing the editor straight after a tap still writes
+it. No typed quantity box — the owner asked for + and −, and a set holding
+more than a few of one product is not expected. The product sheet reads
+"Combo of 2 × A + B". Until RUN-ME-40 is run the steppers do not show and
+everything works as before.
+
+2026-11-12 — RUN-ME-40 proven on PGlite (Postgres 16 in WebAssembly, session
+scratchpad only) over RUN-ME-18 and -39 with a stock-floor stub: 27 checks,
+all pass — run twice; existing parts kept at 1; sets after a quantity change;
+a sale and a return through the combo and through a second SKU; link_stock and
+the adopt trigger taking the sets figure; two parts on one shelf moved once by
+the larger quantity; 0 and 1000 refused.

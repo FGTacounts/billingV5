@@ -3,9 +3,9 @@
 import { toast } from "@/lib/toast";
 import { t } from "@/lib/i18n";
 import { Fragment, useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { List, Search, Plus, Package, GalleryHorizontal, Images, Pencil, SlidersHorizontal, Folder, ChevronLeft } from "lucide-react";
+import { List, Search, Plus, Minus, Package, GalleryHorizontal, Images, Pencil, SlidersHorizontal, Folder, ChevronLeft } from "lucide-react";
 import { supabaseBrowser } from "@/lib/supabase/client";
-import { fetchProducts, createProduct, updateProduct, fetchProductInsights, fetchLastSoldPrice, resolveProductFigures, linkStock, unlinkStock, fetchCombo, addComboPart, removeComboPart, type ProductInsight, type LastSoldPrice, type StockGroupMember } from "@/lib/queries/products";
+import { fetchProducts, createProduct, updateProduct, fetchProductInsights, fetchLastSoldPrice, resolveProductFigures, linkStock, unlinkStock, fetchCombo, addComboPart, removeComboPart, setComboPartQty, comboSets, type ComboPart, type ProductInsight, type LastSoldPrice, type StockGroupMember } from "@/lib/queries/products";
 import type { Product } from "@/lib/types/db";
 import { formatAed } from "@/lib/money";
 import { EmptyState, SkeletonList } from "@/components/ui/Empty";
@@ -50,6 +50,8 @@ const VIEW_MODES: { key: ViewMode; label: string; icon: typeof List }[] = [
 // No threshold was specified in any design doc — 10 units is a reasonable
 // documented default for "running low" until Manager feedback tunes it.
 const LOW_STOCK_THRESHOLD = 10;
+// The most of one product a combo set may hold (RUN-ME-40's check).
+const COMBO_MAX_QTY = 999;
 
 // Adjust View (§Products, §Next Updates: "Adjust View must apply to ALL
 // view types with an expanded field list") — which optional columns show,
@@ -979,11 +981,13 @@ function ProductEditor({
   const [members, setMembers] = useState<StockGroupMember[]>([]);
   const [linkSearch, setLinkSearch] = useState("");
   const [linkBusy, setLinkBusy] = useState(false);
-  // Combo (RUN-ME-39): the products this one is a set of, one of each, and
-  // the combos this one is a part of. Written at once, like shared stock.
-  const [comboParts, setComboParts] = useState<StockGroupMember[]>([]);
+  // Combo (RUN-ME-39): the products this one is a set of, how many of each
+  // (RUN-ME-40), and the combos this one is a part of. Written at once, like
+  // shared stock.
+  const [comboParts, setComboParts] = useState<ComboPart[]>([]);
   const [partOf, setPartOf] = useState<StockGroupMember[]>([]);
   const [comboReady, setComboReady] = useState(false);
+  const [comboQuantities, setComboQuantities] = useState(false);
   const [comboSearch, setComboSearch] = useState("");
   const [comboBusy, setComboBusy] = useState(false);
   const isCombo = comboParts.length > 0;
@@ -998,6 +1002,7 @@ function ProductEditor({
         setComboParts(c.parts);
         setPartOf(c.partOf);
         setComboReady(c.ready);
+        setComboQuantities(c.quantities);
       })
       .catch(() => {});
   }, [product]);
@@ -1108,19 +1113,14 @@ function ProductEditor({
       .slice(0, 8);
   }, [comboSearch, catalogue, comboParts, members, product]);
 
-  function lowestOf(parts: StockGroupMember[]): number | null {
-    const counted = parts.map((p) => p.stock_on_hand).filter((n): n is number => n != null);
-    return counted.length > 0 ? Math.max(0, Math.min(...counted)) : null;
-  }
-
-  async function changeComboPart(part: StockGroupMember, adding: boolean) {
+  async function changeComboPart(part: ComboPart, adding: boolean) {
     if (!product || comboBusy) return;
     const before = comboParts;
     const beforeStock = form.stock_on_hand;
     const next = adding ? [...before, part] : before.filter((p) => p.id !== part.id);
     // Shown at once, taken back if the write fails.
     setComboParts(next);
-    if (next.length > 0) setForm((f) => ({ ...f, stock_on_hand: lowestOf(next) ?? f.stock_on_hand }));
+    if (next.length > 0) setForm((f) => ({ ...f, stock_on_hand: comboSets(next) ?? f.stock_on_hand }));
     setComboSearch("");
     setComboBusy(true);
     try {
@@ -1139,6 +1139,78 @@ function ProductEditor({
     } finally {
       setComboBusy(false);
     }
+  }
+
+  // − and + on a part (RUN-ME-40): how many of it go into one set. Shown at
+  // once; taps on the same part are gathered for a moment and the final
+  // number is written, so tapping + three times is one write, not three.
+  // A refused write puts the part back to its last saved number.
+  const qtyTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const pendingQty = useRef(new Map<string, number>());
+  const savedQty = useRef(new Map<string, number>());
+  const qtySeq = useRef(0);
+
+  async function sendComboQty(partId: string, qty: number) {
+    if (!product) return;
+    qtyTimers.current.delete(partId);
+    const seq = ++qtySeq.current;
+    try {
+      const result = await setComboPartQty(product.id, partId, qty);
+      savedQty.current.delete(partId);
+      // Only the newest answer, and only once nothing else is waiting, so a
+      // slow reply cannot put back a number the owner has already changed.
+      if (seq === qtySeq.current && qtyTimers.current.size === 0) {
+        setComboParts(result.parts);
+        if (result.comboStock != null) setForm((f) => ({ ...f, stock_on_hand: result.comboStock ?? 0 }));
+      }
+      onLinksChanged();
+    } catch (e) {
+      const saved = savedQty.current.get(partId);
+      savedQty.current.delete(partId);
+      if (saved != null) {
+        setComboParts((parts) => {
+          const next = parts.map((p) => (p.id === partId ? { ...p, qty: saved } : p));
+          setForm((f) => ({ ...f, stock_on_hand: comboSets(next) ?? f.stock_on_hand }));
+          return next;
+        });
+      }
+      toast.error(e instanceof Error ? e.message : t("products.comboQtyFailed"));
+    }
+  }
+
+  // Closing the sheet straight after a tap still writes it.
+  const sendComboQtyRef = useRef(sendComboQty);
+  sendComboQtyRef.current = sendComboQty;
+  useEffect(() => {
+    const timers = qtyTimers.current;
+    const pending = pendingQty.current;
+    return () => {
+      for (const [partId, timer] of [...timers]) {
+        clearTimeout(timer);
+        const qty = pending.get(partId);
+        pending.delete(partId);
+        if (qty != null) void sendComboQtyRef.current(partId, qty);
+      }
+    };
+  }, []);
+
+  function stepComboQty(part: ComboPart, delta: number) {
+    if (!product) return;
+    const qty = Math.min(COMBO_MAX_QTY, Math.max(1, part.qty + delta));
+    if (qty === part.qty) return;
+    if (!savedQty.current.has(part.id)) savedQty.current.set(part.id, part.qty);
+    const next = comboParts.map((p) => (p.id === part.id ? { ...p, qty } : p));
+    setComboParts(next);
+    setForm((f) => ({ ...f, stock_on_hand: comboSets(next) ?? f.stock_on_hand }));
+    clearTimeout(qtyTimers.current.get(part.id));
+    pendingQty.current.set(part.id, qty);
+    qtyTimers.current.set(
+      part.id,
+      setTimeout(() => {
+        pendingQty.current.delete(part.id);
+        void sendComboQty(part.id, qty);
+      }, 400)
+    );
   }
 
   const grossProfit = (Number(form.price) || 0) - (Number(form.cost) || 0);
@@ -1469,6 +1541,41 @@ function ProductEditor({
                           <span className="text-caption text-secondary tabular-nums">
                             {t("products.soh", { value: p.stock_on_hand ?? t("common.notSet") })}
                           </span>
+                          {/* How many of this product go into one set (RUN-ME-40).
+                              Not shown until that SQL is in the database. */}
+                          {comboQuantities && (
+                            <span className="flex items-center">
+                              <button
+                                type="button"
+                                className="min-w-11 min-h-11 grid place-items-center rounded-inner disabled:opacity-40"
+                                disabled={comboBusy || p.qty <= 1}
+                                onClick={() => stepComboQty(p, -1)}
+                                aria-label={t("products.comboQtyLess", { sku: p.sku })}
+                              >
+                                <span className="w-7 h-7 rounded-inner border border-hairline grid place-items-center">
+                                  <Minus size={13} aria-hidden />
+                                </span>
+                              </button>
+                              <span
+                                className="min-w-7 text-center text-subhead font-semibold tabular-nums"
+                                aria-label={t("products.comboQtyLabel", { sku: p.sku })}
+                                aria-live="polite"
+                              >
+                                {p.qty}
+                              </span>
+                              <button
+                                type="button"
+                                className="min-w-11 min-h-11 grid place-items-center rounded-inner disabled:opacity-40"
+                                disabled={comboBusy || p.qty >= COMBO_MAX_QTY}
+                                onClick={() => stepComboQty(p, 1)}
+                                aria-label={t("products.comboQtyMore", { sku: p.sku })}
+                              >
+                                <span className="w-7 h-7 rounded-inner border border-hairline grid place-items-center">
+                                  <Plus size={13} aria-hidden />
+                                </span>
+                              </button>
+                            </span>
+                          )}
                           <Button
                             tier="plain"
                             type="button"
@@ -1498,7 +1605,7 @@ function ProductEditor({
                         <button
                           type="button"
                           className="w-full flex items-center justify-between gap-3 px-3.5 min-h-11 text-start hover:bg-primary/[0.04] transition-colors"
-                          onClick={() => changeComboPart({ id: p.id, sku: p.sku, stock_on_hand: p.stock_on_hand }, true)}
+                          onClick={() => changeComboPart({ id: p.id, sku: p.sku, stock_on_hand: p.stock_on_hand, qty: 1 }, true)}
                         >
                           <span className="text-subhead truncate">
                             <span className="font-semibold">{p.sku}</span>
@@ -1709,7 +1816,12 @@ function ProductDetailSheet({
   useEffect(() => {
     setCombo({ parts: [], partOf: [] });
     fetchCombo(product.id)
-      .then((c) => setCombo({ parts: c.parts.map((p) => p.sku), partOf: c.partOf.map((p) => p.sku) }))
+      .then((c) =>
+        setCombo({
+          parts: c.parts.map((p) => (p.qty > 1 ? t("products.comboPartWithQty", { qty: p.qty, sku: p.sku }) : p.sku)),
+          partOf: c.partOf.map((p) => p.sku),
+        })
+      )
       .catch(() => {});
   }, [product.id]);
 

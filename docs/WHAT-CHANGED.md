@@ -1,5 +1,21 @@
 # What changed, and what you need to do
 
+## 2026-11-12 — Combos with 2 (or more) of one product
+
+**Run `scratchpad/RUN-ME-40-combo-part-quantities.sql` in Supabase** (billing
+project — check the address bar says `isdeheipdfmwzmmnnidr`). The web needs
+deploying and the app needs a new build. Until the SQL is run the − and +
+buttons do not appear and combos work as before.
+
+Open a combo → **Combo**: each product now has **−** and **+** with the number
+that goes into one set. Example: TSB220 ×2 and TTS5053 ×1, with 7 and 10 in
+stock, make **3** sets (7 ÷ 2 = 3). Approving an order of 2 of the combo takes
+4 of TSB220 and 2 of TTS5053; undoing it puts them back. Every combo you have
+today stays at 1 of each until you change it. The product's summary reads
+"Combo of 2 × TSB220 + TTS5053".
+
+Works the same on the web, the iPhone and the Mac app.
+
 ## 2026-11-07 / 08 — Linked stock fixed, and combos
 
 **Run `scratchpad/RUN-ME-39-linked-stock-keeps-the-higher-figure-and-combos.sql`

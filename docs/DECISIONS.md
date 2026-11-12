@@ -5260,3 +5260,47 @@ UAE; staff cannot see, update or create an overseas order; combos refused.
 restore and grant-edit write `stock_on_hand` directly, so deleting or
 restoring an approved overseas order ON THE PHONE would move UAE stock. Do
 those on the web until the app is updated.
+
+## 2026-11-13 — Country stock and overseas orders on iPhone, iPad and Mac (step 3 of 3)
+
+2026-11-13 — The Swift app (one Billing target: iPhone, iPad, Mac Catalyst)
+now matches the web for RUN-ME-41 and -42. iOS commit be6f566. One new file,
+`CountryStock.swift` (+ `Strings+CountryStock.swift`), holds the calls and
+the views; the existing screens gained a few lines each:
+- Product editor (AddArticleSheet): "Stock in other countries" under Shared
+  stock — quantity per warehouse (Save beside a changed figure), Remove
+  (asks first), Add a country (an existing warehouse or a new country +
+  name), Move stock (UAE ↔ any warehouse). Shown at once, put back if
+  refused (rule 9); a move into/out of the UAE updates the Stock on hand
+  field so Save does not write the old figure back. Not for combos.
+- Products list: "+N overseas" under the stock badge and in the Stock column.
+- New order: "Stock from" for managers/admins once a warehouse abroad exists.
+- Manager order screen: "From India · Warehouse 1" at the top.
+- Approval: the app's own pre-check of UAE shelves is skipped for an overseas
+  order; the database checks its warehouse and returns any short lines.
+- Delete, restore (OrderTrash) and grant edit call
+  `order_warehouse_stock_move` for an overseas order instead of writing
+  `stock_on_hand`. This closes the gap noted for step 2.
+
+2026-11-13 — The phone calls the database functions directly with the
+signed-in user's session (as it does for link_stock and approval), not the
+web's /api/products/country-stock route. Same functions, same role checks.
+
+2026-11-13 — Whether an order is overseas is asked of the database at the
+moment it matters (`orders.stock_warehouse_id` for that one order), not
+carried on the app's Order model or added to the order sync. Adding a column
+to the sync's select would break every sync until RUN-ME-42 is run, and a
+per-order read at approve/delete/restore/grant time is a few bytes.
+
+2026-11-13 — The phone has no whole-sheet order import (only lines into one
+order, on the new-order sheet, where "Stock from" already is), so there is
+nothing to add for "change country when importing" beyond that.
+
+2026-11-13 — Verified by building HEAD + only these changes in a separate
+worktree, for the iOS simulator and for Mac Catalyst: both succeed, no
+warnings in the changed files. Not run against a live database or clicked
+through (needs a manager sign-in and RUN-ME-41/42). The iOS working tree
+still holds the 2026-10-23 bug sweep and project-file edits (version 7.3,
+build 11, IPHONEOS_DEPLOYMENT_TARGET = "iOS 16"), all uncommitted and left
+as they were. That deployment-target value stops a command-line build
+("Swift requires a minimum deployment target"); the committed 16.0 builds.

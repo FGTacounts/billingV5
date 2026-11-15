@@ -685,6 +685,7 @@ export const en = {
   "products.comboPartOf": "Part of combo {names}",
   "products.comboOf": "Combo of {names}",
   "products.comboStockHint": "Worked out from the combo's products",
+  "products.sharedCostHint": "Every SKU sharing this stock has this cost",
   "products.comboStockIsWorkedOut": "A combo's stock is worked out from its products. Change the stock of those instead.",
   "products.comboLinkRefused": "These can't share stock: a combo can't share stock with a product it is made of, or with a product that is part of another combo.",
   "products.comboPartIsComboGeneric": "That product is a combo (or shares stock with one), so it can't be part of another combo.",

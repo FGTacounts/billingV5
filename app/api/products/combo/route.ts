@@ -3,6 +3,7 @@ import { getAppUser } from "@/lib/auth";
 import { t } from "@/lib/i18n";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { comboRefusal, comboTableMissing, shelfMembers } from "@/lib/combos-server";
+import { supabaseCaller } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 
@@ -80,10 +81,28 @@ async function comboOf(admin: Admin, productId: string) {
   return { parts: parts.sort(bySku), partOf: partOf.sort(bySku), shelf, quantities };
 }
 
+/**
+ * What the combo costs — each part's cost × its quantity, added up
+ * (RUN-ME-43 combo_cost_for_editor). Asked as the CALLER, so the database
+ * answers null to anyone who may not see cost (RUN-ME-4). null too when a
+ * part has no cost yet, or before RUN-ME-43 is run.
+ */
+async function comboCost(productId: string): Promise<number | null> {
+  const { data, error } = await supabaseCaller().rpc("combo_cost_for_editor", { p_product: productId });
+  if (error || data == null) return null;
+  return Number(data);
+}
+
 async function answer(admin: Admin, productId: string) {
   const { parts, quantities } = await comboOf(admin, productId);
   const { data: fresh } = await admin.from("products").select("stock_on_hand").eq("id", productId).maybeSingle();
-  return NextResponse.json({ ok: true, parts, quantities, comboStock: fresh?.stock_on_hand ?? null });
+  return NextResponse.json({
+    ok: true,
+    parts,
+    quantities,
+    comboStock: fresh?.stock_on_hand ?? null,
+    comboCost: parts.length > 0 ? await comboCost(productId) : null,
+  });
 }
 
 async function managerOrRefuse() {
@@ -108,7 +127,8 @@ export async function GET(req: NextRequest) {
 
   try {
     const { parts, partOf, quantities } = await comboOf(supabaseAdmin(), productId);
-    return NextResponse.json({ parts, partOf, quantities, ready: true });
+    const cost = parts.length > 0 ? await comboCost(productId) : null;
+    return NextResponse.json({ parts, partOf, quantities, ready: true, comboCost: cost });
   } catch (e) {
     // Not run yet: nothing is a combo, and the page carries on.
     if (comboTableMissing(e instanceof Error ? e.message : String(e))) {

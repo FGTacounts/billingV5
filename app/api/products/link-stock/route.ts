@@ -54,7 +54,7 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     );
   }
-  const outcome = data as { result: string; stock_group_id?: string; members?: unknown[] };
+  const outcome = data as { result: string; stock_group_id?: string; members?: unknown[]; cost?: number | null };
   if (outcome.result === "already") {
     // Already one shelf: answer with it as it stands.
     const { data: me } = await supabase.from("products").select("stock_group_id").eq("id", productId).maybeSingle();
@@ -64,7 +64,15 @@ export async function POST(req: NextRequest) {
       : { data: [] };
     return NextResponse.json({ ok: true, stockGroupId: groupId, members: group ?? [] });
   }
-  return NextResponse.json({ ok: true, stockGroupId: outcome.stock_group_id, members: outcome.members ?? [] });
+  // `cost`: the one cost every SKU on the shelf now carries (RUN-ME-43) —
+  // the product open in the editor's, or on a combo shelf its parts' total.
+  // Manager-only route, and managers see cost.
+  return NextResponse.json({
+    ok: true,
+    stockGroupId: outcome.stock_group_id,
+    members: outcome.members ?? [],
+    cost: outcome.cost ?? null,
+  });
 }
 
 export async function DELETE(req: NextRequest) {

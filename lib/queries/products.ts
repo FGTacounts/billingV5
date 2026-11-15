@@ -68,7 +68,7 @@ export interface StockGroupMember {
 export async function linkStock(
   productId: string,
   partnerId: string
-): Promise<{ stockGroupId: string | null; members: StockGroupMember[] }> {
+): Promise<{ stockGroupId: string | null; members: StockGroupMember[]; cost: number | null }> {
   const res = await fetch("/api/products/link-stock", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -76,7 +76,14 @@ export async function linkStock(
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error ?? t("products.shareStockFailed"));
-  return { stockGroupId: (data.stockGroupId as string | null) ?? null, members: data.members as StockGroupMember[] };
+  // `cost` is the cost every SKU on the merged shelf now carries (RUN-ME-43):
+  // the product open in the editor's, or the combo's parts' total. null when
+  // nobody on it has one, or before RUN-ME-43 is run.
+  return {
+    stockGroupId: (data.stockGroupId as string | null) ?? null,
+    members: data.members as StockGroupMember[],
+    cost: data.cost == null ? null : Number(data.cost),
+  };
 }
 
 export async function unlinkStock(productId: string): Promise<void> {
@@ -104,6 +111,13 @@ export interface ComboInfo {
   ready: boolean;
   /** false until RUN-ME-40 has been run: no quantity to change yet. */
   quantities: boolean;
+  /**
+   * What the combo costs: each part's cost × its quantity, added up
+   * (RUN-ME-43). null when it is not a combo, a part has no cost yet, the
+   * viewer may not see cost, or RUN-ME-43 has not been run — the cost is
+   * then typed as before.
+   */
+  comboCost: number | null;
 }
 
 /** How many whole sets `parts` make; null when no part keeps a count. */
@@ -123,6 +137,7 @@ export async function fetchCombo(productId: string): Promise<ComboInfo> {
     partOf: data.partOf ?? [],
     ready: data.ready !== false,
     quantities: data.quantities === true,
+    comboCost: data.comboCost == null ? null : Number(data.comboCost),
   };
 }
 
@@ -132,7 +147,7 @@ async function changeCombo(
   partId: string,
   fallback: string,
   qty?: number
-): Promise<{ parts: ComboPart[]; comboStock: number | null }> {
+): Promise<{ parts: ComboPart[]; comboStock: number | null; comboCost: number | null }> {
   const res = await fetch("/api/products/combo", {
     method,
     headers: { "Content-Type": "application/json" },
@@ -140,7 +155,11 @@ async function changeCombo(
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error ?? fallback);
-  return { parts: data.parts ?? [], comboStock: data.comboStock ?? null };
+  return {
+    parts: data.parts ?? [],
+    comboStock: data.comboStock ?? null,
+    comboCost: data.comboCost == null ? null : Number(data.comboCost),
+  };
 }
 
 export function addComboPart(comboId: string, partId: string) {

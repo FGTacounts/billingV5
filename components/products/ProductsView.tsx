@@ -1010,7 +1010,21 @@ function ProductEditor({
   const [comboQuantities, setComboQuantities] = useState(false);
   const [comboSearch, setComboSearch] = useState("");
   const [comboBusy, setComboBusy] = useState(false);
+  // What the combo costs — its parts' costs × their quantities, added up
+  // (RUN-ME-43). While the product carries that figure the cost box is not
+  // typed: the database sets it. null (a part with no cost yet, or RUN-ME-43
+  // not run) leaves the box as it was. A combo made before RUN-ME-43 keeps
+  // the cost it had (owner, 2026-11-15: "leave them, don't change the
+  // cost"), so opening one does not put the total into the form; its box
+  // stays typeable until its parts or their costs next change.
+  const [comboCost, setComboCost] = useState<number | null>(null);
   const isCombo = comboParts.length > 0;
+  const costWorkedOut = isCombo && comboCost != null && Math.abs(Number(form.cost) - comboCost) < 0.000001;
+
+  function takeComboCost(next: number | null) {
+    setComboCost(next);
+    if (next != null) setForm((f) => ({ ...f, cost: next }));
+  }
 
   // A combo is a shelf (RUN-ME-39): linking this product to a combo's SKU,
   // or taking it off one, changes what it is made of — so this is re-read
@@ -1023,6 +1037,7 @@ function ProductEditor({
         setPartOf(c.partOf);
         setComboReady(c.ready);
         setComboQuantities(c.quantities);
+        setComboCost(c.parts.length > 0 ? c.comboCost : null);
       })
       .catch(() => {});
   }, [product]);
@@ -1091,6 +1106,10 @@ function ProductEditor({
       // put the shelf back to the lower figure. Take the shelf's.
       const self = result.members.find((m) => m.id === product.id);
       if (self) setForm((f) => ({ ...f, stock_on_hand: self.stock_on_hand ?? 0 }));
+      // Every SKU on the shelf now carries one cost (RUN-ME-43): this
+      // product's, unless it had none or the shelf is a combo. Take it, so
+      // Save does not write the form's old figure over the whole shelf.
+      if (result.cost != null) setForm((f) => ({ ...f, cost: result.cost ?? f.cost }));
       reloadCombo();
       onLinksChanged();
     } catch (e) {
@@ -1149,6 +1168,7 @@ function ProductEditor({
         : await removeComboPart(product.id, part.id);
       setComboParts(result.parts);
       if (result.comboStock != null) setForm((f) => ({ ...f, stock_on_hand: result.comboStock ?? 0 }));
+      takeComboCost(result.parts.length > 0 ? result.comboCost : null);
       onLinksChanged();
     } catch (e) {
       setComboParts(before);
@@ -1182,6 +1202,7 @@ function ProductEditor({
       if (seq === qtySeq.current && qtyTimers.current.size === 0) {
         setComboParts(result.parts);
         if (result.comboStock != null) setForm((f) => ({ ...f, stock_on_hand: result.comboStock ?? 0 }));
+        takeComboCost(result.parts.length > 0 ? result.comboCost : null);
       }
       onLinksChanged();
     } catch (e) {
@@ -1385,14 +1406,27 @@ function ProductEditor({
           </div>
           <div>
             <Label>{t("products.costAed")}</Label>
+            {/* A combo's cost is its parts' total and is not typed: the
+                database sets it (RUN-ME-43). */}
             <TextInput
               id="product-cost"
               type="number"
               value={form.cost}
+              readOnly={costWorkedOut}
+              aria-readonly={costWorkedOut || undefined}
               aria-invalid={costError || undefined}
-              aria-describedby={costError ? "product-cost-error" : undefined}
-              className={costError ? "!border-[--status-danger]" : undefined}
+              aria-describedby={
+                costError
+                  ? "product-cost-error"
+                  : costWorkedOut
+                    ? "combo-cost-hint"
+                    : members.length > 0
+                      ? "shared-cost-hint"
+                      : undefined
+              }
+              className={`tabular-nums${costError ? " !border-[--status-danger]" : ""}`}
               onChange={(e) => {
+                if (costWorkedOut) return;
                 setForm({ ...form, cost: Number(e.target.value) });
                 setCostError(false);
                 setAskNoCost(false);
@@ -1401,6 +1435,16 @@ function ProductEditor({
             {costError && (
               <p id="product-cost-error" role="alert" className="text-caption text-[--status-danger] mt-1">
                 {product ? t("products.costCantBeClearedHint") : t("products.costRequiredHint")}
+              </p>
+            )}
+            {!costError && costWorkedOut && (
+              <p id="combo-cost-hint" className="text-caption text-secondary mt-1">
+                {t("products.comboStockHint")}
+              </p>
+            )}
+            {!costError && !costWorkedOut && members.length > 0 && (
+              <p id="shared-cost-hint" className="text-caption text-secondary mt-1">
+                {t("products.sharedCostHint")}
               </p>
             )}
           </div>

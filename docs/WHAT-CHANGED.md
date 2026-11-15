@@ -1,5 +1,28 @@
 # What changed, and what you need to do
 
+## 2026-11-15 — One cost for linked SKUs; combos cost what their parts cost
+
+**Run `scratchpad/RUN-ME-43-shelf-and-combo-cost.sql` in Supabase** (billing
+project — check the address bar says `isdeheipdfmwzmmnnidr`). The web needs
+deploying and the app needs a new build. Until the SQL is run, costs work as
+before.
+
+**No cost you have today is changed.** The last two lines the SQL shows only
+count how many linked groups and combos already disagree; they follow the new
+rules from their next change.
+
+- **Linked SKUs (shared stock)** carry one cost. Change it on any of them and
+  all of them change. When you link, the product you have open is the main
+  one and its cost goes to every SKU linked; if it has no cost yet, the other
+  product's is used. Prices stay separate.
+- **Combos** cost their parts' costs × how many go into one set, added up
+  (A AED 6 ×2 + B AED 3 → AED 15). It updates by itself when a part's cost,
+  a part, or a quantity changes, and the combo's cost box is read-only with
+  "Worked out from the combo's products". While any part has no cost, the
+  combo's cost can still be typed. The price is never touched.
+
+Works the same on the web, the iPhone and the Mac app.
+
 ## 2026-11-12 — Combos with 2 (or more) of one product
 
 **Run `scratchpad/RUN-ME-40-combo-part-quantities.sql` in Supabase** (billing

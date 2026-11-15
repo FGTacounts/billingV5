@@ -5304,3 +5304,74 @@ still holds the 2026-10-23 bug sweep and project-file edits (version 7.3,
 build 11, IPHONEOS_DEPLOYMENT_TARGET = "iOS 16"), all uncommitted and left
 as they were. That deployment-target value stops a command-line build
 ("Swift requires a minimum deployment target"); the committed 16.0 builds.
+
+## 2026-11-15 — Shared stock carries one cost; a combo costs what its parts cost
+
+Owner: "For the combo and shared item cost is going to be determined from the
+main product too (only cost and not price). Also if it is a combo product."
+Database: `scratchpad/RUN-ME-43-shelf-and-combo-cost.sql`. Web and the Swift
+app (one target: iPhone, iPad, Mac) both changed.
+
+2026-11-15 — Every SKU on one shelf (shared stock) carries ONE cost; price
+stays per SKU — Changing the cost of any of them changes all of them. Kept by
+a database trigger, not in the apps, for the same reason stock is (2026-09-12):
+the phone writes `products` directly and the import, the editor and the scan
+all write cost. Taking a SKU off a shelf keeps the cost it had.
+
+2026-11-15 — Linking takes the cost of the product the link is made FROM —
+Owner's choice, asked ("Product I link from"): the product open in the editor
+when "Add another product" is used is the main one. Both apps call
+`link_stock(<added>, <open>)`, so it is `p_partner`. If it has no cost, the
+added product's; failing that, the lowest cost on either shelf. On a combo
+shelf, the parts' total. `link_stock` now also answers `cost`, and both
+editors put it into their form so Save does not write the old figure over the
+whole shelf — Rejected: the higher cost (offered, not chosen).
+
+2026-11-15 — A combo's cost is each part's cost × its quantity, added up —
+the same parts and quantities its stock is worked out from (RUN-ME-40): two
+parts sharing one stock count once at the larger quantity, and the part's
+cost is the lowest above 0 among its listed SKUs. It is set again whenever a
+part's cost changes, a part is added or taken out, or a quantity changes, and
+a cost typed onto any SKU of a combo shelf is replaced by the total (a BEFORE
+trigger, named to run ahead of RUN-ME-33's check). While any part has no cost
+the combo keeps what it holds and can be typed as before — a partial total
+would overstate gross profit. Order lines already snapshot `products.cost`
+(RUN-ME-36), so new combo lines carry the total; lines already on orders are
+not touched.
+
+2026-11-15 — Nothing that exists today is re-costed — The owner first chose
+"the lower cost" for shelves that already disagree, then: "leave them, don't
+change the cost". So RUN-ME-43 writes no row; its check output only COUNTS
+shelves whose SKUs disagree and combos whose cost differs from their parts.
+They follow the new rules from their next change: a cost edit on one SKU of
+such a shelf sets the whole shelf to it, and a combo is re-costed when a part
+or quantity changes or anyone types its cost. For the same reason opening an
+old combo in either editor does not put the parts' total into the form; the
+cost box is read-only ("Worked out from the combo's products") only while
+the product actually carries the total.
+
+2026-11-15 — The editors — Web and app: the combo cost box is read-only with
+the combo stock's hint while it holds the total, and a SKU sharing stock shows
+"Every SKU sharing this stock has this cost" under the box. The parts' total
+comes from `combo_cost_for_editor`, which returns null to anyone but a manager
+or an admin (cost stays hidden from staff, RUN-ME-4); the web asks it as the
+caller, not with the service key. The phone's list keeps no copy of a
+sibling's new cost until its next product sync (`Article.cost` is a `let`
+and the cache writer is private to AppDataManager, which another session has
+uncommitted edits in), so the app's editor reads the database's cost for the
+product on open (`freshCost`, products_safe) unless the box has been typed
+in. Phone Save already writes cost only when it changed.
+
+2026-11-15 — Consequences accepted: an import that gives two SKUs of one shelf
+different costs in the same sheet ends with whichever row the database applied
+last; a SKU put on a shelf any way other than `link_stock` (no app does it now)
+keeps its cost until the next cost edit on the shelf. Reports' stock snapshot
+is unchanged.
+
+2026-11-15 — RUN-ME-43 proven on PGlite (Postgres 16 in WebAssembly, session
+scratchpad only) over stubs plus RUN-ME-18, -33, -39 and -40: 27 checks, all
+pass — run twice with no cost, price or stock changed; a cost reaching the
+shelf both ways; combo total from parts, quantities, a part added without a
+cost and then costed, a part taken out; typing on a combo replaced; a combo
+under two SKUs; a part on a shared shelf; the three link cases; RUN-ME-33
+still refusing a cleared cost; unlinked SKUs moving apart; null for staff.

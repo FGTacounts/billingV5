@@ -5460,3 +5460,15 @@ shelf both ways; combo total from parts, quantities, a part added without a
 cost and then costed, a part taken out; typing on a combo replaced; a combo
 under two SKUs; a part on a shared shelf; the three link cases; RUN-ME-33
 still refusing a cleared cost; unlinked SKUs moving apart; null for staff.
+
+2026-11-15 — Photo Order (iPhone, iPad, Mac): Hold → Info opens the product
+card. Owner asked "Hold and when clicked info, shows data. For photo order"
+and chose the full product card. Holding a photo used to show a menu only
+once the photo was ticked, and its Info was a small alert (SKU, quantity,
+price, line total). Now holding any photo that matches a product shows Info
+(plus Remove when ticked), and Info opens `ProductDetailSheet` — the same card
+a tap opens in Products: photo, description, price, stock, rack, barcode,
+combo parts, last sold. Cost and GP stay manager/admin-only, as the card
+already gates them. The small alert and its strings were removed; the
+quantity is still on the tile and in the order. Not on the web: its Drive
+photo picker has no hold menu and none was asked for.

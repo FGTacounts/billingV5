@@ -4785,6 +4785,91 @@ totals use the customer's zone; without an order discount the invoice adds
 VAT per line, the stored total rounds it once, so they can differ by fils;
 server-made PDFs date invoices in UTC.
 
+## 2026-10-23 — Bug sweep of the iPhone / Mac app
+
+Owner: "Find and fix any bugs in the iOS app." Each fix below was read end
+to end before it was made; all are in the Swift app (one target serves
+iPhone, iPad and Mac Catalyst).
+
+- **Order lines lost on a failed read.** A failed read of `order_items_safe`
+  became "no lines" for every order; the next save of any order deleted its
+  lines and wrote its total as 0, and approval billed AED 0. The read now
+  fails the whole order sync (the list on screen is kept), and a save never
+  deletes every line of an order whose lines it does not have.
+- **Lineless invoices zeroed on save.** The header write recomputed
+  subtotal / VAT / total from the lines on every note or date edit; an
+  invoice imported without lines went to 0. It now leaves those three alone
+  when there are no lines (recountTotals already did).
+- **Product writes refused (42501).** Updates on `products` asked for every
+  column back, `cost` included, which staff may not read — article edits,
+  stock corrections, deactivating an article, shared-stock links, GRV
+  approval stock and Trash stock moves were all refused. They now ask for
+  nothing back (`returning: .minimal`), as order_items writes already did.
+- **Cost hidden for a whole session after one timeout.** Any error reading
+  `products_safe` was remembered as "the view is missing"; a dropped
+  connection no longer is.
+- **Status rollback.** A failed approve, unapprove, reject or (pre-RUN-ME-35)
+  final approval left the new status on screen and in the cache until the
+  next sync; it is now put back (rule 9). A refused pick tick in the
+  manager's order editor is now taken back off too.
+- **Payment saved twice.** In both payment sheets, a failed goods-return
+  request after the payment was written left the sheet open with Save on.
+  It now says the collection was saved and the return was not raised, and
+  closes. An edit that fails for any reason other than RUN-ME-25's missing
+  column no longer retries without the discount.
+- **Balance button** in the customer's payment sheet filled in the invoices'
+  full totals, not what is still owed; it now uses the outstanding balance.
+- **Cheque with no number** listed as cash and its status could not be set;
+  a cheque date or status now marks it a cheque too.
+- **Due dates a day early.** Extension dates were formatted in UTC, so one
+  picked before 04:00 Dubai (and every re-save) stored the day before. All
+  four places now write the device's calendar day (AppDataManager.calendarDay).
+- **Extension approval** marked the request approved before moving the due
+  date, so a refused order update left it approved and unretryable. The
+  order is written (and checked) first.
+- **New order / editing:** a PO number edited on a sent order was dropped; an
+  order could be sent with a 0-quantity line (Send now waits for every line
+  to have at least 1).
+- **Warehouse:** "Packed by" was overwritten by the bare note as the screen
+  closed; Edit Quantity was offered on approved orders (now gated like Add
+  and Remove).
+- **Import** could not read the app's own `.xls` export (it looked for "EA";
+  the export writes "Each" in a different column).
+- **Figures:** the month's average per day left today out of the day count
+  (doubled on the 2nd); the salesman card's goal % compared a rolling 30/90
+  days with a monthly goal (now this month's sales); the custom Avg Sale
+  range cut off part of its first and last days.
+- **Shell:** every order was announced as new on each fresh sign-in; the
+  watch's order and notification payloads overwrote each other (sign-out
+  still clears both); deleting or moving a widget with some hidden acted on
+  the wrong one; the admin's payment-extension switch looped on a failed
+  save; a target cleared on the web stayed on the phone; admins were missing
+  Extend due date in Invoices and cost/GP/stock in the photo browser; the
+  salesman's Approved tile (and its home-screen widget) skipped packed
+  orders ("Picked"). "Completed" was deliberately not added there: it would
+  turn the tile into a count of every finished order ever.
+
+Found, not changed — each needs a database function or an owner decision:
+- Creating an order (header, then lines) and a payment (row, then slices)
+  are two writes; a drop between them leaves a header without lines or a
+  payment on no invoice, and a retry duplicates. Needs one RPC each.
+- The offline queue replays a whole order snapshot (status, invoice number)
+  and can overwrite a newer change made meanwhile.
+- Moving an order to Trash releases its payments before the status write.
+- Before approval, the phone's totals count only picked lines once any are
+  picked, while approval bills every line (owner, 2026-09-27).
+- The invoice PDF's per-line VAT does not always add to its VAT Total, and
+  it prints line-based totals (0 for an imported lineless invoice) where the
+  Excel prints the billed figures — differs from the web too.
+- Month buckets use the device calendar; a phone set to the Hijri calendar
+  cuts months there. The Balance Sheet month has no upper bound (future-
+  dated expenses count now) — on the web as well.
+- Typed amounts: "1,250" reads as 1.25 in the payment sheets and as 1250 in
+  order prices; decimal-comma imports read 100× too large.
+- New Order keeps the previous customer's last prices after switching
+  customer by code; a reopened discounted draft loses its discount; editing
+  a product writes back the stock count it opened with.
+
 ## 2026-10-23 — Invoices print the stored VAT rate and total, dated in Dubai
 
 The owner said yes to the three invoice findings of the web bug sweep above.

@@ -45,17 +45,19 @@ export const pageVariants: Variants = {
 /**
  * Staggered list container. Children rise in sequence rather than all at
  * once, which is what makes a list feel populated rather than pasted.
- * The stagger is deliberately small — beyond ~40ms it starts to feel slow
- * on a long list rather than considered.
+ * The whole ripple lands within 400ms (CLAUDE.md: nothing over 400ms):
+ * 20ms apart, 200ms each, and StaggerList animates at most 10 rows, so the
+ * tenth starts at 180ms and settles at 380ms. These lists are opened all
+ * day, which is another reason to keep it short.
  */
 export const listContainer: Variants = {
   hidden: {},
-  visible: { transition: { staggerChildren: 0.035, delayChildren: 0.02 } },
+  visible: { transition: { staggerChildren: 0.02 } },
 };
 
 export const listItem: Variants = {
   hidden: { opacity: 0, y: 10 },
-  visible: { opacity: 1, y: 0, transition: { duration: durations.normal, ease: EASE_OUT } },
+  visible: { opacity: 1, y: 0, transition: { duration: durations.fast, ease: EASE_OUT } },
 };
 
 /**

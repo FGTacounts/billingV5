@@ -6,17 +6,16 @@ import { listContainer, listItem, usePrefersReducedMotion } from "@/lib/motion";
 
 /**
  * Rows rise in sequence rather than all at once. The effect is deliberately
- * subtle — ~35ms apart and 10px of travel — because the point is to make a
+ * subtle — 20ms apart and 10px of travel — because the point is to make a
  * list feel like it settled into place, not to put on a show.
  *
- * Only worth wrapping the first screenful: past ~20 rows the tail of the
- * stagger arrives late enough to read as lag, so `max` caps how many items
- * animate and the rest appear immediately.
+ * `max` caps how many rows animate (the rest appear immediately) so the
+ * last animated row has settled by 400ms; see listContainer in lib/motion.
  */
 export function StaggerList({
   children,
   className = "",
-  max = 14,
+  max = 10,
 }: {
   children: ReactNode[];
   className?: string;

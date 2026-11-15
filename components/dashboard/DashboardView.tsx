@@ -175,7 +175,7 @@ function TargetBar({ sale, target }: { sale: number; target: number }) {
       </div>
       <div className="h-2 rounded-full bg-canvas overflow-hidden">
         <div
-          className="h-full rounded-full bg-accent transition-all"
+          className="h-full rounded-full bg-accent transition-[width]"
           style={{ width: `${pct * 100}%` }}
         />
       </div>

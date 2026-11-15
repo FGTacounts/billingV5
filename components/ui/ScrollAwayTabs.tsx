@@ -62,7 +62,7 @@ export default function ScrollAwayTabs({ children }: { children: ReactNode }) {
     <>
       <div
         ref={barRef}
-        className={`transition-all duration-200 ease-out overflow-hidden ${
+        className={`transition-[max-height,opacity,transform] duration-200 ease-out overflow-hidden ${
           hidden ? "max-h-0 opacity-0 -translate-y-2" : "max-h-[480px] opacity-100 translate-y-0"
         }`}
       >

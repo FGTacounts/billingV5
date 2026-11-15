@@ -154,7 +154,8 @@ export default function LoginForm() {
           className="bg-white/10 backdrop-blur-xl border border-white/20 rounded-sheet p-5 text-left shadow-overlay"
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={respectMotion({ duration: durations.normal, ease: EASE_OUT, delay: 0.1 }, reduced)}
+          // 80ms + 320ms: arrives by 400ms (CLAUDE.md: nothing over 400ms).
+          transition={respectMotion({ duration: durations.normal, ease: EASE_OUT, delay: 0.08 }, reduced)}
         >
           <label className="block text-[12px] font-semibold tracking-wide text-white/90 mt-1 mb-1.5">
             {t("account.iAmA")}

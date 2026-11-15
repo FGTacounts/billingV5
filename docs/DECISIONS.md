@@ -5472,3 +5472,35 @@ combo parts, last sold. Cost and GP stay manager/admin-only, as the card
 already gates them. The small alert and its strings were removed; the
 quantity is still on the tile and in the order. Not on the web: its Drive
 photo picker has no hold menu and none was asked for.
+
+2026-11-15 — Animation timing brought inside the 400ms ceiling (web,
+iPhone, iPad, Mac). The owner pasted a list of animation and UX principles;
+of those, only "keep UI animations snappy" was a gap the existing rules
+already require (CLAUDE.md: nothing over 400ms), and the owner chose to fix
+that alone. The rule now read as: an animation has landed by 400ms, delay
+and stagger included. Only durations changed; no new curve, nothing added.
+- Web charts: line draw 0.7s → 0.4s; area fill and dots 0.5s after 0.3s →
+  0.2s after 0.2s (they fade in as the line arrives); bars 0.5s → 0.3s with
+  their stagger fitted into 100ms (30ms apart until a chart has more than
+  four bars, then closer).
+- Web count-up figures (AnimatedNumber, Dashboard): 550ms → 400ms.
+- Web list ripple (Orders, Customers): 35ms apart, 320ms each, 14 rows
+  (~800ms) → 20ms apart, 200ms each, 10 rows (380ms). Opened all day, so
+  shorter is also right by the "used often, animate less" principle.
+- Web sign-in card: 100ms delay → 80ms (80 + 320).
+- Web: two `transition-all` became the properties that actually change
+  (ScrollAwayTabs: max-height, opacity, transform; the Dashboard target
+  bar: width). Same timing, nothing else animated by accident.
+- iPhone/Mac: 35 bare `withAnimation { }` and one `.animation(.default)`
+  now use `AppMotion.standard`. Since iOS 17 SwiftUI's default is a spring
+  of about 500ms. `entranceMotion` uses `AppMotion.quick` with its delay
+  capped at 160ms, so a long run of dashboard widgets (40ms apart) lands
+  by 400ms instead of arriving half a second late. The phone has no chart
+  draw-in to match the web's.
+- Left as they are: the skeleton sheen (1.4s, a looping loading indicator,
+  not a transition) and the "saved" banners that stay up 1.2–2s (time to
+  read, not motion).
+- NOT done, held for the owner: squash and stretch, anticipation and
+  exaggerated feedback (need curves the rules forbid); Hick's, Miller's and
+  Jakob's laws (would regroup screens — rule 2); Postel's law (forgiving
+  money and phone input — the owner to name the fields).

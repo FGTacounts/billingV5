@@ -7,8 +7,9 @@ import { usePrefersReducedMotion } from "@/lib/motion";
  * Counts a figure into place instead of snapping to it — the way Stocks and
  * Fitness settle their numbers.
  *
- * Deliberately restrained: ~550ms, eased out hard so most of the distance is
- * covered in the first third, and it only animates when the value actually
+ * Deliberately restrained: 400ms (the app's ceiling), eased out hard so
+ * most of the distance is covered in the first third, and it only animates
+ * when the value actually
  * changes. A headline figure someone is trying to read should arrive fast
  * and then hold still.
  *
@@ -19,7 +20,7 @@ import { usePrefersReducedMotion } from "@/lib/motion";
 export default function AnimatedNumber({
   value,
   format,
-  durationMs = 550,
+  durationMs = 400,
   className = "",
 }: {
   value: number;

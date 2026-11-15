@@ -147,6 +147,7 @@ export interface BarStack {
 export function MonthlyBarChart({ bars, height = 140 }: { bars: BarStack[]; height?: number }) {
   if (bars.length === 0) return <div style={{ height: height + 16 }} />;
   const max = Math.max(1, ...bars.map((b) => b.segments.reduce((s, seg) => s + seg.value, 0)));
+  const staggerStep = Math.min(0.03, 0.1 / Math.max(1, bars.length - 1));
 
   // Laid out in HTML rather than SVG. The SVG version scaled its viewBox
   // non-uniformly to fill the width, which stretched every corner radius
@@ -169,7 +170,9 @@ export function MonthlyBarChart({ bars, height = 140 }: { bars: BarStack[]; heig
                   // segment joins square while both ends of the stack stay
                   // round, which is how the mockup draws them.
                   className="w-full max-w-[18px] rounded-full overflow-hidden flex flex-col chart-bar-grow origin-bottom"
-                  style={{ height: `${pct}%`, animationDelay: `${i * 0.03}s` }}
+                  // 30ms apart, but the whole stagger fits in 100ms so the
+                  // last bar of a long chart still lands by 400ms.
+                  style={{ height: `${pct}%`, animationDelay: `${i * staggerStep}s` }}
                 >
                   {b.segments.map((seg, si) => (
                     <div

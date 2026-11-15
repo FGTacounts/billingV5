@@ -213,7 +213,10 @@ textarea:focus-visible {
 /* Chart draw-in animations (§Next Updates: "dynamic animations whenever
    anything changes shape/opens, e.g. chart lines animating in"). Lines/
    donut segments use normalized pathLength=1 so the same keyframe works
-   regardless of actual SVG path length. */
+   regardless of actual SVG path length.
+   Every one finishes within 400ms, delay included (CLAUDE.md: nothing over
+   400ms). The fill and dots fade in as the line arrives, not after it; bars
+   grow in 300ms and their stagger is capped in MonthlyBarChart. */
 @keyframes chartDraw {
   from {
     stroke-dashoffset: 1;
@@ -241,16 +244,16 @@ textarea:focus-visible {
 .chart-line-draw {
   stroke-dasharray: 1;
   stroke-dashoffset: 1;
-  animation: chartDraw 0.7s ease-out forwards;
+  animation: chartDraw 0.4s ease-out forwards;
 }
 .chart-fade-in {
-  animation: chartFadeIn 0.5s ease-out 0.3s forwards;
+  animation: chartFadeIn 0.2s ease-out 0.2s forwards;
   opacity: 0;
 }
 .chart-bar-grow {
   transform-box: fill-box;
   transform-origin: bottom;
-  animation: chartGrowUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  animation: chartGrowUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) backwards;
 }
 
 ::-webkit-scrollbar {

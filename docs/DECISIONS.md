@@ -5574,3 +5574,17 @@ then the GRV below".
   the caller's own session, so it holds only what that person can already
   see. Rejected: one sheet of GRVs and another of lines — the owner chose
   the header layout.
+
+2026-11-19 — The same GRV edit and export on the iPhone, iPad and Mac app
+(iOS commit 561037b) — One Swift change serves all three.
+- The export downloads the web's `/api/grv/excel` with the signed-in
+  session (new `WebAPI.download`, using `WEB_APP_URL` and the Bearer token,
+  like `WebAPI.request`), so the app's file is the web's file to the cell.
+  It is handed to the share sheet, the way every other export in the app
+  leaves; Mac Catalyst uses the same share sheet. While it downloads, the
+  button is greyed out (no spinner). A failed download says "Couldn't export
+  the GRV." — the web link has no failure state to match.
+- Reports → GRV: the old per-row "Approve Return" dialog is gone; rows open
+  the same sheet as Payments, where managers approve with "Save & approve".
+  Approving there is two taps instead of one. The Edit button shows only
+  where the person may edit; for managers that is every row, as on the web.

@@ -5638,7 +5638,8 @@ serves all three, built for the simulator and Mac Catalyst).
 
 2026-11-19 — The same old-price rows on the order page (owner: "do it for
 the order pages"), web OrderDetail and the phone's ManagerOrderEditorView
-(iPhone, iPad, Mac) — so a salesman's order, which now comes in at list
+(iPhone, iPad, Mac; iOS commit c683c54, built for the simulator and Mac
+Catalyst) — so a salesman's order, which now comes in at list
 price, can be given the customer's old prices when a manager reviews it.
 - Same button, rows, Apply / Remove and Apply all / Remove all as the new
   order, for a manager or admin wherever they may change a price on that

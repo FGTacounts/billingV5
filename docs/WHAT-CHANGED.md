@@ -1,5 +1,18 @@
 # What changed, and what you need to do
 
+## 2026-11-19 — Order Excel: customer name on the file, customer header on the sheet
+
+Nothing to run in Supabase. The web needs deploying and the app needs a new
+build.
+
+- The downloaded file is named after the customer, then the invoice:
+  **M&SAVE SUPERMARKET LLC INV1234.NOV26.xlsx**. Same on the iPhone and Mac
+  (.xls). The PDF's name is unchanged.
+- The web Excel now starts with Customer Name, Customer Code, Order Date,
+  Invoice No. and Salesman Name, then the item lines. Order Date is the
+  billing date — the same date the invoice prints. The iPhone/Mac Excel
+  already showed all of these in its invoice header.
+
 ## 2026-11-15 — One cost for linked SKUs; combos cost what their parts cost
 
 **Run `scratchpad/RUN-ME-43-shelf-and-combo-cost.sql` in Supabase** (billing

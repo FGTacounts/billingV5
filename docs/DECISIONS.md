@@ -5504,3 +5504,28 @@ and stagger included. Only durations changed; no new curve, nothing added.
   exaggerated feedback (need curves the rules forbid); Hick's, Miller's and
   Jakob's laws (would regroup screens — rule 2); Postel's law (forgiving
   money and phone input — the owner to name the fields).
+
+2026-11-19 — The order Excel is named after the customer and carries a
+customer header (owner) — Asked for: the file name has the customer's name,
+and each sheet has a header with customer name, customer code, date of
+order, invoice no. and salesman name.
+- File name: customer name first, then the existing invoice name —
+  "M&SAVE SUPERMARKET LLC INV1234.NOV26.xlsx" (web) / ".xls" (phone, Mac).
+  Customer first so a folder of downloads sorts and reads by shop, as the
+  statement files already do (2026-09-18). Same character rule as the
+  statement name (letters, digits, _ & . ( ) - and space; anything else is
+  dropped), on both apps, so one order gets one name. A name with nothing
+  left (e.g. only Arabic letters) or no customer falls back to the plain
+  "INV1234.NOV26". The PDF's file name is NOT changed — not asked.
+- "Date of order" is the billing date (billed_at, else updated_at, else
+  created_at): the date the owner chose as an order's date on 2026-09-21,
+  and the one the PDF prints as Inv Date. Not the day the order was written.
+- Web (`app/api/orders/excel/route.ts`): five label/value rows above the
+  column headings (label across columns A–B, value in C), a blank row, then
+  the headings. The web Excel had no header at all before. Missing values
+  print "—".
+- Phone / Mac (`OrderExcelExporter.swift`): its sheet already prints the
+  full invoice header (Bill To: Cust No + name, Inv No., Inv Date, Salesman
+  Name), so only the file name changed there — no second header block.
+- The bulk Orders list export (`/api/export/excel?type=orders`) is one row
+  per order with these as columns already; left alone.

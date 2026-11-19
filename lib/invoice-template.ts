@@ -107,6 +107,20 @@ export function invoiceFileBase(invoiceNumber: string | number | null, dateIso: 
   return `INV${num}.${mon}${yy}`;
 }
 
+// The per-order Excel is named after the customer first (owner, 2026-11-19):
+// "M&SAVE SUPERMARKET LLC INV1234.NOV26". Characters a file system or a
+// Content-Disposition header cannot carry are dropped, the same rule the
+// customer statement's file name uses. No customer → the plain invoice name.
+export function invoiceExcelFileBase(
+  invoiceNumber: string | number | null,
+  dateIso: string,
+  customerName: string | null | undefined
+): string {
+  const base = invoiceFileBase(invoiceNumber, dateIso);
+  const safeName = (customerName ?? "").replace(/[^\w&.() -]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 60);
+  return safeName ? `${safeName} ${base}` : base;
+}
+
 const ONES = [
   "ZERO", "ONE", "TWO", "THREE", "FOUR", "FIVE", "SIX", "SEVEN", "EIGHT", "NINE",
   "TEN", "ELEVEN", "TWELVE", "THIRTEEN", "FOURTEEN", "FIFTEEN", "SIXTEEN",

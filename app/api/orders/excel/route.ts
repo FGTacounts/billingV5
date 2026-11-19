@@ -5,7 +5,7 @@ import { supabaseCaller } from "@/lib/supabase/server";
 import { fetchOrder, fetchOrderItems } from "@/lib/queries/orders";
 import { parseLineSort } from "@/lib/lineSort";
 import { computeInvoiceLines, invoiceTotals } from "@/lib/pdf/invoice";
-import { invoiceFileBase } from "@/lib/invoice-template";
+import { invoiceDate, invoiceExcelFileBase } from "@/lib/invoice-template";
 import { toAed, toFils } from "@/lib/money";
 import { orderVatRate } from "@/lib/orders-server";
 import { t } from "@/lib/i18n";
@@ -41,7 +41,7 @@ export async function GET(req: NextRequest) {
 
   const wb = new ExcelJS.Workbook();
   const sheet = wb.addWorksheet(t("orders.excelSheetName"));
-  sheet.columns = [
+  const columns = [
     { header: t("orders.columnNo"), key: "no", width: 6 },
     { header: t("orders.columnSku"), key: "sku", width: 14 },
     { header: t("orders.columnDescription"), key: "desc", width: 34 },
@@ -53,7 +53,28 @@ export async function GET(req: NextRequest) {
     { header: t("orders.columnVat"), key: "vat", width: 10 },
     { header: t("orders.columnNetTotal"), key: "netTotal", width: 12 },
   ];
-  sheet.getRow(1).font = { bold: true };
+  // Keys and widths only: the column headings go under the customer block.
+  sheet.columns = columns.map(({ key, width }) => ({ key, width }));
+
+  // Who and what the sheet is for, above the lines (owner, 2026-11-19). The
+  // order date is the billing date — the date the owner chose as an order's
+  // date (2026-09-21) and the one the invoice PDF prints as Inv Date.
+  const orderDate = order.billed_at ?? order.updated_at ?? order.created_at;
+  const headerBlock: [string, string][] = [
+    [t("orders.excelCustomerName"), order.customer?.name ?? t("common.notSet")],
+    [t("orders.excelCustomerCode"), order.customer?.code ?? t("common.notSet")],
+    [t("orders.excelOrderDate"), invoiceDate(orderDate)],
+    [t("orders.excelInvoiceNo"), order.invoice_number != null ? String(order.invoice_number) : t("common.notSet")],
+    [t("orders.excelSalesmanName"), order.salesman?.full_name ?? t("common.notSet")],
+  ];
+  for (const [label, value] of headerBlock) {
+    const row = sheet.addRow([label, null, value]);
+    sheet.mergeCells(row.number, 1, row.number, 2);
+    row.getCell(1).font = { bold: true };
+  }
+  sheet.addRow([]);
+  const headingRow = sheet.addRow(columns.map((c) => c.header));
+  headingRow.font = { bold: true };
   for (const l of lines) {
     sheet.addRow({
       no: l.no,
@@ -81,7 +102,7 @@ export async function GET(req: NextRequest) {
   totalRow.font = { bold: true };
 
   const buffer = await wb.xlsx.writeBuffer();
-  const fileName = `${invoiceFileBase(order.invoice_number, order.billed_at ?? order.updated_at ?? order.created_at)}.xlsx`;
+  const fileName = `${invoiceExcelFileBase(order.invoice_number, orderDate, order.customer?.name)}.xlsx`;
   return new NextResponse(buffer, {
     headers: {
       "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

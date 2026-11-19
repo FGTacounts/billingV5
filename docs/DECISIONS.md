@@ -5599,7 +5599,8 @@ apply all/remove all button on the top of the row." Asked, the owner chose:
 new lines show the list price and the old price "so that the manager/admin
 can know the difference"; a salesman's order gets the list price; adding an
 article to an order already written gets the list price too. Web and the
-iPhone/iPad/Mac app.
+iPhone/iPad/Mac app (iOS commit db9bb0f, NewOrderView; one Swift change
+serves all three, built for the simulator and Mac Catalyst).
 - REPLACES the old-price parts of the 2026-09-18 "One rule,
   `resolveLinePrice`" and 2026-09-21 "a price a manager states > the
   customer's old price > list" decisions: nothing puts an old price on a line

@@ -5635,3 +5635,25 @@ serves all three, built for the simulator and Mac Catalyst).
   what is charged, so an applied old price below list appears there as a
   discount, as it did before. The saved line stores the old price as its
   price before discount (2026-09-29), so the order and invoice show none.
+
+2026-11-19 — The same old-price rows on the order page (owner: "do it for
+the order pages"), web OrderDetail and the phone's ManagerOrderEditorView
+(iPhone, iPad, Mac) — so a salesman's order, which now comes in at list
+price, can be given the customer's old prices when a manager reviews it.
+- Same button, rows, Apply / Remove and Apply all / Remove all as the new
+  order, for a manager or admin wherever they may change a price on that
+  order (the web's `canEditItems`, i.e. any stage but the trash). Never a
+  salesman. Needs a customer on the order; a placeholder customer has none.
+- Apply sets the line's Price column — its price before discount — to the
+  old price, exactly as typing it there would (`/api/orders/update-item`
+  `priceBeforeDiscount`): the line keeps its Disc %, which comes off the old
+  price. Remove sets it back to the list price.
+- Nothing stores that an old price was applied: a row reads "applied" when
+  the line's price before discount equals the customer's old price. A price
+  typed to the same figure therefore also reads as applied — it is the same
+  price.
+- On the web each Apply saves at once, like every other edit on that page,
+  shown immediately and put back if the server refuses (rule 9). Apply all
+  saves line by line, as the round-subtotal override already does. On the
+  phone the editor holds every change until Save, so an applied old price is
+  saved with the rest, and Cancel drops it.

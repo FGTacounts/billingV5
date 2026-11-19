@@ -11,10 +11,13 @@ build.
   List · Difference** with an **Apply** button. Only Apply puts the old price
   on that line; once applied the button reads **Remove**.
 - **Apply all** and **Remove all** sit above the table.
-- A salesman's order goes in at the list price. The order page has no Apply
-  row yet, so when reviewing it a manager changes a price by typing it, as
-  today. Adding an article to an order already written also uses the list
-  price.
+- A salesman's order goes in at the list price. Adding an article to an
+  order already written also uses the list price.
+- The **order page** has the same button, rows, Apply / Remove and Apply all
+  / Remove all, so a manager can give a salesman's order the customer's old
+  prices when reviewing it. On the web each Apply saves straight away; on
+  the iPhone/Mac order screen it is saved with **Save**, like any other
+  change there.
 - Same on the iPhone, iPad and Mac.
 
 ## 2026-11-19 — Edit a GRV after it is made, and export GRVs to Excel

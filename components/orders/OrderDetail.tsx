@@ -3,7 +3,7 @@
 import { toast } from "@/lib/toast";
 import { t, type MessageKey } from "@/lib/i18n";
 import { friendlyError } from "@/lib/errors";
-import { useEffect, useState, useCallback, useMemo, useRef } from "react";
+import { Fragment, useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Check, X, Package, FileEdit, Ban, Clock, Pencil, Search, Trash2, Undo2, RotateCcw, ChevronUp, ChevronDown } from "lucide-react";
 import { usePreferences } from "@/lib/hooks/usePreferences";
@@ -39,7 +39,7 @@ import type { Seller } from "@/lib/queries/sales";
 import { fetchCustomers } from "@/lib/queries/customers";
 import { fetchProducts } from "@/lib/queries/products";
 import type { AppUser, Product } from "@/lib/types/db";
-import { subtotal, formatAed, effectiveQty, lineDiscountPercent, priceBeforeDiscount, billed, FALLBACK_VAT_RATE, toFils, toAed } from "@/lib/money";
+import { subtotal, formatAed, effectiveQty, lineDiscountPercent, lineDiscountPrice, priceBeforeDiscount, billed, FALLBACK_VAT_RATE, toFils, toAed, money, resolveLinePrice } from "@/lib/money";
 import { sortOrderLines, parseLineSort, isUnpicked, lineNumbers, LINE_SORTS } from "@/lib/lineSort";
 import Sheet from "@/components/ui/Sheet";
 import Button from "@/components/ui/Button";
@@ -174,6 +174,38 @@ export default function OrderDetail({
       live = false;
     };
   }, [orderId, user.role]);
+
+  // The customer's old prices (customer_prices, written at approval), for a
+  // manager or admin to apply line by line, as on the new-order sheet (owner,
+  // 2026-11-19: "do it for the order pages"). Nothing applies by itself; a
+  // salesman never sees them. Read once per customer, by product id.
+  // Above the loading return on purpose: a hook below it breaks every order.
+  const [oldPrices, setOldPrices] = useState<Map<string, number>>(new Map());
+  const [showOldPrices, setShowOldPrices] = useState(false);
+  const orderCustomerId = order?.customer_id ?? null;
+  useEffect(() => {
+    setOldPrices(new Map());
+    if (!orderCustomerId || (user.role !== "manager" && user.role !== "admin")) return;
+    let live = true;
+    supabaseBrowser()
+      .from("customer_prices")
+      .select("product_id, price")
+      .eq("customer_id", orderCustomerId)
+      .then(({ data }) => {
+        if (!live) return;
+        const map = new Map<string, number>();
+        for (const row of data ?? []) {
+          // The one shared rule decides what counts: a remembered zero (a
+          // free sample) or a broken figure is not a price.
+          const resolved = resolveLinePrice({ listPrice: 0, stickyPrice: row.price });
+          if (resolved.reason === "sticky_price") map.set(row.product_id, resolved.price);
+        }
+        setOldPrices(map);
+      });
+    return () => {
+      live = false;
+    };
+  }, [orderCustomerId, user.role]);
 
   // Bug fix (Order Flow & Additions §8): with more than one Warehouse
   // picker on the same order, this sheet had no way to learn about a
@@ -554,6 +586,44 @@ export default function OrderDetail({
     }
   }
 
+  // Sets the Price column (the price before the line's Disc %) of each line
+  // given — the old price to apply it, the list price to remove it. The
+  // line's own Disc % stays and comes off the new price, as when a manager
+  // types one. Shown at once; put back if the server refuses.
+  async function setLinePrices(changes: { item: OrderItemRow; price: number }[]) {
+    if (changes.length === 0) return;
+    const previous = items;
+    const next = new Map(
+      changes.map(({ item, price }) => {
+        const base = priceBeforeDiscount(item.unit_price, item.product?.price, item.price_before_discount);
+        return [item.id, { price_before_discount: price, unit_price: lineDiscountPrice(price, lineDiscountPercent(base, item.unit_price)) }];
+      })
+    );
+    setItems((prev) => prev.map((it) => (next.has(it.id) ? { ...it, ...next.get(it.id)! } : it)));
+    setBusy(true);
+    try {
+      for (const { item, price } of changes) {
+        const res = await fetch("/api/orders/update-item", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ itemId: item.id, priceBeforeDiscount: price }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error ?? t("orders.changeLineFailed"));
+        }
+      }
+      tapSuccess();
+    } catch (e) {
+      setItems(previous);
+      toast.error(friendlyError(e, t("orders.changeLineFailed")));
+    } finally {
+      setBusy(false);
+      await load();
+      onChanged();
+    }
+  }
+
   async function saveNote(field: NoteField) {
     setSavingNote(true);
     try {
@@ -659,6 +729,33 @@ export default function OrderDetail({
   const canDelete =
     isManager ||
     (order.salesman_id === user.id && ["draft", "pending"].includes(order.status));
+  // The old-price rows (2026-11-19): a manager's or admin's, wherever they
+  // may change a price on this order. Plain functions, not hooks — this is
+  // below the loading return.
+  const canApplyOldPrices = isManager && canEditItems && !!order.customer_id;
+  const lineBase = (it: OrderItemRow) => priceBeforeDiscount(it.unit_price, it.product?.price, it.price_before_discount);
+  // The old price worth offering: one that differs from the list price.
+  const oldPriceFor = (it: OrderItemRow): number | null => {
+    const old = oldPrices.get(it.product_id);
+    const list = it.product?.price;
+    return old != null && list != null && old !== money(list) ? old : null;
+  };
+  const oldPriceApplied = (it: OrderItemRow) => {
+    const old = oldPriceFor(it);
+    return old != null && money(lineBase(it)) === old;
+  };
+  const oldPriceLines = canApplyOldPrices ? items.filter((it) => oldPriceFor(it) !== null) : [];
+  const appliedOldPrices = oldPriceLines.filter(oldPriceApplied).length;
+  // Every column the table draws, so an old-price row spans the lot.
+  const showRackColumn =
+    items.some((it) => it.product?.rack_location) || ((isWarehouse || isManager) && ["waiting", "picking"].includes(order.status));
+  const showSohColumn = (isWarehouse || isManager) && ["waiting", "picking"].includes(order.status);
+  const showGpColumn = isManager && items.some((it) => it.unit_cost != null);
+  const columnCount =
+    (showPickedColumn ? 1 : 0) + 1 + (showArrange ? 1 : 0) + 1 + (showRackColumn ? 1 : 0) + (showSohColumn ? 1 : 0) +
+    1 + 1 + (isManager ? 1 : 0) + 1 + (showGpColumn ? 1 : 0) + (canRemoveItems ? 1 : 0);
+  const twoDp = (n: number, sign = false) =>
+    n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2, ...(sign ? { signDisplay: "exceptZero" as const } : {}) });
 
   return (
     <>
@@ -878,6 +975,56 @@ export default function OrderDetail({
         </div>
       )}
 
+      {/* Shows the old-price rows; it reprices nothing itself. */}
+      {canApplyOldPrices && items.length > 0 && (
+        <div className="mb-2 space-y-1.5">
+          <button
+            onClick={() => setShowOldPrices((v) => !v)}
+            aria-expanded={showOldPrices}
+            className="w-full text-left px-3 py-2 min-h-[44px] rounded-card bg-accent/8 text-accent text-caption font-semibold"
+          >
+            {t(showOldPrices ? "orders.hideLastPrices" : "orders.useLastPrices", {
+              name: order.customer?.name ?? t("orders.customer"),
+            })}
+          </button>
+          {showOldPrices && (
+            <div className="flex flex-wrap items-center gap-2 px-3 py-1.5 rounded-card bg-accent/8">
+              <span className="flex-1 min-w-[160px] text-caption text-secondary">
+                {oldPriceLines.length > 0
+                  ? t("orders.oldPricesFound", { n: oldPriceLines.length, name: order.customer?.name ?? "" })
+                  : t("orders.noOldPrices", { name: order.customer?.name ?? "" })}
+              </span>
+              {oldPriceLines.length > 0 && (
+                <>
+                  <Button
+                    tier="tinted"
+                    className="min-h-[44px] text-caption"
+                    disabled={busy || appliedOldPrices === oldPriceLines.length}
+                    onClick={() =>
+                      setLinePrices(
+                        oldPriceLines.filter((it) => !oldPriceApplied(it)).map((it) => ({ item: it, price: oldPriceFor(it)! }))
+                      )
+                    }
+                  >
+                    {t("orders.applyAllOldPrices")}
+                  </Button>
+                  <Button
+                    tier="plain"
+                    className="min-h-[44px] text-caption"
+                    disabled={busy || appliedOldPrices === 0}
+                    onClick={() =>
+                      setLinePrices(oldPriceLines.filter(oldPriceApplied).map((it) => ({ item: it, price: money(it.product!.price) })))
+                    }
+                  >
+                    {t("orders.removeAllOldPrices")}
+                  </Button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="border border-hairline rounded-card overflow-hidden mb-4">
         <table className="w-full text-subhead">
           <thead>
@@ -888,11 +1035,10 @@ export default function OrderDetail({
               <th className="ps-2 py-2.5 font-medium text-right tabular-nums">{t("orders.headerRowNumber")}</th>
               {showArrange && <th className="ps-1 py-2.5 font-medium"><span className="sr-only">{t("orders.headerArrange")}</span></th>}
               <th className="px-3 py-2.5 font-medium">{t("orders.headerItem")}</th>
-              {(items.some((it) => it.product?.rack_location) ||
-                ((isWarehouse || isManager) && ["waiting", "picking"].includes(order.status))) && (
+              {showRackColumn && (
                 <th className="px-3 py-2.5 font-medium">{t("orders.headerRack")}</th>
               )}
-              {(isWarehouse || isManager) && ["waiting", "picking"].includes(order.status) && (
+              {showSohColumn && (
                 <th className="px-3 py-2.5 font-medium text-right">{t("orders.headerSoh")}</th>
               )}
               <th className="px-3 py-2.5 font-medium text-right">{t("orders.headerQty")}</th>
@@ -901,7 +1047,7 @@ export default function OrderDetail({
                 <th className="px-3 py-2.5 font-medium text-right tabular-nums">{t("orders.headerDiscount")}</th>
               )}
               <th className="px-3 py-2.5 font-medium text-right tabular-nums">{t("common.total")}</th>
-              {isManager && items.some((it) => it.unit_cost != null) && (
+              {showGpColumn && (
                 <th className="px-3 py-2.5 font-medium text-right tabular-nums">{t("orders.gp")}</th>
               )}
               {canRemoveItems && <th className="px-3 py-2.5 font-medium"><span className="sr-only">{t("common.remove")}</span></th>}
@@ -921,10 +1067,12 @@ export default function OrderDetail({
               const lineCost = (it.unit_cost ?? 0) * qty;
               const lineGp = lineTotal - lineCost;
               const lineGpPct = lineTotal > 0 ? (lineGp / lineTotal) * 100 : 0;
+              const old = showOldPrices && canApplyOldPrices ? oldPriceFor(it) : null;
+              const oldApplied = old !== null && oldPriceApplied(it);
               return (
+                <Fragment key={it.id}>
                 <tr
-                  key={it.id}
-                  className={`border-b border-hairline last:border-0 ${
+                  className={`${old !== null ? "" : "border-b border-hairline last:border-0"} ${
                     flagUnpicked && isUnpicked(it) ? "bg-warning/10" : ""
                   }`}
                 >
@@ -1273,6 +1421,45 @@ export default function OrderDetail({
                     </td>
                   )}
                 </tr>
+                {/* The old-price row: what this customer was last billed
+                    beside the list price, and the difference. */}
+                {old !== null && (
+                  <tr className="border-b border-hairline last:border-0 bg-accent/8">
+                    <td colSpan={columnCount} className="px-3 py-1">
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <span className="flex-1 min-w-[200px] text-caption text-secondary tabular-nums">
+                          {t("orders.oldPriceVsList", {
+                            old: twoDp(old),
+                            list: twoDp(it.product!.price),
+                            diff: twoDp(old - it.product!.price, true),
+                          })}
+                        </span>
+                        {oldApplied ? (
+                          <Button
+                            tier="plain"
+                            className="min-h-[44px] text-caption"
+                            disabled={busy}
+                            aria-label={t("orders.removeOldPriceNamed", { name: it.sku })}
+                            onClick={() => setLinePrices([{ item: it, price: money(it.product!.price) }])}
+                          >
+                            {t("orders.removeOldPrice")}
+                          </Button>
+                        ) : (
+                          <Button
+                            tier="tinted"
+                            className="min-h-[44px] text-caption"
+                            disabled={busy}
+                            aria-label={t("orders.applyOldPriceNamed", { name: it.sku })}
+                            onClick={() => setLinePrices([{ item: it, price: old }])}
+                          >
+                            {t("orders.applyOldPrice")}
+                          </Button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               );
             })}
           </tbody>

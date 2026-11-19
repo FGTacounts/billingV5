@@ -5529,3 +5529,48 @@ order, invoice no. and salesman name.
   Name), so only the file name changed there — no second header block.
 - The bulk Orders list export (`/api/export/excel?type=orders`) is one row
   per order with these as columns already; left alone.
+
+2026-11-19 — GRVs can be edited and added to after they are raised, by
+whoever raised them too; and they export to Excel with the customer on top
+(owner) — Asked for: "edit and add items in GRV orders after making it.
+there is no option currently", and "export option for the GRV orders, with
+the customer details". Asked who may edit: managers and admins, "also
+whoever raised it". Asked the layout: "the customer details as header, and
+then the GRV below".
+- Managers and admins could already correct any return (2026-09-18), but
+  only by clicking the customer's name in Payments → Returns, and Reports →
+  GRV rows could not be opened at all. Every row the user may change now has
+  a visible Edit button, in both places, and Reports → GRV rows open the
+  same sheet Payments does (`GrvSheet`).
+- Whoever raised a return may edit it while it is PENDING: add and remove
+  products, quantities, the amount and the note. Not the value each (it is
+  the product's price, as when the return was raised), not approve, not
+  remove — those stay a manager's. Once approved, a return has put stock
+  back and credited the customer, so correcting it stays with managers.
+- How: one SECURITY DEFINER function, `edit_own_pending_return`
+  (scratchpad/RUN-ME-44), that checks the caller is the submitter
+  (`current_app_user_id()`) and the return is pending, then replaces the
+  lines and writes amount and note in one transaction. Rejected: widening
+  the update/delete policies on `grv_returns` / `grv_items` — a policy can't
+  stop a submitter changing the customer or status, the function can.
+  Managers still save through `saveGrv`, unchanged. Until RUN-ME-44 is run
+  a non-manager's save says which file is missing.
+- NOT changed, noticed: the "add return lines" insert policy (RUN-ME-13) is
+  `with check (true)`, so any signed-in user can add a line to ANY return,
+  approved ones included, through the API. Neither app does that. Closing it
+  needs care — creating a return inserts its lines as the raiser — so it is
+  left for the owner to decide.
+- The export is an Excel file built on the server (`app/api/grv/excel`,
+  layout in `lib/grvExcel.ts`), the same shape as the order Excel the owner
+  asked for today: per customer, a header block (name, code, phone,
+  address, district, TRN, assigned salesman), then a table of its GRVs
+  oldest first — GRV no., date, status, then one row per product (SKU,
+  description, qty, value each, value), "Raised by", the note, and a bold
+  "<GRV> credited" row with what the customer is credited (the agreed
+  amount, VAT included, or the products' value when there is none). A total
+  per customer with more than one GRV. "Export GRVs" downloads every return
+  (Payments → Returns header, Reports → GRV beside the existing CSV, which
+  stays); "Export Excel" in an open return downloads that one. Read through
+  the caller's own session, so it holds only what that person can already
+  see. Rejected: one sheet of GRVs and another of lines — the owner chose
+  the header layout.

@@ -7,7 +7,9 @@ import { fetchOutstandingInvoices, summarizeByCustomer, AGING_BUCKETS } from "@/
 import { fetchCustomers } from "@/lib/queries/customers";
 import { fetchBalanceSheet, fetchStockSnapshot, type BalanceSheet, type StockSnapshotRow } from "@/lib/queries/reports";
 import { fetchLeaderboard, type LeaderboardEntry } from "@/lib/queries/sales";
-import { fetchGrvs, fetchGrvProductReport, type GrvRow, type GrvProductRow } from "@/lib/queries/grv";
+import { fetchGrvs, fetchGrvProductReport, grvLabel, type GrvRow, type GrvProductRow } from "@/lib/queries/grv";
+import { GrvSheet, GrvExportLink } from "@/components/payments/GrvSection";
+import type { AppUser } from "@/lib/types/db";
 import { fetchPurchases, type PurchaseRow } from "@/lib/queries/purchases";
 import { formatAed } from "@/lib/money";
 import { t } from "@/lib/i18n";
@@ -51,7 +53,7 @@ const TAB_LABELS: Record<Tab, string> = {
   GRV: t("reports.tabGrv"),
 };
 
-export default function ReportsView() {
+export default function ReportsView({ user }: { user: AppUser }) {
   const [tab, setTab] = useState<Tab>("Customer Aging");
 
   return (
@@ -84,7 +86,7 @@ export default function ReportsView() {
       {tab === "Balance Sheet" && <BalanceSheetTab />}
       {tab === "Stock" && <StockTab />}
       {tab === "Purchases" && <PurchasesTab />}
-      {tab === "GRV" && <GrvTab />}
+      {tab === "GRV" && <GrvTab user={user} />}
     </div>
   );
 }
@@ -417,8 +419,10 @@ function SalesmanStatementTab() {
   );
 }
 
-function GrvTab() {
+function GrvTab({ user }: { user: AppUser }) {
   const [rows, setRows] = useState<GrvRow[] | null>(null);
+  const [viewingId, setViewingId] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
   // Which products came back — approved returns only. This is what the
   // products a manager enters on a return request are for.
   const [products, setProducts] = useState<GrvProductRow[] | null>(null);
@@ -426,11 +430,12 @@ function GrvTab() {
     const supabase = supabaseBrowser();
     fetchGrvs(supabase).then(setRows);
     fetchGrvProductReport(supabase).then(setProducts).catch(() => setProducts([]));
-  }, []);
+  }, [reload]);
   if (!rows) return <SkeletonList rows={5} />;
   return (
     <div>
-      <div className="flex justify-end mb-2">
+      <div className="flex justify-end gap-2 mb-2">
+        {rows.length > 0 && <GrvExportLink label={t("payments.grvExportAll")} />}
         <Button
           tier="plain"
           className="flex items-center gap-1.5"
@@ -453,17 +458,29 @@ function GrvTab() {
       <div className="bg-surface border border-hairline rounded-card divide-y divide-hairline">
         {rows.map((g) => (
           <div key={g.id} className="px-4 py-3 flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <div className="text-subhead font-medium truncate">{g.customer?.name ?? t("common.notSet")}</div>
-              <div className="text-caption text-secondary">{new Date(g.created_at).toLocaleDateString()}</div>
-            </div>
+            <button className="min-w-0 text-start" onClick={() => setViewingId(g.id)}>
+              <div className="text-subhead font-medium truncate hover:text-accent">{g.customer?.name ?? t("common.notSet")}</div>
+              <div className="text-caption text-secondary tabular-nums">
+                {g.grv_number != null && `${grvLabel(g.grv_number)} · `}
+                {new Date(g.created_at).toLocaleDateString()}
+              </div>
+            </button>
             <div className="flex items-center gap-3 shrink-0">
               <span className="text-subhead tabular-nums">{formatAed(g.creditValue)}</span>
               <Pill tone={g.status === "approved" ? "accent" : "warning"}>{g.status}</Pill>
+              <Button tier="plain" onClick={() => setViewingId(g.id)}>{t("common.edit")}</Button>
             </div>
           </div>
         ))}
       </div>
+      {viewingId && rows.some((g) => g.id === viewingId) && (
+        <GrvSheet
+          user={user}
+          grv={rows.find((g) => g.id === viewingId)!}
+          onClose={() => setViewingId(null)}
+          onChanged={() => { setViewingId(null); setReload((n) => n + 1); }}
+        />
+      )}
 
       <div className="flex items-center justify-between mt-6 mb-2">
         <h3 className="text-headline font-semibold">{t("reports.grvByProduct")}</h3>

@@ -1,5 +1,25 @@
 # What changed, and what you need to do
 
+## 2026-11-19 — Edit a GRV after it is made, and export GRVs to Excel
+
+**Run `scratchpad/RUN-ME-44-edit-your-own-pending-return.sql` in Supabase**
+(billing project — check the address bar says `isdeheipdfmwzmmnnidr`). The
+web needs deploying and the app needs a new build. Until the SQL is run,
+managers and admins can edit as before; a salesman or collector editing
+their own return is told the file is missing.
+
+- Every GRV row in **Payments → Returns** and **Reports → GRV** has an
+  **Edit** button. It opens the return: add or remove products, change
+  quantities, the value each, the amount and the note.
+- Managers and admins can edit any return, pending or approved (an approved
+  one moves stock by the difference). Whoever raised a return can edit it
+  until it is approved — products, quantities, amount and note.
+- **Export GRVs** (Payments → Returns, Reports → GRV) downloads an Excel file
+  of every return: for each customer, their details on top (name, code,
+  phone, address, district, TRN, salesman), then their GRVs below with the
+  products and what was credited. **Export Excel** inside a return downloads
+  just that one.
+
 ## 2026-11-19 — Order Excel: customer name on the file, customer header on the sheet
 
 Nothing to run in Supabase. The web needs deploying and the app needs a new

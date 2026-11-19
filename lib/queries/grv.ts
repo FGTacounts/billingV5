@@ -515,6 +515,42 @@ export async function saveGrv(
 }
 
 /**
+ * Whoever raised a return: edit it and add products to it while it is still
+ * pending. One database call (scratchpad/RUN-ME-44) that checks it is theirs
+ * and still pending, then replaces the lines and writes the amount and note
+ * together. Managers use saveGrv, which also corrects approved returns.
+ *
+ * Throws "needs_sql" when RUN-ME-44 has not been run, so the sheet can say so.
+ */
+export async function saveOwnPendingGrv(
+  supabase: SupabaseClient,
+  grvId: string,
+  patch: { amount: number | null; notes: string | null; lines: GrvLine[] }
+) {
+  const { error } = await supabase.rpc("edit_own_pending_return", {
+    p_grv_id: grvId,
+    p_amount: patch.amount == null ? null : money(patch.amount),
+    p_notes: patch.notes,
+    p_lines: patch.lines.map((l) => ({ product_id: l.product_id, qty: l.qty, unit_value: money(l.unit_value) })),
+  });
+  if (error) {
+    const code = (error as { code?: string }).code;
+    if (code === "PGRST202" || code === "42883") throw new Error("needs_sql");
+    throw error;
+  }
+  returnsChanged();
+}
+
+/** Who may open a return to change it: a manager/admin always; whoever raised it while it is pending. */
+export function canEditGrv(
+  user: { id: string; role: string },
+  grv: { submitted_by: string; status: string }
+): boolean {
+  if (user.role === "manager" || user.role === "admin") return true;
+  return grv.submitted_by === user.id && grv.status === "pending";
+}
+
+/**
  * Manager/admin: remove a return that should never have been raised. Only a
  * pending one — an approved return has moved stock and credited a customer,
  * and the way to undo that is to correct it, not to erase it.
@@ -584,4 +620,123 @@ export async function fetchGrvProductReport(supabase: SupabaseClient): Promise<G
   return [...out.values()]
     .map(({ seen, ...r }) => ({ ...r, value: money(r.value), returns: seen.size }))
     .sort((a, b) => b.qty - a.qty);
+}
+
+export interface GrvExportLine {
+  sku: string;
+  name: string;
+  qty: number;
+  unitValue: number;
+  value: number;
+}
+
+export interface GrvExportReturn {
+  id: string;
+  label: string;
+  date: string;
+  status: string;
+  raisedBy: string;
+  credit: number;
+  notes: string;
+  lines: GrvExportLine[];
+}
+
+export interface GrvExportCustomer {
+  name: string;
+  code: string;
+  phone: string;
+  address: string;
+  district: string;
+  vatNumber: string;
+  salesman: string;
+  returns: GrvExportReturn[];
+}
+
+/**
+ * Everything the GRV Excel export prints (owner, 2026-11-19: "customer details
+ * as header, and then the GRV below"): one block per customer, its returns
+ * oldest first, each with its products. One return when `grvId` is given.
+ */
+export async function fetchGrvExport(supabase: SupabaseClient, grvId?: string): Promise<GrvExportCustomer[]> {
+  const all = await fetchGrvs(supabase);
+  const grvs = grvId ? all.filter((g) => g.id === grvId) : all;
+  if (grvs.length === 0) return [];
+
+  type CustomerRow = Pick<Customer, "id" | "name" | "code" | "phone" | "address" | "district" | "vat_number" | "salesman_id">;
+  type ProductRow = { id: string; sku: string | null; description: string | null };
+  type UserRow = { id: string; full_name: string | null };
+  const customerIds = [...new Set(grvs.map((g) => g.customer_id))];
+  const [customers, items] = await Promise.all([
+    fetchAllForIds<CustomerRow>(
+      customerIds,
+      (chunk, from, to) =>
+        supabase
+          .from("customers")
+          .select("id, name, code, phone, address, district, vat_number, salesman_id")
+          .in("id", chunk)
+          .order("id")
+          .range(from, to) as never
+    ),
+    fetchItemsOfGrvs(supabase, grvs.map((g) => g.id)),
+  ]);
+  const custById = new Map(customers.map((c) => [c.id, c]));
+  const userIds = [
+    ...new Set([...grvs.map((g) => g.submitted_by), ...customers.map((c) => c.salesman_id)].filter(Boolean) as string[]),
+  ];
+  const [products, users] = await Promise.all([
+    fetchAllForIds<ProductRow>(
+      items.map((it) => it.product_id),
+      (chunk, from, to) =>
+        supabase.from("products").select("id, sku, description").in("id", chunk).order("id").range(from, to) as never
+    ).catch(() => [] as ProductRow[]),
+    fetchAllForIds<UserRow>(
+      userIds,
+      (chunk, from, to) => supabase.from("users").select("id, full_name").in("id", chunk).order("id").range(from, to) as never
+    ).catch(() => [] as UserRow[]),
+  ]);
+  const productById = new Map(products.map((p) => [p.id, p]));
+  const nameOf = new Map(users.map((u) => [u.id, u.full_name ?? ""]));
+  const linesByGrv = new Map<string, GrvExportLine[]>();
+  for (const it of items) {
+    const p = productById.get(it.product_id);
+    const list = linesByGrv.get(it.grv_id) ?? [];
+    list.push({
+      sku: p?.sku ?? "",
+      name: p?.description ?? "",
+      qty: it.qty,
+      unitValue: money(it.unit_value),
+      value: money(it.qty * it.unit_value),
+    });
+    linesByGrv.set(it.grv_id, list);
+  }
+
+  const byCustomer = new Map<string, GrvExportCustomer>();
+  for (const g of [...grvs].sort((a, b) => a.created_at.localeCompare(b.created_at))) {
+    let block = byCustomer.get(g.customer_id);
+    if (!block) {
+      const c = custById.get(g.customer_id);
+      block = {
+        name: c?.name ?? "",
+        code: c?.code ?? "",
+        phone: c?.phone ?? "",
+        address: c?.address ?? "",
+        district: c?.district ?? "",
+        vatNumber: c?.vat_number ?? "",
+        salesman: (c?.salesman_id && nameOf.get(c.salesman_id)) || "",
+        returns: [],
+      };
+      byCustomer.set(g.customer_id, block);
+    }
+    block.returns.push({
+      id: g.id,
+      label: grvLabel(g.grv_number),
+      date: g.created_at,
+      status: g.status,
+      raisedBy: nameOf.get(g.submitted_by) ?? "",
+      credit: g.creditValue,
+      notes: g.notes ?? "",
+      lines: linesByGrv.get(g.id) ?? [],
+    });
+  }
+  return [...byCustomer.values()].sort((a, b) => a.name.localeCompare(b.name));
 }

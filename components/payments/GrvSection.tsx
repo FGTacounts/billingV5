@@ -1,9 +1,20 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Plus, Minus, Trash2 } from "lucide-react";
+import { Plus, Minus, Trash2, Download } from "lucide-react";
 import { supabaseBrowser } from "@/lib/supabase/client";
-import { fetchGrvs, fetchGrvItems, createGrv, approveGrv, saveGrv, deleteGrv, grvLabel, type GrvRow } from "@/lib/queries/grv";
+import {
+  fetchGrvs,
+  fetchGrvItems,
+  createGrv,
+  approveGrv,
+  saveGrv,
+  saveOwnPendingGrv,
+  deleteGrv,
+  grvLabel,
+  canEditGrv,
+  type GrvRow,
+} from "@/lib/queries/grv";
 import { toast } from "@/lib/toast";
 import { friendlyError } from "@/lib/errors";
 import { fetchCustomers } from "@/lib/queries/customers";
@@ -45,7 +56,10 @@ export default function GrvSection({ user }: { user: AppUser }) {
         <h2 className="text-headline font-semibold">{t("payments.returnsGrv")}</h2>
         {/* Muted tier, not primary — GRV should still read as a real
             button, just a less prominent one than cash/cheque collection. */}
-        <Button tier="plain" onClick={() => setShowNew(true)}>{t("payments.newReturn")}</Button>
+        <div className="flex items-center gap-2">
+          {grvs.length > 0 && <GrvExportLink label={t("payments.grvExportAll")} />}
+          <Button tier="plain" onClick={() => setShowNew(true)}>{t("payments.newReturn")}</Button>
+        </div>
       </div>
 
       {grvs.length === 0 ? (
@@ -62,6 +76,10 @@ export default function GrvSection({ user }: { user: AppUser }) {
                   {g.lineCount === 0 && ` · ${t("payments.grvNeedsProducts")}`}
                 </div>
               </button>
+              <div className="flex items-center gap-2">
+              {canEditGrv(user, g) && !(isManager && g.status !== "approved" && g.lineCount === 0) && (
+                <Button tier="plain" onClick={() => setViewingId(g.id)}>{t("common.edit")}</Button>
+              )}
               {g.status === "approved" ? (
                 <Pill tone="accent">{t("payments.approved")}</Pill>
               ) : isManager && g.lineCount === 0 ? (
@@ -78,6 +96,7 @@ export default function GrvSection({ user }: { user: AppUser }) {
               ) : (
                 <Pill tone="warning">{t("payments.pending")}</Pill>
               )}
+              </div>
             </div>
           ))}
         </div>
@@ -88,21 +107,50 @@ export default function GrvSection({ user }: { user: AppUser }) {
       )}
 
       {viewingId && grvs.some((g) => g.id === viewingId) && (
-        isManager ? (
-          <GrvEditSheet
-            user={user}
-            grv={grvs.find((g) => g.id === viewingId)!}
-            onClose={() => setViewingId(null)}
-            onChanged={() => { setViewingId(null); load(); }}
-          />
-        ) : (
-          <GrvItemsSheet
-            grv={grvs.find((g) => g.id === viewingId)!}
-            onClose={() => setViewingId(null)}
-          />
-        )
+        <GrvSheet
+          user={user}
+          grv={grvs.find((g) => g.id === viewingId)!}
+          onClose={() => setViewingId(null)}
+          onChanged={() => { setViewingId(null); load(); }}
+        />
       )}
     </div>
+  );
+}
+
+// The GRV as a spreadsheet: customer details on top, the GRV below
+// (app/api/grv/excel). One return when `grvId` is given, every return otherwise.
+export function GrvExportLink({ label, grvId }: { label: string; grvId?: string }) {
+  return (
+    <a
+      href={grvId ? `/api/grv/excel?grvId=${grvId}` : "/api/grv/excel"}
+      className="min-h-11 px-3 inline-flex items-center gap-1.5 rounded-card border border-hairline text-caption font-semibold text-secondary hover:text-accent hover:border-accent/50 transition-colors"
+    >
+      <Download size={14} /> {label}
+    </a>
+  );
+}
+
+/**
+ * Opening a return: the edit sheet for whoever may change it (a manager
+ * always; whoever raised it while it is pending), the read-only list for
+ * everyone else. Payments and Reports → GRV both open returns through this.
+ */
+export function GrvSheet({
+  user,
+  grv,
+  onClose,
+  onChanged,
+}: {
+  user: AppUser;
+  grv: GrvRow;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  return canEditGrv(user, grv) ? (
+    <GrvEditSheet user={user} grv={grv} onClose={onClose} onChanged={onChanged} />
+  ) : (
+    <GrvItemsSheet grv={grv} onClose={onClose} />
   );
 }
 
@@ -114,7 +162,12 @@ function GrvItemsSheet({ grv, onClose }: { grv: GrvRow; onClose: () => void }) {
   }, [grv.id]);
 
   return (
-    <Sheet open onClose={onClose} title={t("payments.returnTitle", { name: grv.customer?.name ?? t("common.notSet") })}>
+    <Sheet
+      open
+      onClose={onClose}
+      title={t("payments.returnTitle", { name: grv.customer?.name ?? t("common.notSet") })}
+      footer={<GrvExportLink label={t("payments.grvExportExcel")} grvId={grv.id} />}
+    >
       {!items ? (
         <div className="text-secondary text-subhead py-10 text-center">{t("common.loading")}</div>
       ) : items.length === 0 ? (
@@ -136,7 +189,10 @@ function GrvItemsSheet({ grv, onClose }: { grv: GrvRow; onClose: () => void }) {
 }
 
 // Manager/admin: open a return, enter or correct the products that came back,
-// change the amount credited, and approve it. This is where a request raised
+// change the amount credited, and approve it. Whoever raised a return opens
+// the same sheet while it is pending (RUN-ME-44) to change its products,
+// quantities, amount and note — without approve, remove, or the value each,
+// which stay a manager's. This is where a request raised
 // while collecting a payment gets its products — without them the GRV product
 // report has nothing to count, so approval waits for at least one line.
 function GrvEditSheet({
@@ -157,6 +213,7 @@ function GrvEditSheet({
   const [productResults, setProductResults] = useState<Product[]>([]);
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const isManager = user.role === "manager" || user.role === "admin";
 
   useEffect(() => {
     fetchGrvItems(supabaseBrowser(), grv.id).then((items) =>
@@ -188,13 +245,17 @@ function GrvEditSheet({
       await work();
       onChanged();
     } catch (e) {
-      toast.error(friendlyError(e, failed));
+      // RUN-ME-44 not run yet: say which file, not a generic failure.
+      toast.error(e instanceof Error && e.message === "needs_sql" ? t("payments.grvOwnEditNeedsSql") : friendlyError(e, failed));
     } finally {
       setBusy(false);
     }
   }
 
-  const save = () => run(() => saveGrv(supabaseBrowser(), grv.id, patch()), t("payments.grvSaveFailed"));
+  const save = () =>
+    isManager
+      ? run(() => saveGrv(supabaseBrowser(), grv.id, patch()), t("payments.grvSaveFailed"))
+      : run(() => saveOwnPendingGrv(supabaseBrowser(), grv.id, patch()), t("payments.grvSaveFailed"));
   const saveAndApprove = () =>
     run(async () => {
       const supabase = supabaseBrowser();
@@ -213,10 +274,11 @@ function GrvEditSheet({
       title={t("payments.returnTitle", { name: grv.customer?.name ?? t("common.notSet") })}
       footer={
         <>
+          <GrvExportLink label={t("payments.grvExportExcel")} grvId={grv.id} />
           <Button tier="plain" disabled={busy || !lines} onClick={save}>
             {busy ? t("common.saving") : t("common.save")}
           </Button>
-          {grv.status !== "approved" && (
+          {isManager && grv.status !== "approved" && (
             <Button tier="primary" disabled={busy || !lines || lines.length === 0} onClick={saveAndApprove}>
               {t("payments.grvSaveAndApprove")}
             </Button>
@@ -231,6 +293,7 @@ function GrvEditSheet({
         </div>
         {grv.status === "approved" ? <Pill tone="accent">{t("payments.approved")}</Pill> : <Pill tone="warning">{t("payments.pending")}</Pill>}
       </div>
+      {!isManager && <p className="text-caption text-secondary mb-3">{t("payments.grvOwnEditHint")}</p>}
 
       <Label>{t("payments.grvCreditAmount")}</Label>
       <div className="flex items-center gap-2">
@@ -301,12 +364,16 @@ function GrvEditSheet({
                   className="!w-20 tabular-nums"
                 />
                 <span className="text-caption text-secondary">{t("payments.grvUnitValue")}</span>
-                <TextInput
-                  type="number"
-                  value={String(l.unit_value)}
-                  onChange={(e) => setLine(l.product_id, { unit_value: Math.max(0, Number(e.target.value) || 0) })}
-                  className="!w-24 tabular-nums"
-                />
+                {isManager ? (
+                  <TextInput
+                    type="number"
+                    value={String(l.unit_value)}
+                    onChange={(e) => setLine(l.product_id, { unit_value: Math.max(0, Number(e.target.value) || 0) })}
+                    className="!w-24 tabular-nums"
+                  />
+                ) : (
+                  <span className="text-subhead tabular-nums">{formatAed(l.unit_value)}</span>
+                )}
                 <span className="flex-1 text-end text-subhead tabular-nums">{formatAed(l.qty * l.unit_value)}</span>
               </div>
             </div>
@@ -325,7 +392,7 @@ function GrvEditSheet({
         onChange={(e) => setNotes(e.target.value)}
       />
 
-      {grv.status !== "approved" && (
+      {isManager && grv.status !== "approved" && (
         <div className="mt-4">
           {confirmDelete ? (
             <div className="flex items-center gap-2">

@@ -95,27 +95,17 @@ export async function POST(req: NextRequest) {
   const costById = new Map((products ?? []).map((p) => [p.id, p.cost]));
 
   // Only a manager sets a price (owner, 2026-09-21). For anyone else the
-  // price the browser sent is not read at all: the line charges what this
-  // customer was last billed for the product, else the list price — worked
-  // out here, from figures read here. A lower price used to arrive from the
-  // form and print on the invoice as a discount nobody had given.
+  // price the browser sent is not read at all: the line charges the list
+  // price, read here. A lower price used to arrive from the form and print on
+  // the invoice as a discount nobody had given. The customer's old price used
+  // to be put on a salesman's lines here automatically; since 2026-11-19 it
+  // applies only when a manager or admin presses Apply for it (owner: a
+  // salesman's order gets the "List price").
   const callerSetsPrices = caller.role === "manager" || caller.role === "admin";
   const priceFor = new Map<string, number>();
   if (!callerSetsPrices) {
-    const oldPrices = new Map<string, number>();
-    if (customer_id) {
-      const { data: remembered } = await admin
-        .from("customer_prices")
-        .select("product_id, price")
-        .eq("customer_id", customer_id)
-        .in("product_id", productIds);
-      for (const row of remembered ?? []) oldPrices.set(row.product_id, row.price);
-    }
     for (const p of products ?? []) {
-      priceFor.set(
-        p.id,
-        resolveLinePrice({ listPrice: Number(p.price) || 0, stickyPrice: oldPrices.get(p.id) ?? null }).price
-      );
+      priceFor.set(p.id, resolveLinePrice({ listPrice: Number(p.price) || 0 }).price);
     }
   }
 

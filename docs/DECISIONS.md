@@ -5588,3 +5588,49 @@ then the GRV below".
   the same sheet as Payments, where managers approve with "Save & approve".
   Approving there is two taps instead of one. The Edit button shows only
   where the person may edit; for managers that is every row, as on the web.
+
+## 2026-11-19 — A customer's old price applies only when a manager presses Apply
+
+2026-11-19 — Owner: "When the use old price button is clicked, then i want
+the items that were billed in the old price to have another row showing
+(Apply), when the manager/admin clicks on this button, then only does the old
+price of that specific customer apply to the product. new orders. also add an
+apply all/remove all button on the top of the row." Asked, the owner chose:
+new lines show the list price and the old price "so that the manager/admin
+can know the difference"; a salesman's order gets the list price; adding an
+article to an order already written gets the list price too. Web and the
+iPhone/iPad/Mac app.
+- REPLACES the old-price parts of the 2026-09-18 "One rule,
+  `resolveLinePrice`" and 2026-09-21 "a price a manager states > the
+  customer's old price > list" decisions: nothing puts an old price on a line
+  by itself any more — not adding an article, an import, a scan,
+  `/api/orders/create` for a salesman, or `/api/orders/add-item`. The rule is
+  now: a price a manager states > list; the old price is the manager's to
+  apply. `resolveLinePrice` is unchanged and still decides what counts as an
+  old price (a remembered zero is not one). Approval still writes
+  `customer_prices`, so old prices keep being remembered.
+- "Use [Customer]'s last prices" now shows and hides the old-price rows
+  instead of repricing; it reads "Hide …" while they show. It is a manager's
+  and an admin's only — a salesman can neither see nor apply an old price,
+  so it would be a button that does nothing for them. On the phone that is
+  `isManager || isAdmin`, although an admin still cannot type a price there
+  (2026-09-18) — the owner named both for Apply.
+- A row appears only under a line whose old price differs from its list
+  price: where they are the same there is nothing to apply. It reads "Old
+  price · List · Difference" (old less list, signed) with Apply. Not asked
+  for, but needed to undo one line without undoing all: an applied row's
+  button becomes Remove, which puts that line back to the list price. Apply
+  all / Remove all sit above the table, with a count of lines on offer; each
+  is greyed out when it would change nothing.
+- Typing a price (or a Disc %) over an applied old price ends it: the row
+  offers Apply again. The order discount still comes off an applied old
+  price, as it comes off every line's own price (2026-09-26). Picking
+  another customer puts every applied old price back to the list price —
+  an old price belongs to the customer it was read for.
+- The web now reads a customer's old prices once, for the whole customer,
+  when a manager picks them (the phone already did), instead of one request
+  per added article. Small rows, once per customer: no egress concern.
+- Known, not changed: the sheet's totals block shows "Discount" as list less
+  what is charged, so an applied old price below list appears there as a
+  discount, as it did before. The saved line stores the old price as its
+  price before discount (2026-09-29), so the order and invoice show none.

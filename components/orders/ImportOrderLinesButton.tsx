@@ -14,8 +14,8 @@ import type { Product } from "@/lib/types/db";
 // Qty." Unlike the Products/Customers importers this doesn't POST rows to
 // an endpoint — it resolves each SKU against the catalogue and hands the
 // matched products back to NewOrderSheet, which adds them as order lines
-// through its normal addProduct path (so sticky pricing and per-customer
-// discounts still apply exactly as if they'd been added by hand).
+// through its normal import path, so they price exactly as if they'd been
+// added by hand (the list price; a manager applies a customer's old price).
 const SKU_KEYS = ["sku", "article", "item", "code", "product", "product_code"];
 const QTY_KEYS = ["qty", "quantity", "qnty", "count", "units"];
 
@@ -31,10 +31,10 @@ export interface ImportedLine {
   product: Product;
   qty: number;
   /**
-   * A price the source document actually stated. When set it overrides the
-   * customer's remembered price — a figure written on the paper is what was
-   * agreed with them. A spreadsheet import leaves it unset, so those lines
-   * price exactly as a hand-added one does.
+   * A price the source document actually stated. When set (and a manager is
+   * entering the order) it is the line's price — a figure written on the
+   * paper is what was agreed with them. A spreadsheet import leaves it unset,
+   * so those lines price exactly as a hand-added one does.
    */
   price?: number;
 }

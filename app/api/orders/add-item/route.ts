@@ -84,22 +84,12 @@ export async function POST(req: NextRequest) {
   if (productErr) return NextResponse.json({ error: productErr.message }, { status: 400 });
   if (!product) return NextResponse.json({ error: t("orders.productNotFound") }, { status: 404 });
 
-  // The customer's remembered price is the price, falling back to the list
-  // price — the same resolution NewOrderSheet.addProduct does for a line
-  // added at order time, so a line added afterwards is priced identically.
-  // Resolved by the one shared rule (lib/money.ts resolveLinePrice): the old
-  // price, else the list price. No automatic discount (2026-09-21).
-  let stickyPrice: number | null = null;
-  if (order.customer_id) {
-    const { data: sticky } = await admin
-      .from("customer_prices")
-      .select("price")
-      .eq("customer_id", order.customer_id)
-      .eq("product_id", productId)
-      .maybeSingle();
-    stickyPrice = sticky?.price ?? null;
-  }
-  const unitPrice = resolveLinePrice({ listPrice: product.price, stickyPrice }).price;
+  // The list price (owner, 2026-11-19: "List price there too"). The
+  // customer's old price is no longer put on a line by itself anywhere: on a
+  // new order a manager or admin applies it, line by line, from "Use last
+  // prices" in NewOrderSheet. A price already agreed for this line can still
+  // be typed in by a manager afterwards.
+  const unitPrice = resolveLinePrice({ listPrice: product.price }).price;
 
   // Adding an article the order already has adds to that line rather than
   // opening a second one, which is what the phone does
@@ -123,8 +113,8 @@ export async function POST(req: NextRequest) {
     // before that the tick comes off, as it does for the warehouse.
     const changes: ManagerChange[] = [];
     if (!existing) {
-      // The old price or the list price is the price, not a discount
-      // (owner, 2026-09-29), so it is also the price before discount.
+      // The list price is the price, not a discount (owner, 2026-09-29),
+      // so it is also the price before discount.
       changes.push({ op: "set", product_id: productId, qty: quantity, unit_price: unitPrice, price_before_discount: unitPrice });
     } else if (existing.picked_qty != null && PAST_PICKING.includes(order.status)) {
       changes.push({ op: "set", id: existing.id, qty: existing.picked_qty + quantity });

@@ -3,7 +3,7 @@
 import { toast } from "@/lib/toast";
 import { t } from "@/lib/i18n";
 import { friendlyError } from "@/lib/errors";
-import { useState, useEffect, useCallback, useRef } from "react";
+import { Fragment, useState, useEffect, useCallback, useRef } from "react";
 import { springEnter } from "@/lib/motion";
 import { motion, AnimatePresence } from "framer-motion";
 import { Search, Plus, Minus, Trash2, AlertTriangle, Image as ImageIcon } from "lucide-react";
@@ -26,10 +26,12 @@ import { fetchStockWarehouses, type StockWarehouse } from "@/lib/queries/country
 interface Line {
   product: Product;
   qty: number;
-  // The line's own price before the order discount: the old price, the list
-  // price, or what a manager typed. The order discount is never written in
+  // The line's own price before the order discount: the list price, the
+  // customer's old price once a manager has applied it, or what a manager
+  // typed. The order discount is never written in
   // here — it is taken off on top, in `charged` (owner, 2026-09-26).
   price: number;
+  // "sticky_price" while the customer's old price is applied to the line.
   recommendedReason: "sticky_price" | "discount" | null;
 }
 
@@ -146,38 +148,90 @@ export default function NewOrderSheet({
   const discounted = appliedPct < 100;
   const charged = (l: Line) => (discounted ? money(l.price * (appliedPct / 100)) : l.price);
 
-  // "Use [Customer]'s last prices" (§3B) — re-applies remembered per-item
-  // sticky prices (customer_prices), falling back to the remembered
-  // order-total discount, across every line currently in the order. Same
-  // lookup addProduct() does automatically for a newly-added line, just
-  // run manually across the whole cart at once (e.g. for lines added
-  // before the customer was picked, or to undo a manual override).
-  async function useLastPrices() {
-    if (!customer || lines.length === 0) return;
-    const supabase = supabaseBrowser();
-    const { data: stickyPrices } = await supabase
+  // The customer's old prices (customer_prices, written at approval) —
+  // what they were last billed for each product. Since 2026-11-19 nothing is
+  // priced from them by itself: every line starts at the list price, and
+  // "Use [Customer]'s last prices" shows, under each line this customer was
+  // billed at another price, the old price beside the list price with an
+  // Apply button. Only a manager or admin sees or applies them (owner: "when
+  // the manager/admin clicks on this button, then only does the old price of
+  // that specific customer apply"). Read once per customer, for the whole
+  // customer, so a line added later needs no request of its own.
+  const [oldPrices, setOldPrices] = useState<Map<string, number>>(new Map());
+  const [showOldPrices, setShowOldPrices] = useState(false);
+  const customerId = customer?.id ?? null;
+  useEffect(() => {
+    setOldPrices(new Map());
+    setShowOldPrices(false);
+    // An old price belongs to the customer it was read for: picking another
+    // customer puts any applied one back to the list price.
+    setLines((prev) =>
+      prev.some((l) => l.recommendedReason === "sticky_price")
+        ? prev.map((l) => (l.recommendedReason === "sticky_price" ? { ...l, price: l.product.price, recommendedReason: null } : l))
+        : prev
+    );
+    if (!customerId || !isManager) return;
+    let cancelled = false;
+    supabaseBrowser()
       .from("customer_prices")
       .select("product_id, price")
-      .eq("customer_id", customer.id)
-      .in("product_id", lines.map((l) => l.product.id));
-    const priceByProduct = new Map((stickyPrices ?? []).map((p) => [p.product_id, p.price]));
+      .eq("customer_id", customerId)
+      .then(({ data }) => {
+        if (cancelled) return;
+        const map = new Map<string, number>();
+        for (const row of data ?? []) {
+          // The one shared rule decides what counts: a remembered zero (a
+          // free sample) or a broken figure is not a price.
+          const resolved = resolveLinePrice({ listPrice: 0, stickyPrice: row.price });
+          if (resolved.reason === "sticky_price") map.set(row.product_id, resolved.price);
+        }
+        setOldPrices(map);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [customerId, isManager]);
+
+  // The old price worth offering for a line: one that differs from the list
+  // price. Where they are the same there is nothing to apply.
+  function oldPriceFor(l: Line): number | null {
+    const old = oldPrices.get(l.product.id);
+    return old != null && old !== money(l.product.price) ? old : null;
+  }
+  function applyOldPrice(productId: string) {
     setLines((prev) =>
       prev.map((l) => {
-        const resolved = resolveLinePrice({
-          listPrice: l.product.price,
-          stickyPrice: priceByProduct.get(l.product.id) ?? null,
-        });
-        if (resolved.reason === "sticky_price") {
-          return { ...l, price: resolved.price, recommendedReason: resolved.reason };
-        }
-        return l;
+        if (l.product.id !== productId) return l;
+        const old = oldPriceFor(l);
+        return old == null ? l : { ...l, price: old, recommendedReason: "sticky_price" };
       })
     );
   }
+  function removeOldPrice(productId: string) {
+    setLines((prev) =>
+      prev.map((l) =>
+        l.product.id === productId && l.recommendedReason === "sticky_price"
+          ? { ...l, price: l.product.price, recommendedReason: null }
+          : l
+      )
+    );
+  }
+  function applyAllOldPrices() {
+    setLines((prev) =>
+      prev.map((l) => {
+        const old = oldPriceFor(l);
+        return old == null ? l : { ...l, price: old, recommendedReason: "sticky_price" };
+      })
+    );
+  }
+  function removeAllOldPrices() {
+    setLines((prev) =>
+      prev.map((l) => (l.recommendedReason === "sticky_price" ? { ...l, price: l.product.price, recommendedReason: null } : l))
+    );
+  }
 
-  // Bulk SKU/Qty import (§Orders). Same sticky-price / customer-discount
-  // resolution addProduct() does per line, but with one batched
-  // customer_prices lookup instead of one request per imported row.
+  // Bulk SKU/Qty import (§Orders). Priced as addProduct() prices a line: the
+  // list price, or a price the document states when a manager enters it.
   // Seeded once, on open. Reuses the import path so a pre-picked product gets
   // the same sticky customer price and default quantity as any other line.
   const seeded = useRef(false);
@@ -189,16 +243,6 @@ export default function NewOrderSheet({
   }, [initialProducts]);
 
   async function addImportedLines(imported: ImportedLine[]) {
-    const priceByProduct = new Map<string, number>();
-    if (customer) {
-      const { data } = await supabaseBrowser()
-        .from("customer_prices")
-        .select("product_id, price")
-        .eq("customer_id", customer.id)
-        .in("product_id", imported.map((l) => l.product.id));
-      for (const row of data ?? []) priceByProduct.set(row.product_id, row.price);
-    }
-
     setLines((prev) => {
       const next = [...prev];
       for (const { product, qty, price: stated } of imported) {
@@ -216,15 +260,9 @@ export default function NewOrderSheet({
         // prices the line anyway (/api/orders/create).
         const resolved = resolveLinePrice({
           listPrice: product.price,
-          stickyPrice: priceByProduct.get(product.id) ?? null,
           statedPrice: isManager ? stated ?? null : null,
         });
-        next.push({
-          product,
-          qty,
-          price: resolved.price,
-          recommendedReason: resolved.reason === "stated" ? null : resolved.reason,
-        });
+        next.push({ product, qty, price: resolved.price, recommendedReason: null });
       }
       return next;
     });
@@ -232,8 +270,8 @@ export default function NewOrderSheet({
 
   // Lines read off a photographed order pad or invoice. They arrive already
   // matched to real products by /api/scan-order, so they go in through the
-  // same path as an import — which means sticky pricing and the customer's
-  // discount still apply to any line the paper didn't put a price on.
+  // same path as an import — a line the paper didn't put a price on gets the
+  // list price, like any other.
   async function addScannedLines(scanned: ScannedOrderLine[], scannedCustomer: string | null) {
     const supabase = supabaseBrowser();
     const ids = scanned.map((l) => l.productId).filter((id): id is string => !!id);
@@ -255,21 +293,11 @@ export default function NewOrderSheet({
     }
   }
 
-  async function addProduct(p: Product) {
-    const supabase = supabaseBrowser();
-    let price = p.price;
-    let recommendedReason: Line["recommendedReason"] = null;
-    if (customer) {
-      const { data: cp } = await supabase
-        .from("customer_prices")
-        .select("price")
-        .eq("customer_id", customer.id)
-        .eq("product_id", p.id)
-        .maybeSingle();
-      const resolved = resolveLinePrice({ listPrice: p.price, stickyPrice: cp?.price ?? null });
-      price = resolved.price;
-      recommendedReason = resolved.reason === "stated" ? null : resolved.reason;
-    }
+  // A new line starts at the list price. The customer's old price is applied
+  // only by a manager, from the old-price rows (2026-11-19).
+  function addProduct(p: Product) {
+    const price = resolveLinePrice({ listPrice: p.price }).price;
+    const recommendedReason: Line["recommendedReason"] = null;
     setLines((prev) => {
       const existing = prev.find((l) => l.product.id === p.id);
       if (existing) {
@@ -307,8 +335,8 @@ export default function NewOrderSheet({
   }
 
   // Per-product price override (§Orders: "option to change individual item
-  // price") — the customer's last-billed price already seeds `line.price`
-  // via useLastPrices/recommendedReason, this just lets it be edited too.
+  // price") — a typed price replaces the list or old price, so the line's
+  // old-price row offers Apply again.
   function updatePrice(productId: string, price: number) {
     setLines((prev) =>
       prev.map((l) => (l.product.id === productId ? { ...l, price: Math.max(0, price), recommendedReason: null } : l))
@@ -505,12 +533,15 @@ export default function NewOrderSheet({
           </div>
         )}
 
-        {customer && lines.length > 0 && (
+        {/* Shows the old-price rows; it no longer reprices anything itself.
+            A manager's or admin's, as only they apply an old price. */}
+        {isManager && customer && lines.length > 0 && (
           <button
-            onClick={useLastPrices}
-            className="w-full text-left px-3 py-2 mb-1 rounded-card bg-accent/8 text-accent text-caption font-semibold"
+            onClick={() => setShowOldPrices((v) => !v)}
+            aria-expanded={showOldPrices}
+            className="w-full text-left px-3 py-2 mb-1 min-h-[44px] rounded-card bg-accent/8 text-accent text-caption font-semibold"
           >
-            {t("orders.useLastPrices", { name: customer.name })}
+            {t(showOldPrices ? "orders.hideLastPrices" : "orders.useLastPrices", { name: customer.name })}
           </button>
         )}
 
@@ -630,6 +661,37 @@ export default function NewOrderSheet({
           </div>
         )}
 
+        {/* Above the rows: how many lines have an old price, and Apply all /
+            Remove all. */}
+        {showOldPrices && isManager && customer && lines.length > 0 && (() => {
+          const offered = lines.filter((l) => oldPriceFor(l) !== null);
+          const applied = lines.filter((l) => l.recommendedReason === "sticky_price").length;
+          return (
+            <div className="flex flex-wrap items-center gap-2 mb-1.5 px-3 py-1.5 rounded-card bg-accent/8">
+              <span className="flex-1 min-w-[160px] text-caption text-secondary">
+                {offered.length > 0
+                  ? t("orders.oldPricesFound", { n: offered.length, name: customer.name })
+                  : t("orders.noOldPrices", { name: customer.name })}
+              </span>
+              {offered.length > 0 && (
+                <>
+                  <Button
+                    tier="tinted"
+                    className="min-h-[44px] text-caption"
+                    disabled={applied === offered.length}
+                    onClick={applyAllOldPrices}
+                  >
+                    {t("orders.applyAllOldPrices")}
+                  </Button>
+                  <Button tier="plain" className="min-h-[44px] text-caption" disabled={applied === 0} onClick={removeAllOldPrices}>
+                    {t("orders.removeAllOldPrices")}
+                  </Button>
+                </>
+              )}
+            </div>
+          );
+        })()}
+
         {lines.length === 0 ? (
           <p className="text-caption text-secondary py-2">{t("orders.noItemsYet")}</p>
         ) : (
@@ -647,8 +709,12 @@ export default function NewOrderSheet({
                 </tr>
               </thead>
               <tbody>
-                {lines.map((l, i) => (
-                  <tr key={l.product.id} className="border-b border-hairline last:border-0 align-top">
+                {lines.map((l, i) => {
+                  const old = showOldPrices && isManager ? oldPriceFor(l) : null;
+                  const oldApplied = l.recommendedReason === "sticky_price";
+                  return (
+                  <Fragment key={l.product.id}>
+                  <tr className={`${old !== null ? "" : "border-b border-hairline last:border-0"} align-top`}>
                     <td className="px-2.5 py-2.5 text-secondary tabular-nums">{i + 1}</td>
                     <td className="px-2.5 py-2.5 font-medium whitespace-nowrap">{l.product.sku}</td>
                     <td className="px-2.5 py-2.5">
@@ -728,7 +794,51 @@ export default function NewOrderSheet({
                       </button>
                     </td>
                   </tr>
-                ))}
+                  {/* The old-price row: what this customer was last billed
+                      beside the list price, and the difference, so the
+                      manager sees what applying it changes. */}
+                  {old !== null && (
+                    <tr className="border-b border-hairline last:border-0 bg-accent/8">
+                      <td />
+                      <td colSpan={6} className="px-2.5 py-1">
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                          <span className="flex-1 min-w-[200px] text-caption text-secondary tabular-nums">
+                            {t("orders.oldPriceVsList", {
+                              old: old.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+                              list: l.product.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+                              diff: (old - l.product.price).toLocaleString(undefined, {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                                signDisplay: "exceptZero",
+                              }),
+                            })}
+                          </span>
+                          {oldApplied ? (
+                            <Button
+                              tier="plain"
+                              className="min-h-[44px] text-caption"
+                              aria-label={t("orders.removeOldPriceNamed", { name: l.product.sku })}
+                              onClick={() => removeOldPrice(l.product.id)}
+                            >
+                              {t("orders.removeOldPrice")}
+                            </Button>
+                          ) : (
+                            <Button
+                              tier="tinted"
+                              className="min-h-[44px] text-caption"
+                              aria-label={t("orders.applyOldPriceNamed", { name: l.product.sku })}
+                              onClick={() => applyOldPrice(l.product.id)}
+                            >
+                              {t("orders.applyOldPrice")}
+                            </Button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>

@@ -1,5 +1,22 @@
 # What changed, and what you need to do
 
+## 2026-11-19 — A customer's old price goes on only when a manager applies it
+
+Nothing to run in Supabase. The web needs deploying and the app needs a new
+build.
+
+- On a new order every line now starts at the **list price**, for everyone.
+- A manager or admin presses **Use [customer]'s last prices**. Under each line
+  this customer was billed at a different price, a row shows **Old price ·
+  List · Difference** with an **Apply** button. Only Apply puts the old price
+  on that line; once applied the button reads **Remove**.
+- **Apply all** and **Remove all** sit above the table.
+- A salesman's order goes in at the list price. The order page has no Apply
+  row yet, so when reviewing it a manager changes a price by typing it, as
+  today. Adding an article to an order already written also uses the list
+  price.
+- Same on the iPhone, iPad and Mac.
+
 ## 2026-11-19 — Edit a GRV after it is made, and export GRVs to Excel
 
 **Run `scratchpad/RUN-ME-44-edit-your-own-pending-return.sql` in Supabase**

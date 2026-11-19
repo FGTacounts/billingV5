@@ -338,9 +338,9 @@ export default function OrderDetail({
   }
 
   // Adds an article to an order that has already been written. The price
-  // comes from the server (the customer's remembered price, else the list
-  // price) rather than being decided here, so it matches what the same
-  // article would have cost had it been on the order from the start.
+  // comes from the server (the list price — since 2026-11-19 a customer's old
+  // price goes on only when a manager applies it on a new order) rather than
+  // being decided here.
   async function addItem(p: Product) {
     setProductSearch("");
     setProductResults([]);

@@ -1,5 +1,17 @@
 # What changed, and what you need to do
 
+## 2026-11-21 — Adding a product on the phone no longer copies lines
+
+Nothing to run in Supabase, nothing to deploy on the web. The app needs a new
+build (iPhone, iPad and Mac).
+
+- Adding a product to a saved order on the phone and then changing quantities
+  could insert that product again on every save, so one SKU showed up as many
+  lines. Each added line is now saved once; later changes update that line.
+- **The order this already happened to still has the extra lines.** Remove
+  them on the order page (web) as a manager. If the order was already
+  approved, removing a line puts its stock back.
+
 ## 2026-11-19 — A customer's old price goes on only when a manager applies it
 
 Nothing to run in Supabase. The web needs deploying and the app needs a new

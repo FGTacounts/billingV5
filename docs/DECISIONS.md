@@ -5695,3 +5695,63 @@ photo path was already cached on disk, sized to the tile and deduplicated
   and still shows a spinner; the warehouse pick list gets no page prefetch
   (that file holds another session's uncommitted work). Neither was measured
   as the slow screen. WebP/AVIF is still not done (CLAUDE.md).
+
+## 2026-11-21 — A line added on the phone is saved once, not again on every edit
+
+Owner: adding a product to an order on the iPhone and then changing
+quantities "multiplied by 12" the lines: the warehouse pick grid showed one
+SKU (GLT3258) as lines 1–8 and more. iOS only; the web is not affected (its
+add-item route finds the SKU's existing line in the database and merges).
+- **Cause.** A line added on the phone is given an id by the screen. When it
+  was inserted the database gave it a different id, but the screen's copy of
+  the order kept the screen's id (a refresh keeps the local copy while writes
+  are in flight, and nothing re-reads the order after them). Every later save
+  of that order matched lines to the database by id, did not find the
+  screen's id, and inserted the line again. The same save tries to delete
+  rows the screen does not show, which should have removed the earlier
+  copy, but for this user that delete removed nothing — the copies piled up,
+  one per save.
+- **Fix.** When the edit path inserts a line it asks for the new row's id
+  back (`select("id, sku")`) and remembers screen id → database id
+  (`AppDataManager.savedLineIds`); the next save looks every line up through
+  that first, so it updates the row instead of inserting it again. This also
+  covers a save queued before the first one finished and the offline queue's
+  replay in the same app session. Rows are paired by SKU, not by position.
+  The new-order insert does not ask for ids back: a salesman's session might
+  not be allowed to read back rows it just wrote, and a refused read-back
+  would refuse the whole order.
+- Chose remembering the database's id over sending the screen's own UUID as
+  the row id: the database's column grants on `order_items` are not in this
+  repo, and an insert naming a column it is not granted is refused whole
+  (the `unit_cost` trap, 2026-09-27).
+- **Not done:** the order already damaged keeps its extra lines; a manager
+  removes them on the order page (manager_edit_order puts stock back if
+  approval took it). Why the phone's delete of an unshown line removed
+  nothing for this user was not traced — the policies on `order_items` live
+  only in the database. If it was refused, Remove from order on the phone
+  also does nothing for that user; worth checking separately.
+
+2026-11-21 — Same, for the Photos tab and the warehouse pick list (owner:
+"continue with the photos tab and warehouse pick list"). iOS commit 5424e77,
+built for the simulator and Mac Catalyst; web change app/api/drive/file.
+- **Photos tab.** Its tiles load by Drive file, not by SKU, and fetched
+  Drive's thumbnail link straight from the folder listing. The listing is
+  saved on disk and shown first, and Drive's links expire after a few hours,
+  so on most visits every tile not yet on the phone failed and then
+  downloaded the FULL ORIGINAL through /api/drive/file, megabytes each. Now
+  a link is tried only if the server handed it out in the last 45 minutes
+  (the server's own limit); otherwise the tile asks the server for
+  `/api/drive/file?id=…&w=512`, which serves Drive's thumbnail from the
+  server's shared cache (same `fetchDriveThumbnail` as /api/product-photo,
+  original only when Drive has none yet). Twelve downloads at a time, newest
+  first, as the product grid. Decoded off the main thread at 512 pixels. The
+  same path serves cheque and delivery-proof photos (DriveProofSheet), which
+  were already shrunk to 512 on the phone, so they look the same.
+- `/api/drive/file` without `w` is unchanged (the original), so older app
+  builds and every other caller behave as before; an older server ignores
+  `w` and the phone still copes.
+- The tile shows a skeleton while it loads, not a spinner (CLAUDE.md rule
+  9), as the product grid's tiles already did.
+- **Pick list.** Opening an order queues every line's photo at 400 pixels,
+  so the rows further down are on the phone before the picker scrolls to
+  them. 400 serves a smaller tile too, so the zoom slider does not undo it.

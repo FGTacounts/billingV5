@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { fetchDriveFileBytes } from "@/lib/google-drive";
+import { fetchDriveFileBytes, fetchDriveThumbnail } from "@/lib/google-drive";
 import { getAppUser } from "@/lib/auth";
 import { t } from "@/lib/i18n";
 
@@ -8,6 +8,14 @@ export const runtime = "nodejs";
 // Raw bytes for one Drive file, by id. Ids come from /api/drive/list or
 // /api/drive/search, so this is a fetch of something the caller was already
 // shown rather than a way to reach new material.
+//
+// `w` asks for Drive's thumbnail at that width instead of the whole file, the
+// same as /api/product-photo: a grid tile never needs the original, and the
+// server keeps thumbnails it has already fetched for everyone. The phone's
+// Photos tab used to fetch Drive's thumbnail link itself, from a folder
+// listing it had saved — the links expire after a few hours, and every tile
+// then fell back to downloading the full original through here (2026-11-21).
+// Without `w`, unchanged: the original.
 export async function GET(req: NextRequest) {
   const user = await getAppUser();
   if (!user) return NextResponse.json({ error: t("common.unauthorized") }, { status: 401 });
@@ -16,7 +24,11 @@ export async function GET(req: NextRequest) {
   if (!id) return NextResponse.json({ error: t("common.idRequired") }, { status: 400 });
 
   try {
-    const { bytes, contentType } = await fetchDriveFileBytes(id);
+    const requested = Number(req.nextUrl.searchParams.get("w"));
+    const width = Number.isFinite(requested) && requested > 0 ? Math.min(1024, Math.round(requested)) : null;
+    // No thumbnail yet (a new upload) — the original is better than nothing.
+    const thumb = width ? await fetchDriveThumbnail(id, width) : null;
+    const { bytes, contentType } = thumb ?? (await fetchDriveFileBytes(id));
     return new NextResponse(bytes, {
       headers: {
         "Content-Type": contentType,

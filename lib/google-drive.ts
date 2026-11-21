@@ -191,6 +191,8 @@ async function loadPhotoMap(folderId: string): Promise<Map<string, DriveFile>> {
 
 async function walkPhotoFolder(folderId: string): Promise<Map<string, DriveFile>> {
   const map = new Map<string, DriveFile>();
+  const links: Array<[string, string]> = [];
+  const walkedAt = Date.now();
   const headers = await authHeader();
   const queue: string[] = [folderId];
   const visited = new Set<string>();
@@ -204,7 +206,9 @@ async function walkPhotoFolder(folderId: string): Promise<Map<string, DriveFile>
     do {
       const params = new URLSearchParams({
         q: `'${currentId}' in parents and trashed = false`,
-        fields: "nextPageToken, files(id, name, mimeType)",
+        // thumbnailLink rides along so the first thumbnail of each photo
+        // needs no separate call to Drive to find it (see seedThumbLinks).
+        fields: "nextPageToken, files(id, name, mimeType, thumbnailLink)",
         pageSize: "1000",
         supportsAllDrives: "true",
         includeItemsFromAllDrives: "true",
@@ -221,6 +225,7 @@ async function walkPhotoFolder(folderId: string): Promise<Map<string, DriveFile>
           queue.push(f.id);
         } else if (typeof f.mimeType === "string" && f.mimeType.startsWith("image/")) {
           map.set(baseName(f.name), { id: f.id, mimeType: f.mimeType });
+          if (typeof f.thumbnailLink === "string") links.push([f.id, f.thumbnailLink]);
         }
       }
       pageToken = json.nextPageToken;
@@ -228,6 +233,9 @@ async function walkPhotoFolder(folderId: string): Promise<Map<string, DriveFile>
   }
 
   photoCache = { map, folderId, at: Date.now() };
+  // Dated from when the walk began, so a link is never trusted longer than
+  // Drive meant it to be.
+  seedThumbLinks(links, walkedAt);
   return map;
 }
 
@@ -256,7 +264,7 @@ async function findPhotoByDirectSearch(sku: string): Promise<DriveFile | null> {
   const escaped = sku.replace(/'/g, "\\'");
   const params = new URLSearchParams({
     q: `name contains '${escaped}' and mimeType contains 'image/' and trashed = false`,
-    fields: "files(id, name, mimeType)",
+    fields: "files(id, name, mimeType, thumbnailLink)",
     pageSize: "20",
     supportsAllDrives: "true",
     includeItemsFromAllDrives: "true",
@@ -271,6 +279,7 @@ async function findPhotoByDirectSearch(sku: string): Promise<DriveFile | null> {
   const hit = (json.files ?? []).find(
     (f: { name: string }) => baseName(f.name) === wanted
   );
+  if (hit && typeof hit.thumbnailLink === "string") seedThumbLinks([[hit.id, hit.thumbnailLink]], Date.now());
   return hit ? { id: hit.id, mimeType: hit.mimeType } : null;
 }
 
@@ -338,6 +347,19 @@ function rememberThumb(key: string, thumb: Thumb) {
     if (thumbBytesHeld <= THUMB_MAX_BYTES) break;
     thumbCache.delete(k);
     thumbBytesHeld -= v.thumb.bytes.byteLength;
+  }
+}
+
+// The lookups that FIND a photo (the folder walk, the direct search) can ask
+// Drive for its thumbnail link in the same call, at no extra cost. Holding
+// on to it means a photo's first thumbnail is one call to Google, not two —
+// which on a server that has just started is every photo on the screen
+// (owner, 2026-11-21: photos slow on the phone). A link that has expired by
+// the time it is used is replaced by fetchDriveThumbnail's retry.
+function seedThumbLinks(links: Array<[string, string]>, at: number) {
+  for (const [fileId, link] of links) {
+    const held = thumbLinkCache.get(fileId);
+    if (!held || held.at < at) thumbLinkCache.set(fileId, { link, at });
   }
 }
 

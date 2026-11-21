@@ -5658,3 +5658,40 @@ price, can be given the customer's old prices when a manager reviews it.
   saves line by line, as the round-subtotal override already does. On the
   phone the editor holds every change until Save, so an applied old price is
   saved with the rest, and Cancel drops it.
+
+## 2026-11-21 — Product photos load faster on iPhone, iPad and Mac
+
+Owner: "the image load time on the iOS is slow, make it faster". iOS commit
+fa80d21, built for the simulator and Mac Catalyst; web change in
+lib/google-drive.ts. The phone's
+photo path was already cached on disk, sized to the tile and deduplicated
+(2026-09-18 onward), so this went after where the time still goes.
+- **Twelve photos in flight, not six** (`SKUPhotoPipeline.maxConcurrent`).
+  Six is the old HTTP/1.1 per-host habit; Vercel serves HTTP/2, one
+  connection carrying every request, and each photo is mostly waiting on the
+  server (a refused request alone measures ~250 ms from here, bom1). A
+  screen of eighteen tiles came in three waves; now one or two. The queue is
+  still newest first, so on-screen tiles go before ones scrolled past.
+- **The rest of the page is fetched ahead** in the Products icon grid: when
+  a page of 50 shows, its photos are queued at the tile width (400), before
+  the visible tiles ask, so the visible ones still go first. Each lands in
+  the disk cache, so a page is downloaded once, not once per visit. Traffic
+  is Vercel's, not Supabase's — the egress quota (2026-11-08) is untouched.
+- **A larger copy serves a smaller request**: a tile whose photo is held in
+  memory or on disk at a larger width (the article sheet's 1024) is drawn
+  from it instead of being fetched again.
+- **The article sheet shows the tile's photo at once** and swaps in the
+  sharper 1024 copy when it arrives, instead of an empty skeleton for as
+  long as that takes. If the sharp copy fails the smaller one stays.
+- **Server: one call to Google per new photo instead of two.** The folder
+  walk and the cold-start direct search now ask Drive for each file's
+  `thumbnailLink` in the same call and keep it (`seedThumbLinks`, dated from
+  when the walk began, same 45-minute trust as before), so the first
+  thumbnail of a photo no longer needs a separate metadata call. An expired
+  link is still replaced by `fetchDriveThumbnail`'s existing retry. This
+  helps the web's grids too.
+- Not done: the folder browser's `DrivePhotoThumb` (the Photos tab) still
+  takes its own path — Drive's thumbnail link straight from the listing —
+  and still shows a spinner; the warehouse pick list gets no page prefetch
+  (that file holds another session's uncommitted work). Neither was measured
+  as the slow screen. WebP/AVIF is still not done (CLAUDE.md).

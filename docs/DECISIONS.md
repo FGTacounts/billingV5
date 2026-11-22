@@ -5796,3 +5796,27 @@ expenses"). RUN-ME-45. The expenses table was empty.
   is gitignored and kept on this Mac only.
 - Amounts go in as AED with two decimals, as the Expense form and
   formatAed already store them; `expenses.amount` is not in minor units.
+
+2026-11-22 — Expense list: every expense, in a fixed order (owner: "cannot
+see the total's and also the expense should be sorted properly and not
+random like this").
+- **Missing rows.** `/api/expenses` read the table in one request, and
+  PostgREST stops at 1,000 rows without saying so. After RUN-ME-45 the table
+  holds 1,057, so the list, its "Total" (AED 2,050,695.67 instead of
+  2,182,041.67) and the Excel export all lost the oldest 57 (early 2024).
+  Both now read through `fetchAllPages`, ordered date then id. The iPhone/Mac
+  app already paged (Paging.swift) and had all of them.
+- **Order within a day.** Sorting was by date alone, so expenses sharing a
+  date came out in the database's order — effectively random, and every
+  RUN-ME-45 row is dated the 1st of its month. Ties now fall back on
+  category, then description (A–Z, case-insensitive, numbers in number
+  order), then id. Chosen over amount so a month reads as its kinds of
+  spending grouped together (all Petrol lines side by side), which matches
+  how the 2025EXP sheet lists them; "Amount high to low" is there for size.
+  Amount sorts (and the app's Category sort) break ties newest first.
+  `lib/expenseOrder.ts` on the web, `ExpenseOrder` in ExpenseView.swift on
+  iPhone/iPad/Mac; the export uses the "Newest first" order.
+- **The summary card is unchanged.** Its tiles are this calendar month, and
+  nothing has been logged for November 2026 yet, so they read AED 0.00 with
+  last month (AED 65,800.54) underneath; the category donut is hidden for
+  the same reason. Not changed without the owner asking.

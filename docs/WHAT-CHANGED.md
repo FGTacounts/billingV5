@@ -1,5 +1,17 @@
 # What changed, and what you need to do
 
+## 2026-11-22 — Expense list shows every expense, in a steady order
+
+Nothing to run in Supabase. Deploy the web app; the app needs a new build
+(iPhone, iPad and Mac) for the order change.
+
+- The web list stopped at 1,000 expenses, so after the past-expenses load
+  the oldest 57 (early 2024) were missing and the Total read AED
+  2,050,695.67. It now shows all 1,057 and AED 2,182,041.67. The Excel
+  export had the same gap and is fixed too.
+- Expenses on the same date no longer come out shuffled: they are grouped by
+  category, then description, A–Z. Same on the web, iPhone, iPad and Mac.
+
 ## 2026-11-22 — Past expenses, Jan 2024 to Oct 2026
 
 **Run `scratchpad/RUN-ME-45-past-expenses-2024-2026.sql` in Supabase**

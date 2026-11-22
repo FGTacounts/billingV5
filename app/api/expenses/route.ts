@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAppUser } from "@/lib/auth";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { t } from "@/lib/i18n";
+import { fetchAllPages } from "@/lib/paging";
 
 export const runtime = "nodejs";
 
@@ -50,10 +51,25 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: (e as Error).message }, { status: 501 });
   }
 
-  const read = async (columns: string) => {
-    let q = admin.from("expenses").select(columns).order("date", { ascending: false });
-    if (type) q = q.eq("type", type);
-    return q;
+  // Every expense, a page at a time. One request stops at 1,000 rows
+  // without saying so (lib/paging.ts): once the 1,057 past expenses were
+  // loaded (RUN-ME-45) the list and its total quietly lost the oldest 57.
+  // `id` after the date is the unique order the pages are cut from; the
+  // page puts its own order on top (lib/expenseOrder.ts).
+  const read = async (columns: string): Promise<{ data: unknown[]; error: null } | { data: null; error: { code?: string; message?: string } }> => {
+    try {
+      const data = await fetchAllPages<{ id: string }>(
+        (lo, hi) => {
+          let q = admin.from("expenses").select(columns).order("date", { ascending: false }).order("id");
+          if (type) q = q.eq("type", type);
+          return q.range(lo, hi) as never;
+        },
+        { keyOf: (e) => e.id }
+      );
+      return { data, error: null };
+    } catch (e) {
+      return { data: null, error: e as { code?: string; message?: string } };
+    }
   };
 
   if (!salesmanColumnMissing) {

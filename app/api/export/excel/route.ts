@@ -9,6 +9,8 @@ import { supabaseAdmin } from "@/lib/supabase/admin";
 import { fetchPayments } from "@/lib/queries/payments";
 import { subtotal, vat, total } from "@/lib/money";
 import { PRODUCT_SAMPLE_HEADERS } from "@/lib/importSamples";
+import { fetchAllPages } from "@/lib/paging";
+import { compareExpenses } from "@/lib/expenseOrder";
 
 export const runtime = "nodejs";
 
@@ -144,11 +146,23 @@ export async function GET(req: NextRequest) {
       { header: "Amount", key: "amount", width: 14 },
       { header: "Notes", key: "notes", width: 30 },
     ];
-    const { data: expenses } = await supabaseAdmin()
-      .from("expenses")
-      .select("date, type, category, description, amount, notes")
-      .order("date", { ascending: false });
-    for (const e of expenses ?? []) {
+    // Every expense, not the first 1,000 (lib/paging.ts), in the list's own
+    // "Newest first" order (lib/expenseOrder.ts).
+    const admin = supabaseAdmin();
+    const expenses = await fetchAllPages<{
+      id: string; date: string; type: string; category: string | null;
+      description: string | null; amount: number; notes: string | null;
+    }>(
+      (lo, hi) =>
+        admin
+          .from("expenses")
+          .select("id, date, type, category, description, amount, notes")
+          .order("id")
+          .range(lo, hi) as never,
+      { keyOf: (e) => e.id }
+    );
+    expenses.sort(compareExpenses("date_desc"));
+    for (const e of expenses) {
       sheet.addRow({
         date: new Date(e.date).toLocaleDateString(),
         type: e.type,

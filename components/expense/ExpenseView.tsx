@@ -25,6 +25,7 @@ import { usePreferences } from "@/lib/hooks/usePreferences";
 import SegmentedControl from "@/components/ui/SegmentedControl";
 import { EXPENSE_SAMPLE_HEADERS, expenseSampleExample } from "@/lib/importSamples";
 import ExpenseSummary from "./ExpenseSummary";
+import { compareExpenses, type ExpenseSortKey } from "@/lib/expenseOrder";
 
 const TYPE_TONE: Record<ExpenseType, "info" | "warning" | "danger"> = {
   fixed: "info",
@@ -39,7 +40,7 @@ const SUB_TABS: { key: ExpenseType | ""; label: string }[] = [
   { key: "purchase", label: t("expense.typePurchase") },
 ];
 
-type SortKey = "date_desc" | "date_asc" | "amount_desc" | "amount_asc";
+type SortKey = ExpenseSortKey;
 const SORT_LABELS: Record<SortKey, string> = {
   date_desc: t("expense.sortNewestFirst"),
   date_asc: t("expense.sortOldestFirst"),
@@ -114,14 +115,8 @@ export default function ExpenseView({ user }: { user: AppUser }) {
         (e) => (e.description ?? "").toLowerCase().includes(q) || (e.category ?? "").toLowerCase().includes(q)
       );
     }
-    const sorted = [...rows];
-    switch (sortKey) {
-      case "date_desc": sorted.sort((a, b) => b.date.localeCompare(a.date)); break;
-      case "date_asc": sorted.sort((a, b) => a.date.localeCompare(b.date)); break;
-      case "amount_desc": sorted.sort((a, b) => b.amount - a.amount); break;
-      case "amount_asc": sorted.sort((a, b) => a.amount - b.amount); break;
-    }
-    return sorted;
+    // Ties no longer fall back on the database's order (lib/expenseOrder.ts).
+    return [...rows].sort(compareExpenses(sortKey));
   }, [expenses, topTab, attributedTo, selectedSalesman, search, sortKey]);
 
   const totalShown = visible.reduce((s, e) => s + e.amount, 0);

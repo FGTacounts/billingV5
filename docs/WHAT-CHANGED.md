@@ -1,5 +1,20 @@
 # What changed, and what you need to do
 
+## 2026-11-22 — Past expenses, Jan 2024 to Oct 2026
+
+**Run `scratchpad/RUN-ME-45-past-expenses-2024-2026.sql` in Supabase**
+(billing project — check the address bar says `isdeheipdfmwzmmnnidr`).
+Nothing to deploy and no new app build. The file is only on this Mac: it
+lists salaries, and the GitHub repository is public.
+
+- Loads 1,057 expenses from the 2025EXP sheet, one per line per month,
+  dated the 1st: AED 679,185.20 for 2024, 673,166.94 for 2025 and
+  829,689.53 for Jan–Oct 2026.
+- Estimates are left out: bad-debt provision, depreciation, and the
+  leave-salary and licence accruals. VAT paid is left out too.
+- The last lines it prints should all say OK. Running it again replaces
+  what it loaded and leaves anything typed into the app alone.
+
 ## 2026-11-21 — Adding a product on the phone no longer copies lines
 
 Nothing to run in Supabase, nothing to deploy on the web. The app needs a new

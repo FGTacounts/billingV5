@@ -32,3 +32,7 @@ next-env.d.ts
 
 # TypeScript incremental build cache — regenerated on every build
 *.tsbuildinfo
+
+# Past-expense import: names staff and their monthly salaries. The GitHub
+# repository is public, so this stays on this Mac. (2026-11-22)
+/scratchpad/RUN-ME-45-past-expenses-2024-2026.sql

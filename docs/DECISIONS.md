@@ -5755,3 +5755,44 @@ built for the simulator and Mac Catalyst; web change app/api/drive/file.
 - **Pick list.** Opening an order queues every line's photo at 400 pixels,
   so the rows further down are on the phone before the picker scrolls to
   them. 400 serves a smaller tile too, so the zoom slider does not undo it.
+
+2026-11-22 — Past expenses, Jan 2024 to Oct 2026, loaded from the owner's
+spreadsheet (owner: "make this into an sql that i can upload for the
+expenses"). RUN-ME-45. The expenses table was empty.
+- **Source:** the 2025EXP sheet in "INVOICE UPDATED 2025 (2).xlsx", the only
+  one that lists every expense line by month (the copy inside
+  Famlist_Balance_Sheet gives identical SQL). Not used: ECOM BANK PAYMENT's
+  collections (money in) and its PURCHASE & OUTWARD sheet (stock purchases,
+  owner chose to leave them out), and TURTEES_KEY_PRODUCT (a product list).
+- **One expense per sheet line per month, dated the 1st of that month.** The
+  sheet has monthly amounts, not days. Notes say "Imported from 2025EXP,
+  cell XX", so any figure leads back to its cell, and a re-run deletes only
+  rows carrying that note and loads them again. Nothing typed into the app
+  is touched.
+- **Estimates left out (owner's choice):** the 5% bad-debt provision,
+  warehouse and stand depreciation, and the monthly leave-salary and
+  licence-renewal accruals. The real licence payments are their own lines,
+  so keeping the accruals counted licences twice. Also left out: VAT paid
+  (tax, not an expense), the refundable Sharjah licence deposit, the DXB
+  renewal with no month, and Nov/Dec 2026 (not over yet).
+- **Kept:** the 2024 one-offs written below the sheet's total (Kotakkal,
+  mezzanine floor, office fit-out, Sharjah licence), which were real money
+  paid. 2024 salaries exist only as the monthly total in row 121, so they
+  load as one "Salaries — all staff" line a month.
+- **Type:** salary, leave salary, end of service, rent, vehicle rent,
+  mobile, subscriptions, website, Xena, warehouse commission, SEWA, visa and
+  vehicle registration are Fixed; everything else is Variable. No Purchase
+  rows.
+- **Salesman:** a line naming one person (petrol, mobile, car service,
+  salary, incentive) gets that person's salesman_id when their first name
+  matches exactly one row in users; otherwise it stays unattributed. Logged
+  by the first active admin, else manager, because the SQL editor has no
+  signed-in user.
+- Totals reconcile with the sheet: 2024 equals TOTAL EXP minus the estimates
+  plus the one-offs. 2025 is 1,126.55 above it, and 2026 (Jan–Oct) is
+  34,200.54 above it, both because of sheet subtotal errors (Nov-25 skips
+  row 3; Oct-26's running-expense subtotal is blank).
+- The SQL file names staff and their salaries, and GitHub is public, so it
+  is gitignored and kept on this Mac only.
+- Amounts go in as AED with two decimals, as the Expense form and
+  formatAed already store them; `expenses.amount` is not in minor units.

@@ -5,7 +5,7 @@ import { supabaseCaller } from "@/lib/supabase/server";
 import { fetchOrder, fetchOrderItems } from "@/lib/queries/orders";
 import { parseLineSort } from "@/lib/lineSort";
 import { computeInvoiceLines, invoiceTotals } from "@/lib/pdf/invoice";
-import { invoiceDate, invoiceExcelFileBase } from "@/lib/invoice-template";
+import { invoiceDate, invoiceFileBase } from "@/lib/invoice-template";
 import { toAed, toFils } from "@/lib/money";
 import { orderVatRate } from "@/lib/orders-server";
 import { t } from "@/lib/i18n";
@@ -102,7 +102,7 @@ export async function GET(req: NextRequest) {
   totalRow.font = { bold: true };
 
   const buffer = await wb.xlsx.writeBuffer();
-  const fileName = `${invoiceExcelFileBase(order.invoice_number, orderDate, order.customer?.name)}.xlsx`;
+  const fileName = `${invoiceFileBase(order.invoice_number, order.customer?.name)}.xlsx`;
   return new NextResponse(buffer, {
     headers: {
       "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

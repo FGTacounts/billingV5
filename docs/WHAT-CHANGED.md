@@ -1,5 +1,15 @@
 # What changed, and what you need to do
 
+## 2026-11-27 — Order PDF and Excel file names: INV-4712-CUSTOMER NAME
+
+Nothing to run. Deploy the web app and put the new app build on devices.
+
+- An order's PDF and Excel now download as
+  **"INV-4712-QUEEN GENERAL TRADING LLC.pdf"** / **".xlsx"** (web) /
+  **".xls"** (iPhone, iPad, Mac) — invoice number, then the customer name
+  in capitals. The month (".NOV26") is no longer in the name.
+- The PDFs inside "Download All" are named the same way.
+
 ## 2026-11-27 — Devices: one clear map, coloured stays; RUN-ME-48 fixed
 
 **Run `scratchpad/RUN-ME-48-admins-and-device-locations.sql` again** (same

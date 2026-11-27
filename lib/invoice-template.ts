@@ -92,33 +92,30 @@ export function dueDateFor(
   return dueDate(order.billed_at ?? order.updated_at ?? order.created_at, thresholdDays);
 }
 
-const MONTH_ABBR = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
-
-// File naming convention (Order Flow & Additions §2): INV{number}.{MON}{YY}
-// — applied to every PDF/Excel download, including each entry inside a
-// bulk "Download All" zip. Orders without an invoice number yet (drafts,
-// pending, in-pipeline) fall back to "DRAFT" rather than fabricating one.
-export function invoiceFileBase(invoiceNumber: string | number | null, dateIso: string): string {
-  const d = new Date(dateIso);
-  const day = isNaN(d.getTime()) ? null : dayInDubai(d);
-  const mon = day ? MONTH_ABBR[Number(day.mm) - 1] : "";
-  const yy = day ? day.yyyy.slice(-2) : "";
-  const num = invoiceNumber != null ? String(invoiceNumber) : "DRAFT";
-  return `INV${num}.${mon}${yy}`;
-}
-
-// The per-order Excel is named after the customer first (owner, 2026-11-19):
-// "M&SAVE SUPERMARKET LLC INV1234.NOV26". Characters a file system or a
-// Content-Disposition header cannot carry are dropped, the same rule the
-// customer statement's file name uses. No customer → the plain invoice name.
-export function invoiceExcelFileBase(
+// File naming convention (owner, 2026-11-27): INV-{number}-{CUSTOMER NAME}
+// — "INV-4712-QUEEN GENERAL TRADING LLC" — the same for the order PDF and
+// the order Excel, and for each entry inside a bulk "Download All" zip. It
+// replaces INV{number}.{MON}{YY} (PDF) and "{customer} INV{number}.{MON}{YY}"
+// (Excel, 2026-11-19). The customer name is upper-cased and keeps only
+// characters a file system and a Content-Disposition header can carry
+// (letters, digits, _ & . ( ) - and space — the statement files' rule);
+// with nothing left, or no customer, it is just "INV-4712". Orders without
+// an invoice number yet fall back to "DRAFT" rather than fabricating one.
+export function invoiceFileBase(
   invoiceNumber: string | number | null,
-  dateIso: string,
   customerName: string | null | undefined
 ): string {
-  const base = invoiceFileBase(invoiceNumber, dateIso);
-  const safeName = (customerName ?? "").replace(/[^\w&.() -]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 60);
-  return safeName ? `${safeName} ${base}` : base;
+  const raw = invoiceNumber != null ? String(invoiceNumber).trim() : "";
+  // A number already stored as "INV4712" / "INV-4712" is not doubled up.
+  const num = raw.replace(/^INV-?/i, "").replace(/[^\w.-]+/g, "-") || "DRAFT";
+  const safeName = (customerName ?? "")
+    .replace(/[^\w&.() -]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 60)
+    .trim()
+    .toUpperCase();
+  return safeName ? `INV-${num}-${safeName}` : `INV-${num}`;
 }
 
 const ONES = [

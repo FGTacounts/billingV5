@@ -41,7 +41,7 @@ export async function GET(req: NextRequest) {
   // The order screen passes the sort it is showing, so the paper matches it.
   const sort = parseLineSort(req.nextUrl.searchParams.get("sort"));
   const bytes = await buildInvoicePdf(order, items, kind, vatRate, sort);
-  const fileName = `${invoiceFileBase(order.invoice_number, order.billed_at ?? order.updated_at ?? order.created_at)}.pdf`;
+  const fileName = `${invoiceFileBase(order.invoice_number, order.customer?.name)}.pdf`;
 
   return new NextResponse(Buffer.from(bytes), {
     headers: {

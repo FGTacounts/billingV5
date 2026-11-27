@@ -6056,3 +6056,25 @@ Siri ('hey Siri, give me a route for today')". Design in
   salesman straight back to collect it. Overdue never drops. "3 days" is
   the draft's figure, not one the owner named.
 - The manager's salesman picker on Planning stays; Siri is own-route only.
+
+2026-11-27 — Order PDF and Excel are both named "INV-4712-QUEEN GENERAL
+TRADING LLC" (owner) — Asked for: the order export name, PDF and Excel,
+in the format "INV-4712-QUEEN GENERAL TRADING LLC.pdf".
+- Replaces both earlier names: the PDF's "INV4712.NOV26" and the Excel's
+  "M&SAVE SUPERMARKET LLC INV4712.NOV26" (2026-11-19). The month/year is
+  gone from the name because the owner's format has none; the invoice still
+  prints its date inside.
+- One helper per app so the two can never drift: web `invoiceFileBase(number,
+  customerName)` in lib/invoice-template.ts (the Excel-only helper is
+  removed); phone/Mac `InvoiceTemplate.exportFileName(for:customerName:
+  extension:)`. Web Excel stays .xlsx, phone/Mac Excel stays .xls.
+- Also applies to every PDF inside the bulk "Download All" zip (web job and
+  phone/Mac) — they were named by the same helper, and one invoice should
+  carry one name wherever it is saved. Two invoices with one number still
+  get the order-id suffix as before.
+- The customer name is upper-cased, as the owner wrote it, and keeps the
+  statement files' character rule (letters, digits, _ & . ( ) - and space;
+  anything else becomes a space), cut at 60 characters. No customer, or a
+  name with nothing left (e.g. Arabic only) → "INV-4712". No invoice number
+  yet → "INV-DRAFT-…". A number already stored as "INV4712"/"INV-4712" is
+  not doubled to "INV-INV4712".

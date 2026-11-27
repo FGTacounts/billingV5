@@ -131,7 +131,7 @@ export async function buildInvoiceSlice(
       // The order's own rate, else its customer's — as approval stored it.
       own.vat_rate_override ?? (await rateFor(order.customer_id ?? null))
     );
-    const base = invoiceFileBase(order.invoice_number, order.billed_at ?? order.updated_at ?? order.created_at);
+    const base = invoiceFileBase(order.invoice_number, order.customer?.name);
     let name = `${base}.pdf`;
     while (taken.has(name)) name = `${base}-${order.id.slice(0, 6)}.pdf`;
     taken.add(name);

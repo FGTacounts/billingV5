@@ -5933,3 +5933,27 @@ page … salesman, … manager … admin"). RUN-ME-48.
   the door decides what the app shows and its own role checks, not what the
   database would allow; screens that scope by role (salesman sees own orders)
   already filter by user id, so the admin-as-salesman sees his own.
+
+2026-11-27 — The day's route replays when opened, over 4 seconds — the one
+exception to "nothing over 400ms" (owner: "Make a fluid animation of the path
+they take each day when opened"; asked, and chose "Replay over ~4 seconds"
+over keeping within 400 ms, which would have been a flick too fast to follow).
+- The line grows along the road paced by distance (not by clock time, so an
+  hour parked does not stall it), a dot leading it; each place visited
+  appears as the dot reaches it; Last point appears at the end. The camera
+  frames the whole day first and holds still — following the dot would move
+  the map for four seconds.
+- Eased in and out with a cosine, not a spring: CLAUDE.md says springs for
+  position, but a critically damped spring draws ~90% of the line in the
+  first 40% of the time and creeps through the rest — the opposite of a
+  readable replay. Logged as a second, deliberate exception, scoped to this
+  replay only.
+- Reduced motion (web `prefers-reduced-motion`, app Reduce Motion): the
+  finished line at once, every pin in place.
+- Web: RouteMap's trail branch updates the PolylineOverlay points each
+  animation frame (lib/routeTrail.ts replayGeometry/trailUpTo/distanceAlong).
+  An address arriving for a place renames its pin in place instead of
+  redrawing, which would restart the replay. App: DeviceDayView redraws its
+  MapPolylines from `drawnMetres` on a ~60 fps task; same maths in
+  RouteTrail (checked against the web's test numbers).
+- No Replay button — not asked for. Picking the date again replays it.

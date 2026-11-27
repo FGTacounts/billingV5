@@ -114,3 +114,88 @@ export function findStops(points: readonly TrailPoint[]): Stop[] {
   }
   return stops;
 }
+
+// ---- The replay: the day's line drawing itself when it opens ------------
+//
+// Owner, 2026-11-27: "make a fluid animation of the path they take each day
+// when opened", and chose a ~4 second replay over the 400 ms cap in
+// CLAUDE.md — the one exception to it (docs/DECISIONS.md). The line grows
+// along the road at a pace set by distance, not by the clock, so a long
+// drive and a short hop both read as one steady stroke; gaps are skipped.
+// Eased in and out (a cosine), not sprung: a spring front-loads the motion
+// and would draw most of the day in the first second.
+
+export const REPLAY_MS = 4000;
+
+/** 0→1 progress for 0→1 time, gentle at both ends. */
+export function replayEase(p: number): number {
+  const x = Math.min(1, Math.max(0, p));
+  return 0.5 - 0.5 * Math.cos(Math.PI * x);
+}
+
+type LatLon = { lat: number; lon: number };
+
+export interface ReplayGeometry {
+  segments: LatLon[][];
+  /** Metres from the start of the whole line to each point. */
+  along: number[][];
+  total: number;
+}
+
+export function replayGeometry(segments: readonly LatLon[][]): ReplayGeometry {
+  let total = 0;
+  const along = segments.map((segment) =>
+    segment.map((point, i) => {
+      if (i > 0) total += haversineMetres(segment[i - 1], point);
+      return total;
+    })
+  );
+  return { segments: segments.map((s) => [...s]), along, total };
+}
+
+/**
+ * The line as it stands `metres` into the replay: each stretch cut where the
+ * head has reached (an empty stretch is one not reached yet), and the head.
+ */
+export function trailUpTo(geometry: ReplayGeometry, metres: number): { partial: LatLon[][]; head: LatLon | null } {
+  let head: LatLon | null = null;
+  const partial = geometry.segments.map((segment, s) => {
+    const along = geometry.along[s];
+    if (!segment.length || metres < along[0]) return [];
+    const out: LatLon[] = [segment[0]];
+    head = segment[0];
+    for (let i = 1; i < segment.length; i++) {
+      if (along[i] <= metres) {
+        out.push(segment[i]);
+        head = segment[i];
+        continue;
+      }
+      const span = along[i] - along[i - 1];
+      const f = span > 0 ? (metres - along[i - 1]) / span : 0;
+      const a = segment[i - 1];
+      const b = segment[i];
+      const cut = { lat: a.lat + (b.lat - a.lat) * f, lon: a.lon + (b.lon - a.lon) * f };
+      out.push(cut);
+      head = cut;
+      break;
+    }
+    return out;
+  });
+  return { partial, head };
+}
+
+/** How far into the replay the line passes closest to a place. */
+export function distanceAlong(geometry: ReplayGeometry, place: LatLon): number {
+  let best = Infinity;
+  let at = 0;
+  geometry.segments.forEach((segment, s) =>
+    segment.forEach((point, i) => {
+      const d = haversineMetres(point, place);
+      if (d < best) {
+        best = d;
+        at = geometry.along[s][i];
+      }
+    })
+  );
+  return at;
+}

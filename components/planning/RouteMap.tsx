@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { usePrefersReducedMotion } from "@/lib/motion";
 import { Card } from "@/components/ui/Card";
 import { t } from "@/lib/i18n";
+import { REPLAY_MS, distanceAlong, replayEase, replayGeometry, trailUpTo } from "@/lib/routeTrail";
 
 // The Planning map (parity with the phone, which draws the same pins and
 // route line in `Map { ... MapPolyline }`).
@@ -193,6 +194,9 @@ export default function RouteMap({
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
+  // The place pins of a trail, by id, so an address arriving later renames
+  // its pin without restarting the replay.
+  const trailPinsRef = useRef<Map<string, any>>(new Map());
   const [ready, setReady] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
   const reducedMotion = usePrefersReducedMotion();
@@ -256,6 +260,9 @@ export default function RouteMap({
   const finishKey = finish ? `${finish.lat}:${finish.lon}` : "";
   // A day's trail is fetched once per salesman and date; its length and both
   // ends are enough to tell one from another.
+  // A trail is redrawn (and replayed) only when the trail or a pin's position
+  // changes — not when a place's address arrives, which only renames a pin.
+  const positionsKey = stops.map((s) => `${s.customerId}:${s.lat}:${s.lon}:${s.tone}:${s.glyph ?? ""}`).join("|");
   const trailKey = trail
     ? `${trail.length}:${trail.reduce((n, s) => n + s.length, 0)}:${trail[0]?.[0]?.lat}:${trail.at(-1)?.at(-1)?.lon}`
     : "";
@@ -314,20 +321,84 @@ export default function RouteMap({
     const lineStyle = new mapkit.Style({ lineWidth: 3, lineJoin: "round", strokeColor: accent });
 
     if (trail || !connectStops) {
-      const lines = (trail ?? [])
-        .filter((segment) => segment.length >= 2)
-        .map((segment) => new mapkit.PolylineOverlay(segment.map((p) => coordinate(p.lat, p.lon)), { style: lineStyle }));
+      const segments = (trail ?? []).filter((segment) => segment.length >= 2);
+      const lines = segments.map(
+        (segment) => new mapkit.PolylineOverlay(segment.map((p) => coordinate(p.lat, p.lon)), { style: lineStyle })
+      );
+      const originPin = origin ? annotations[0] : null;
+      const finishPin = finish ? annotations[origin ? 1 : 0] : null;
+      const stopPins = annotations.slice(annotations.length - stops.length);
+      trailPinsRef.current = new Map(stops.map((stop, i) => [stop.customerId, stopPins[i]]));
+      const padding = new mapkit.Padding({ top: 48, right: 48, bottom: 48, left: 48 });
+
       map.removeAnnotations(map.annotations);
       map.removeOverlays(map.overlays);
-      if (annotations.length) map.addAnnotations(annotations);
-      if (lines.length) map.addOverlays(lines);
-      if (annotations.length || lines.length) {
-        map.showItems([...annotations, ...lines], {
-          animate: !reducedMotion,
-          padding: new mapkit.Padding({ top: 48, right: 48, bottom: 48, left: 48 }),
-        });
+
+      // The replay (owner, 2026-11-27): the day's line draws itself along the
+      // road over REPLAY_MS, a dot leading it, each place appearing as the
+      // dot reaches it. Not with reduced motion — the finished line, at once.
+      const replay = !!trail && segments.length > 0 && !reducedMotion;
+      if (!replay) {
+        if (annotations.length) map.addAnnotations(annotations);
+        if (lines.length) map.addOverlays(lines);
+        if (annotations.length || lines.length) {
+          map.showItems([...annotations, ...lines], { animate: !reducedMotion, padding });
+        }
+        return;
       }
-      return;
+
+      // Frame the whole day first, so the camera holds still while it draws.
+      map.addOverlays(lines);
+      map.showItems(lines, { animate: true, padding });
+      if (originPin) map.addAnnotation(originPin);
+
+      const geometry = replayGeometry(segments);
+      const reachAt = stops.map((stop) => distanceAlong(geometry, stop));
+      const shown = new Set<number>();
+
+      const dot = document.createElement("div");
+      dot.style.cssText = `width:14px;height:14px;border-radius:9999px;background:${accent};border:3px solid ${token("--bg-surface", "white")};box-shadow:0 1px 3px rgb(0 0 0 / 0.3);`;
+      const head = new mapkit.Annotation(coordinate(segments[0][0].lat, segments[0][0].lon), () => dot, {
+        calloutEnabled: false,
+        enabled: false,
+        displayPriority: 1000,
+      });
+      map.addAnnotation(head);
+
+      let frame = 0;
+      const startedAt = performance.now();
+      const draw = (now: number) => {
+        if (cancelled || !mapRef.current) return;
+        const progress = Math.min(1, (now - startedAt) / REPLAY_MS);
+        const metres = replayEase(progress) * geometry.total;
+        const { partial, head: at } = trailUpTo(geometry, metres);
+        partial.forEach((points, i) => {
+          lines[i].visible = points.length >= 2;
+          if (points.length >= 2) lines[i].points = points.map((p) => coordinate(p.lat, p.lon));
+        });
+        if (at) head.coordinate = coordinate(at.lat, at.lon);
+        reachAt.forEach((reach, i) => {
+          if (reach <= metres && !shown.has(i)) {
+            shown.add(i);
+            map.addAnnotation(stopPins[i]);
+          }
+        });
+        if (progress < 1) {
+          frame = requestAnimationFrame(draw);
+          return;
+        }
+        map.removeAnnotation(head);
+        stopPins.forEach((pin, i) => {
+          if (!shown.has(i)) map.addAnnotation(pin);
+        });
+        if (finishPin) map.addAnnotation(finishPin);
+      };
+      frame = requestAnimationFrame(draw);
+
+      return () => {
+        cancelled = true;
+        cancelAnimationFrame(frame);
+      };
     }
     // Drawn straight away so there is always a line between the pins; the
     // real road geometry replaces it below once Apple has worked it out.
@@ -386,7 +457,21 @@ export default function RouteMap({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, stopsKey, originKey, finishKey, trailKey, connectStops, reducedMotion]);
+  }, [ready, trail ? positionsKey : stopsKey, originKey, finishKey, trailKey, connectStops, reducedMotion]);
+
+  // A trail's place pins take their names as the addresses arrive, without
+  // redrawing — a redraw would restart the replay.
+  useEffect(() => {
+    if (!trail) return;
+    stops.forEach((stop, i) => {
+      const pin = trailPinsRef.current.get(stop.customerId);
+      if (!pin) return;
+      pin.title = stop.name;
+      pin.subtitle = stop.subtitle ?? "";
+      pin.accessibilityLabel = stop.accessibilityLabel ?? t("planning.mapStopLabel", { n: i + 1, name: stop.name });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stopsKey]);
 
   // Nothing at all rather than an empty card: with no Apple Maps credentials
   // the page must look exactly the way it looked before there was a map.

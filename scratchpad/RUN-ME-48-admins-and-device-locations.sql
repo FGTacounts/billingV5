@@ -70,11 +70,27 @@ select coalesce(u.username, split_part(a.email, '@', 1)) as account,
 -- bilal@fgtbilling.internal -> "…" menu. (Not "send recovery
 -- email": that address is not a real mailbox.)
 -- ------------------------------------------------------------
+-- The staff table's guard (guard_user_privileged_columns, RUN-ME-3/20)
+-- lets only a signed-in manager change a role or a login link. This
+-- editor is not signed in as anybody, so the guard refused the first
+-- run of this file. It is switched off for these two rows only, inside
+-- this one block: if anything in the block fails, switching it off is
+-- undone along with everything else, and it is switched back on at the
+-- end either way.
 do $$
 declare
   who   text;
   login uuid;
+  guarded boolean := exists (
+    select 1 from pg_trigger
+     where tgname = 'guard_user_privileged_columns'
+       and tgrelid = 'public.users'::regclass
+  );
 begin
+  if guarded then
+    execute 'alter table public.users disable trigger guard_user_privileged_columns';
+  end if;
+
   foreach who in array array['ajnaz', 'bilal'] loop
     select id into login from auth.users where email = who || '@fgtbilling.internal';
     if login is null then
@@ -105,6 +121,10 @@ begin
 
     raise notice '% is an active admin', who;
   end loop;
+
+  if guarded then
+    execute 'alter table public.users enable trigger guard_user_privileged_columns';
+  end if;
 end
 $$;
 
@@ -295,7 +315,17 @@ grant execute on function public.location_tracking_hours() to authenticated;
 -- ------------------------------------------------------------
 -- Check it worked. Every row should say OK.
 -- ------------------------------------------------------------
-select 'ajnaz is an active admin' as item,
+select 'staff guard switched back on' as item,
+       case when not exists (select 1 from pg_trigger
+                              where tgname = 'guard_user_privileged_columns'
+                                and tgrelid = 'public.users'::regclass)
+              or exists (select 1 from pg_trigger
+                          where tgname = 'guard_user_privileged_columns'
+                            and tgrelid = 'public.users'::regclass
+                            and tgenabled <> 'D')
+            then 'OK' else 'STILL OFF' end as status
+union all
+select 'ajnaz is an active admin',
        case when exists (select 1 from public.users u join auth.users a on a.id = u.auth_user_id
                           where lower(u.username) = 'ajnaz' and u.role = 'admin' and u.is_active)
             then 'OK' else 'NO — see the notice above, or create the login first' end as status

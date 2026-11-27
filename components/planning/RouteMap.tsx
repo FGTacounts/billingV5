@@ -42,6 +42,8 @@ export interface RouteMapStop {
   glyph?: string;
   /** Read out instead of "Stop n: name". */
   accessibilityLabel?: string;
+  /** A colour token for the pin (e.g. "--stay-30"), instead of `tone`'s. */
+  color?: string;
 }
 
 export interface RouteMapOrigin {
@@ -170,6 +172,7 @@ export default function RouteMap({
   origin,
   trail,
   finish,
+  current,
   connectStops = true,
   ariaLabel,
   className = "",
@@ -184,6 +187,8 @@ export default function RouteMap({
    */
   trail?: { lat: number; lon: number }[][];
   finish?: RouteMapOrigin | null;
+  /** Where the device is now: its own marker, always shown, never replayed. */
+  current?: RouteMapOrigin | null;
   /**
    * False for pins that are not a journey (where every device is now): no
    * line between them and no directions asked for.
@@ -258,11 +263,12 @@ export default function RouteMap({
   const stopsKey = stops.map((s) => `${s.customerId}:${s.lat}:${s.lon}:${s.tone}:${s.glyph ?? ""}:${s.name}`).join("|");
   const originKey = origin ? `${origin.lat}:${origin.lon}` : "";
   const finishKey = finish ? `${finish.lat}:${finish.lon}` : "";
+  const currentKey = current ? `${current.lat}:${current.lon}:${current.label}` : "";
   // A day's trail is fetched once per salesman and date; its length and both
   // ends are enough to tell one from another.
   // A trail is redrawn (and replayed) only when the trail or a pin's position
   // changes — not when a place's address arrives, which only renames a pin.
-  const positionsKey = stops.map((s) => `${s.customerId}:${s.lat}:${s.lon}:${s.tone}:${s.glyph ?? ""}`).join("|");
+  const positionsKey = stops.map((s) => `${s.customerId}:${s.lat}:${s.lon}:${s.tone}:${s.color ?? ""}:${s.glyph ?? ""}`).join("|");
   const trailKey = trail
     ? `${trail.length}:${trail.reduce((n, s) => n + s.length, 0)}:${trail[0]?.[0]?.lat}:${trail.at(-1)?.at(-1)?.lon}`
     : "";
@@ -304,7 +310,7 @@ export default function RouteMap({
     stops.forEach((stop, i) => {
       annotations.push(
         new mapkit.MarkerAnnotation(coordinate(stop.lat, stop.lon), {
-          color: token(TONE_VARIABLE[stop.tone], accent),
+          color: token(stop.color ?? TONE_VARIABLE[stop.tone], accent),
           glyphText: stop.glyph ?? String(i + 1),
           title: stop.name,
           subtitle: stop.subtitle ?? "",
@@ -321,10 +327,33 @@ export default function RouteMap({
     const lineStyle = new mapkit.Style({ lineWidth: 3, lineJoin: "round", strokeColor: accent });
 
     if (trail || !connectStops) {
+      // A driven route is drawn heavier, over a pale casing, so it reads
+      // against busy streets (owner: "make sure it is clear and easy to see").
+      const trailStyle = new mapkit.Style({ lineWidth: 5, lineJoin: "round", lineCap: "round", strokeColor: accent });
+      const casingStyle = new mapkit.Style({
+        lineWidth: 9,
+        lineJoin: "round",
+        lineCap: "round",
+        strokeColor: token("--bg-surface", "white"),
+        strokeOpacity: 0.85,
+      });
       const segments = (trail ?? []).filter((segment) => segment.length >= 2);
-      const lines = segments.map(
-        (segment) => new mapkit.PolylineOverlay(segment.map((p) => coordinate(p.lat, p.lon)), { style: lineStyle })
+      const casings = segments.map(
+        (segment) => new mapkit.PolylineOverlay(segment.map((p) => coordinate(p.lat, p.lon)), { style: casingStyle })
       );
+      const lines = segments.map(
+        (segment) => new mapkit.PolylineOverlay(segment.map((p) => coordinate(p.lat, p.lon)), { style: trailStyle })
+      );
+      const currentPin = current
+        ? new mapkit.MarkerAnnotation(coordinate(current.lat, current.lon), {
+            color: token("--text-primary", "black"),
+            glyphText: "●",
+            title: t("planning.devicesNow"),
+            subtitle: current.label,
+            displayPriority: 1000,
+            accessibilityLabel: t("planning.devicesNowLabel", { time: current.label }),
+          })
+        : null;
       const originPin = origin ? annotations[0] : null;
       const finishPin = finish ? annotations[origin ? 1 : 0] : null;
       const stopPins = annotations.slice(annotations.length - stops.length);
@@ -339,17 +368,20 @@ export default function RouteMap({
       // dot reaches it. Not with reduced motion — the finished line, at once.
       const replay = !!trail && segments.length > 0 && !reducedMotion;
       if (!replay) {
-        if (annotations.length) map.addAnnotations(annotations);
-        if (lines.length) map.addOverlays(lines);
-        if (annotations.length || lines.length) {
-          map.showItems([...annotations, ...lines], { animate: !reducedMotion, padding });
+        const all = currentPin ? [...annotations, currentPin] : annotations;
+        if (all.length) map.addAnnotations(all);
+        if (lines.length) map.addOverlays([...casings, ...lines]);
+        if (all.length || lines.length) {
+          map.showItems([...all, ...lines], { animate: !reducedMotion, padding });
         }
         return;
       }
 
-      // Frame the whole day first, so the camera holds still while it draws.
-      map.addOverlays(lines);
-      map.showItems(lines, { animate: true, padding });
+      // Frame the whole day — and where the device is now — first, so the
+      // camera holds still while it draws.
+      map.addOverlays([...casings, ...lines]);
+      if (currentPin) map.addAnnotation(currentPin);
+      map.showItems(currentPin ? [currentPin, ...lines] : lines, { animate: true, padding });
       if (originPin) map.addAnnotation(originPin);
 
       const geometry = replayGeometry(segments);
@@ -373,8 +405,14 @@ export default function RouteMap({
         const metres = replayEase(progress) * geometry.total;
         const { partial, head: at } = trailUpTo(geometry, metres);
         partial.forEach((points, i) => {
-          lines[i].visible = points.length >= 2;
-          if (points.length >= 2) lines[i].points = points.map((p) => coordinate(p.lat, p.lon));
+          const visible = points.length >= 2;
+          lines[i].visible = visible;
+          casings[i].visible = visible;
+          if (visible) {
+            const coords = points.map((p) => coordinate(p.lat, p.lon));
+            lines[i].points = coords;
+            casings[i].points = coords;
+          }
         });
         if (at) head.coordinate = coordinate(at.lat, at.lon);
         reachAt.forEach((reach, i) => {
@@ -457,7 +495,7 @@ export default function RouteMap({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, trail ? positionsKey : stopsKey, originKey, finishKey, trailKey, connectStops, reducedMotion]);
+  }, [ready, trail ? positionsKey : stopsKey, originKey, finishKey, currentKey, trailKey, connectStops, reducedMotion]);
 
   // A trail's place pins take their names as the addresses arrive, without
   // redrawing — a redraw would restart the replay.

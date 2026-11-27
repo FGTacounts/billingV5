@@ -65,14 +65,15 @@ export function trailDistanceMetres(segments: readonly TrailPoint[][]): number {
 
 /**
  * Somewhere the device stayed: points that all sit within STOP_METRES of the
- * first of them, for at least STOP_MINUTES. The device records a point only
+ * first of them, for at least STOP_MINUTES (owner, 2026-11-27: "every
+ * location where the user has stayed for more than 20mins"). The device records a point only
  * after moving ~150 m, so standing still produces no points — the stay runs
  * from the first point there to the first point recorded after leaving.
  * If what comes next is a gap (see splitTrail), the stay ends at its own last
  * point instead: nobody knows when the device left.
  */
 export const STOP_METRES = 250;
-export const STOP_MINUTES = 5;
+export const STOP_MINUTES = 20;
 
 export interface Stop {
   lat: number;
@@ -198,4 +199,47 @@ export function distanceAlong(geometry: ReplayGeometry, place: LatLon): number {
     })
   );
   return at;
+}
+
+// ---- How long a stay was, as the map shows it ---------------------------
+//
+// Owner, 2026-11-27: "in different colors. e.g. green for 20mins, blue for
+// 30+ mins... 45mins, 1hr, 2hr, 3hr. The exact time period or ~ time period
+// should be shown, rounded to the nearest 5mins." The colours are the
+// --stay-* tokens in app/globals.css (StayPalette in the app).
+
+/** Minutes rounded to the nearest 5. */
+export function roundToFive(minutes: number): number {
+  return Math.round(minutes / 5) * 5;
+}
+
+/** An instant moved to the nearest 5 minutes. */
+export function nearestFiveMinutes(iso: string): Date {
+  const step = 5 * 60_000;
+  return new Date(Math.round(Date.parse(iso) / step) * step);
+}
+
+export interface StayBand {
+  /** Shortest stay (rounded minutes) in this band. */
+  from: number;
+  /** CSS custom property holding its colour. */
+  token: string;
+}
+
+/** Longest first is not needed: bands are tried from the top down. */
+export const STAY_BANDS: readonly StayBand[] = [
+  { from: 20, token: "--stay-20" },
+  { from: 30, token: "--stay-30" },
+  { from: 45, token: "--stay-45" },
+  { from: 60, token: "--stay-60" },
+  { from: 120, token: "--stay-120" },
+  { from: 180, token: "--stay-180" },
+];
+
+/** The band a stay falls in, by its rounded length. */
+export function stayBand(minutes: number): StayBand {
+  const rounded = roundToFive(minutes);
+  let band = STAY_BANDS[0];
+  for (const candidate of STAY_BANDS) if (rounded >= candidate.from) band = candidate;
+  return band;
 }

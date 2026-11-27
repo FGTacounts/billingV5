@@ -5957,3 +5957,39 @@ over keeping within 400 ms, which would have been a flick too fast to follow).
   MapPolylines from `drawnMetres` on a ~60 fps task; same maths in
   RouteTrail (checked against the web's test numbers).
 - No Replay button — not asked for. Picking the date again replays it.
+
+2026-11-27 — Devices on one map; stays of 20+ minutes coloured by length;
+RUN-ME-48 gets past the staff guard (owner: "Make sure it is clear and easy
+to see. Make it one map instead of two. It shows the current location of the
+device + the route. Every location where the user has stayed for more than
+20mins should be shown. In different colors. e.g. green for 20mins, blue for
+30+ mins... 45mins, 1hr, 2hr, 3hr. The exact time period or ~ time period
+should be shown, rounded to the nearest 5mins." — and RUN-ME-48 failed with
+"Only a manager can change a role, access, username or sales goal").
+- **RUN-ME-48:** `guard_user_privileged_columns` (RUN-ME-3/20) lets only a
+  signed-in manager or service_role change role/is_active/auth_user_id; the
+  SQL editor is neither. Section 2 now disables that one trigger inside its DO
+  block and re-enables it at the end — a failure rolls the disable back with
+  everything else. The final check confirms the guard is on again. Proven on
+  PGlite with the guard installed.
+- **One map** (web card, app screen): nobody picked → every device's current
+  position; a device picked → its current position ("Now", text-primary
+  marker, always shown, on any date), the day's route (replayed) and its
+  stays. The separate devices map and day map, and the "Last point" marker
+  (redundant next to "Now"), are gone. Picking the device again, or "All
+  devices", goes back.
+- **Clearer:** route line 5 px over a 9 px pale casing (was 3 px), map 360 /
+  480 px tall (was 320 / 420).
+- **Stays:** findStops threshold 5 → 20 minutes. Bands by the length rounded
+  to 5 minutes: 20–25 green, 30–40 blue, 45–55 violet, 1–2 hr orange,
+  2–3 hr red, 3 hr+ dark red. The owner named green and blue and the
+  thresholds; the other four colours are my choice, spread around the hue
+  wheel and kept dark enough for the white number on the pin. New semantic
+  tokens --stay-20…--stay-180 in OKLCH, light and dark (CLAUDE.md asks
+  before new colours — the owner asked for these); the app's StayPalette
+  holds their sRGB equivalents. Pins say "~35 min" under them; the list
+  gives the place, "~10:05 – 10:40" (both ends rounded to 5 minutes) and the
+  length. Colour is never the only cue: every pin and row carries the length
+  in words, and a key lists all six bands (those on the map full strength).
+- The list's length is in normal text, not the band colour: green and orange
+  text on white fall short of 4.5:1.

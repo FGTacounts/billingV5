@@ -1,5 +1,22 @@
 # What changed, and what you need to do
 
+## 2026-11-27 — Devices: one clear map, coloured stays; RUN-ME-48 fixed
+
+**Run `scratchpad/RUN-ME-48-admins-and-device-locations.sql` again** (same
+file, now fixed). The first try stopped at the staff-account safety check
+and changed nothing. Every line at the end should say OK, including "staff
+guard switched back on". Then deploy and put the new app build on devices.
+
+- Planning → Devices is now **one map**. With nobody picked it shows where
+  every device is. Pick someone: the map shows where their device is **now**,
+  the route they drove that day (it draws itself in), and **every place they
+  stayed 20 minutes or more**, coloured by how long:
+  green 20–25 min · blue 30–40 · purple 45–55 · orange 1–2 hr ·
+  red 2–3 hr · dark red 3 hr+. Each pin and each row gives the length and
+  the times, rounded to the nearest 5 minutes (e.g. "~10:05 – 10:40 ·
+  ~35 min"), with the address.
+- The route line is thicker, with a white edge, and the map is taller.
+
 ## 2026-11-27 — Every device's location, admins only; Ajnaz and Bilal are admins
 
 **Run `scratchpad/RUN-ME-48-admins-and-device-locations.sql` in Supabase**

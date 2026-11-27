@@ -16,6 +16,16 @@
   --status-warning: #ff9500;
   --status-danger: #ff3b30;
   --status-info: #007aff;
+  /* How long somebody stayed somewhere, on the Devices map (owner,
+     2026-11-27: "green for 20mins, blue for 30+ mins... 45mins, 1hr, 2hr,
+     3hr"). Rounded to 5 minutes: 20–25, 30–40, 45–55, 1–2 hr, 2–3 hr, 3 hr+.
+     Mirrored in the app as StayPalette. */
+  --stay-20: oklch(0.64 0.15 160);
+  --stay-30: oklch(0.57 0.17 255);
+  --stay-45: oklch(0.54 0.2 300);
+  --stay-60: oklch(0.65 0.17 55);
+  --stay-120: oklch(0.57 0.21 27);
+  --stay-180: oklch(0.42 0.16 355);
   --hairline: #3c3c4326;
   /* Same colors as space-separated RGB channels, for Tailwind utilities
      that take an opacity modifier (bg-accent/12, border-accent/50, …).
@@ -46,6 +56,12 @@
   --status-warning: #ff9f0a;
   --status-danger: #ff453a;
   --status-info: #0a84ff;
+  --stay-20: oklch(0.72 0.15 160);
+  --stay-30: oklch(0.65 0.17 255);
+  --stay-45: oklch(0.62 0.2 300);
+  --stay-60: oklch(0.73 0.17 55);
+  --stay-120: oklch(0.65 0.21 27);
+  --stay-180: oklch(0.5 0.16 355);
   --hairline: #54545829;
   --text-secondary-rgb: 154 153 165;
   --accent-rgb: 52 217 168;
@@ -68,6 +84,12 @@
     --status-warning: #ff9f0a;
     --status-danger: #ff453a;
     --status-info: #0a84ff;
+    --stay-20: oklch(0.72 0.15 160);
+    --stay-30: oklch(0.65 0.17 255);
+    --stay-45: oklch(0.62 0.2 300);
+    --stay-60: oklch(0.73 0.17 55);
+    --stay-120: oklch(0.65 0.21 27);
+    --stay-180: oklch(0.5 0.16 355);
     --hairline: #54545829;
     --text-secondary-rgb: 154 153 165;
     --accent-rgb: 52 217 168;

@@ -1788,6 +1788,25 @@ export const en = {
   "planning.originNotFound": "Couldn't find \"{origin}\" on the map. Try a more complete address.",
   "planning.noAddressesFound": "None of those addresses could be found on the map.",
   "planning.couldNotWorkOutRoute": "Could not work out a route",
+  // The road a salesman's device drove (RUN-ME-46).
+  "planning.drivenTitle": "Route driven",
+  "planning.drivenHint": "Recorded by the salesman's iPhone or iPad during working hours.",
+  "planning.drivenDate": "Date",
+  "planning.drivenPickSalesman": "Choose a salesman",
+  "planning.drivenPickSalesmanHint": "Choose a salesman to see the route their device recorded that day.",
+  "planning.drivenNothing": "No route was recorded for {name} on {date}.",
+  "planning.drivenNothingHint":
+    "The device records only during working hours, while the salesman is signed in and location is allowed.",
+  "planning.drivenSummary": "{distance} · {from} – {to} · {points} points",
+  "planning.drivenFinish": "Last point",
+  "planning.drivenFinishLabel": "Last point: {time}",
+  "planning.drivenStartLabel": "First point: {time}",
+  "planning.drivenMapAriaLabel":
+    "Map of the route {name} drove on {date}: {distance} between {from} and {to}.",
+  "planning.drivenGaps": "Gaps where nothing was recorded are left out of the line and the distance.",
+  "planning.trackBadRequest": "salesmanId, from and to are required, at most two days apart",
+  "planning.trackNotAllowed": "You can only see your own route.",
+  "planning.trackCouldntLoad": "Couldn't load the route.",
 
   // ---- inbox ------------------------------------------------------------
   "inbox.needsYourAttention": "Needs your attention",

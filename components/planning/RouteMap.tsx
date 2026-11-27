@@ -106,12 +106,24 @@ function currentColorScheme(mapkit: any): any {
 }
 
 export default function RouteMap({
-  stops,
+  stops = [],
   origin,
+  trail,
+  finish,
+  ariaLabel,
   className = "",
 }: {
-  stops: RouteMapStop[];
+  stops?: RouteMapStop[];
   origin?: RouteMapOrigin | null;
+  /**
+   * A road already driven (the "Route driven" card): stretches of recorded
+   * points, drawn as they are — no directions are asked for, the device has
+   * already said where it went. When given, `origin` is its first point and
+   * `finish` its last.
+   */
+  trail?: { lat: number; lon: number }[][];
+  finish?: RouteMapOrigin | null;
+  ariaLabel?: string;
   className?: string;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -198,6 +210,12 @@ export default function RouteMap({
   //    change — dragging a stop up the list moves its number on the map too.
   const stopsKey = stops.map((s) => `${s.customerId}:${s.lat}:${s.lon}:${s.tone}`).join("|");
   const originKey = origin ? `${origin.lat}:${origin.lon}` : "";
+  const finishKey = finish ? `${finish.lat}:${finish.lon}` : "";
+  // A day's trail is fetched once per salesman and date; its length and both
+  // ends are enough to tell one from another.
+  const trailKey = trail
+    ? `${trail.length}:${trail.reduce((n, s) => n + s.length, 0)}:${trail[0]?.[0]?.lat}:${trail.at(-1)?.at(-1)?.lon}`
+    : "";
 
   useEffect(() => {
     if (!ready) return;
@@ -222,6 +240,17 @@ export default function RouteMap({
         })
       );
     }
+    if (finish) {
+      annotations.push(
+        new mapkit.MarkerAnnotation(coordinate(finish.lat, finish.lon), {
+          color: token("--text-secondary", accent),
+          glyphText: "■", // where the recording ended
+          title: t("planning.drivenFinish"),
+          subtitle: finish.label,
+          accessibilityLabel: t("planning.drivenFinishLabel", { time: finish.label }),
+        })
+      );
+    }
     stops.forEach((stop, i) => {
       annotations.push(
         new mapkit.MarkerAnnotation(coordinate(stop.lat, stop.lon), {
@@ -240,6 +269,23 @@ export default function RouteMap({
     ];
 
     const lineStyle = new mapkit.Style({ lineWidth: 3, lineJoin: "round", strokeColor: accent });
+
+    if (trail) {
+      const lines = trail
+        .filter((segment) => segment.length >= 2)
+        .map((segment) => new mapkit.PolylineOverlay(segment.map((p) => coordinate(p.lat, p.lon)), { style: lineStyle }));
+      map.removeAnnotations(map.annotations);
+      map.removeOverlays(map.overlays);
+      if (annotations.length) map.addAnnotations(annotations);
+      if (lines.length) map.addOverlays(lines);
+      if (annotations.length || lines.length) {
+        map.showItems([...annotations, ...lines], {
+          animate: !reducedMotion,
+          padding: new mapkit.Padding({ top: 48, right: 48, bottom: 48, left: 48 }),
+        });
+      }
+      return;
+    }
     // Drawn straight away so there is always a line between the pins; the
     // real road geometry replaces it below once Apple has worked it out.
     const straight =
@@ -297,7 +343,7 @@ export default function RouteMap({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, stopsKey, originKey, reducedMotion]);
+  }, [ready, stopsKey, originKey, finishKey, trailKey, reducedMotion]);
 
   // Nothing at all rather than an empty card: with no Apple Maps credentials
   // the page must look exactly the way it looked before there was a map.
@@ -309,7 +355,7 @@ export default function RouteMap({
         ref={containerRef}
         className="w-full h-[320px] md:h-[420px] rounded-inner overflow-hidden bg-canvas"
         role="region"
-        aria-label={t("planning.mapAriaLabel", { n: stops.length })}
+        aria-label={ariaLabel ?? t("planning.mapAriaLabel", { n: stops.length })}
       />
     </Card>
   );

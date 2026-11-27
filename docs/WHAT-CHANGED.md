@@ -1,5 +1,34 @@
 # What changed, and what you need to do
 
+## 2026-11-27 — Routes are recorded until midnight, not noon
+
+**Run `scratchpad/RUN-ME-47-route-log-until-midnight.sql` in Supabase**
+(billing project). RUN-ME-46 is already in. Its last line should show 5 and
+24. Nothing to deploy; devices pick up the new hours the next time the app
+opens. The next app build also assumes midnight before it has asked.
+
+## 2026-11-27 — Salesmen's daily route, recorded by their iPhones and iPads
+
+**Run `scratchpad/RUN-ME-46-salesman-route-log.sql` in Supabase** (billing
+project — check the address bar says `isdeheipdfmwzmmnnidr`). The last lines
+it prints should all say OK. Then deploy the web app, and give the iPhones
+and iPads a new app build. The Mac needs the build too, for viewing.
+
+- While a salesman is signed in, the app records the road the device drives
+  between **5 am and midnight**, a point about every 150 m, and uploads it in
+  batches. Nobody else is recorded, and nothing outside those hours.
+- **On each device, once:** when the app asks for location, choose "Allow
+  While Using App". When it asks again, choose **"Change to Always Allow"**,
+  or the route stops when the app is in the background. The blue location
+  indicator shows while it records.
+- **To see a route:** Planning → "Route driven" (web: the card under the filters;
+  app: the ••• menu). Pick the salesman and the date.
+- **Different hours?** Edit the two numbers in RUN-ME-47
+  (`select 5, 24;` — 24 means midnight) and run it again. No app update
+  needed.
+- Routes are kept forever. A Wi-Fi-only iPad has no GPS and will record very
+  little away from Wi-Fi; the Wi-Fi + Cellular models are fine.
+
 ## 2026-11-22 — Expense list shows every expense, in a steady order
 
 Nothing to run in Supabase. Deploy the web app; the app needs a new build

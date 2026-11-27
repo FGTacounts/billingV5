@@ -5820,3 +5820,62 @@ random like this").
   nothing has been logged for November 2026 yet, so they read AED 0.00 with
   last month (AED 65,800.54) underneath; the category donut is hidden for
   the same reason. Not changed without the owner asking.
+
+2026-11-27 — Salesman route log: the road each salesman's iPhone or iPad
+drives, kept per day (owner: "track where the salesmen goes with our company
+owned ipads … the route path should be logged each day … not only on ipads,
+but also iphones … fixed hours, morning 5am to 12pm … forever if possible or
+a year is fine").
+- **Built into the Billing app, not device management.** Find My keeps no
+  history and an MDM cannot track continuously (only Lost Mode, which locks
+  the device) and is paid. `RouteTracker.swift` records a point every ~150 m
+  driven while a **salesman** is signed in, inside the window; anyone else
+  signed in on the device records nothing. Not on the Mac (nobody drives it).
+- **Window = 05:00 to 12:00 noon, device clock**, read from
+  `location_tracking_hours()` (RUN-ME-46) so it changes with one SQL edit
+  and no app release. The owner wrote "5am to 12pm" and added that hours vary
+  by salesman; taken literally as noon. If midnight was meant, change the
+  function to `select 5, 24`. Not enforced by the database: a server-side
+  check would need one time zone, and overseas (country-stock) staff would be
+  hours off.
+- **Kept forever** (no deletion policy, no purge). Size, not egress, is the
+  limit: ~500–1,000 points per salesman per busy day, ~100 KB with the index,
+  so roughly 30 MB per salesman per year against the Free plan's 500 MB
+  database (32 MB used in Nov). Revisit when the database nears it.
+- **No timers** (egress lesson, 2026-11-08). Batches go up when 40 points
+  wait, when the oldest is 10 minutes old, on pause, or when the app comes
+  forward — all from the location callbacks. An upload is an insert with a
+  one-number reply. The queue is a file per user, capped at 20,000 points.
+- **Battery:** iOS may pause the GPS when the device stops (inside a shop);
+  the significant-change service wakes it and also relaunches a closed app.
+  The cost: up to a few hundred metres missing after a long stop.
+- **Honest by design (rule 10):** the permission prompt says what it is for,
+  iOS's location indicator shows while recording in the background
+  (`showsBackgroundLocationIndicator`), and a salesman may read their own
+  points (RLS) though only managers get a screen for it.
+- **Write path is an RPC**, `log_location_points(jsonb)`, SECURITY INVOKER,
+  that stamps `user_id = current_app_user_id()` itself and ignores points
+  already stored (key = user_id + recorded_at), so a retried batch is not
+  doubled. No update/delete policy; TRUNCATE revoked too, since Supabase's
+  default grants include it and RLS does not stop it. Proven on PGlite with
+  stub auth functions: own insert OK, insert as another user refused,
+  update/delete/truncate refused, salesman sees own only, manager sees all,
+  anon refused.
+- **Viewer: "Route driven"** on Planning for managers — a card on the web
+  (`DrivenRoute.tsx`, `/api/planning/track`), a menu item opening
+  `DrivenRouteSheet.swift` on iPhone/iPad/Mac. One salesman, one date, the
+  line, the first/last time and the distance. A pause over 20 minutes that
+  ends over 1 km away breaks the line and is not counted as distance
+  (`lib/routeTrail.ts` / `RouteTrail`), so a switched-off phone does not draw
+  a straight line across town. Planned stops and visits are not overlaid —
+  not asked for.
+- **Not done / unknown:** whether the iPads are Wi-Fi + Cellular (a Wi-Fi-only
+  iPad has no GPS and will record little on the road); each device must be
+  allowed location "Always" once by hand.
+
+2026-11-27 — Route log window is 5 am to MIDNIGHT (owner: "5am to 12am"),
+correcting the noon reading above. Changed in the database
+(`location_tracking_hours()` → 5, 24; RUN-ME-47, and RUN-ME-46 updated so a
+re-run does not put noon back) and in the app's fallback for a device that
+has not asked yet. RUN-ME-46 confirmed live the same day (location_points
+present; the hours function answers anon with 42501, not "not found").

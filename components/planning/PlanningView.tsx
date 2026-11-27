@@ -16,6 +16,7 @@ import { Pill } from "@/components/ui/Badge";
 import { TextInput } from "@/components/ui/Field";
 import { EmptyState, SkeletonList } from "@/components/ui/Empty";
 import RouteMap, { type RouteMapStop, type RouteMapOrigin } from "./RouteMap";
+import DrivenRoute from "./DrivenRoute";
 
 const TIER_TONE: Record<PriorityTier, "danger" | "accent" | "warning" | "neutral"> = {
   overdue: "danger",
@@ -426,6 +427,10 @@ export default function PlanningView({ user }: { user: AppUser }) {
         </div>
         {routeError && <div className="mt-2 text-caption text-[--status-danger]">{routeError}</div>}
       </Card>
+
+      {/* The road each salesman's device actually drove, one day at a time
+          (RUN-ME-46). Managers only; absent until that SQL has been run. */}
+      {isManager && <DrivenRoute salesmen={salesmen} />}
 
       {/* The map (parity with the phone). Appears once the stops have been
           placed on it — before that, and whenever Apple Maps is not set up,

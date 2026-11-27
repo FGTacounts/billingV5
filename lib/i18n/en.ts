@@ -57,8 +57,6 @@ export const en = {
   "nav.nothingHereYet": "Nothing here yet",
   "nav.signOut": "Sign out",
   "nav.signingOut": "Signing out…",
-  "nav.openAssistant": "Open Famlist Assistant in a new tab",
-  "nav.assistant": "Famlist Assistant",
   "nav.role.salesman": "Salesman",
   "nav.role.manager": "Manager",
   "nav.role.warehouse": "Warehouse",

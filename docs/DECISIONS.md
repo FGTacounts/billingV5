@@ -5993,3 +5993,14 @@ should be shown, rounded to the nearest 5mins." — and RUN-ME-48 failed with
   in words, and a key lists all six bands (those on the map full strength).
 - The list's length is in normal text, not the band colour: green and orange
   text on white fall short of 4.5:1.
+
+## 2026-11-27 — Famlist Assistant button removed (web + iPhone/iPad/Mac)
+
+Removed at the owner's request ("remove the https://famlist-assistant.vercel.app
+button"). This reverses the 2026-09-08 entry above, which added it. Web: the
+sparkles link beside the account menu in `components/nav/Topbar.tsx` and its two
+strings (`nav.openAssistant`, `nav.assistant`). App: the shared
+`AssistantButton.swift` and its three uses in the manager, salesman and
+warehouse dashboard toolbars, so the Mac Catalyst build loses it too. The
+assistant app itself is untouched — it is still at its own address, just no
+longer linked from billing.

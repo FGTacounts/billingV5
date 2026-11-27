@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Settings, Inbox, ArrowRight, LogOut, ChevronDown, Sparkles } from "lucide-react";
+import { Settings, Inbox, ArrowRight, LogOut, ChevronDown } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { springEnter, durations, EASE_OUT, usePrefersReducedMotion, respectMotion } from "@/lib/motion";
 import NotificationsBell from "@/components/NotificationsBell";
@@ -107,19 +107,6 @@ export default function Topbar({ user }: { user: AppUser }) {
         </AnimatePresence>
       </div>
 
-      {/* Famlist Assistant — a separate Vercel app, so it opens in its own
-          tab rather than an iframe: it signs in through Vercel, and that
-          flow does not survive being framed. */}
-      <a
-        href="https://famlist-assistant.vercel.app/"
-        target="_blank"
-        rel="noopener noreferrer"
-        className="w-9 h-9 grid place-items-center rounded-full hover:bg-black/5 dark:hover:bg-white/10 transition shrink-0"
-        aria-label={t("nav.openAssistant")}
-        title={t("nav.assistant")}
-      >
-        <Sparkles size={17} className="text-secondary" />
-      </a>
       </div>
 
       <div className="flex items-center gap-2">

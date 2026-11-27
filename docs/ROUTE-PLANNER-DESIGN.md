@@ -56,12 +56,21 @@ planRoute(input) -> Route
 
 ### Step 1 — Candidates
 Active customers assigned to **the person asking, and only them.** Nobody
-asks for, or hears, another salesman's route. An admin uses the door they
+asks Siri for, or hears, another salesman's route. A manager can still open
+any salesman's recommended route on the Planning screen, using the picker
+that is there today. An admin uses the door they
 signed in through (2026-11-27). The candidates exclude:
 - shops with a visit logged today (`route_visits.arrived_at` on today's
   Dubai date);
 - shops removed by hand from today's route (already remembered on the
   device).
+
+**Recently served shops go to the bottom.** A shop with a visit logged in the
+last 3 days *and* an order from it in that time moves below every other
+stop, unless it is overdue. Without this rule, the invoice from yesterday's
+order would put the shop straight back on today's list as "payment to
+collect". A visit that produced no order changes nothing; that shop still
+needs one.
 
 ### Step 2 — Rank (unchanged from today)
 | Tier | Rule | Order inside the tier |
@@ -207,7 +216,7 @@ alter table public.customers
 The existing RLS and FORCE on `customers` already cover these columns. They
 add no new table and no new policy, and `test:tenancy` still applies.
 
-Three ways a shop could get its location, best first (owner to choose, §7):
+How a shop gets its location (owner: "save the location"):
 1. **Pinned.** "Save this shop's location here" on the customer screen,
    pressed while standing in the shop. It is never overwritten
    automatically.
@@ -215,9 +224,11 @@ Three ways a shop could get its location, best first (owner to choose, §7):
    shop with no location, the phone's position at that moment is saved as
    the shop's location. This records where the shop is. It plays no part in
    planning anyone's route.
-3. **From the address.** A one-off backfill job on the queue (rule 8) runs
-   every address through the Apple Maps geocoder the web already uses. It
-   is a last resort and never overwrites 1 or 2.
+
+Not proposed now: geocoding every address in one batch job. It is the least
+accurate way, and the owner chose to save real locations. Until a shop has
+a saved location, the planner falls back to what it does today, geocoding
+the address, and marks the stop "no location saved".
 
 ## 5. What does not change
 - No `routes` table. Today's route stays one person's working order, kept on
@@ -231,10 +242,9 @@ Three ways a shop could get its location, best first (owner to choose, §7):
 1. `planRoute` on the web + shared fixtures + tests. Planning's
    "Recommended" uses it. *(web)*
 2. The same in Swift, passing the same fixtures. *(iOS/Mac)*
-3. RUN-ME-49 shop locations, and whichever ways of filling them the owner
-   picks. *(both)*
+3. RUN-ME-49 shop locations, the "Save this shop's location here" button,
+   and saving on Arrived. *(both)*
 4. `PlanTodayRouteIntent` + phrases + snippet card. *(iOS/Mac)*
-5. The address backfill job, if chosen. *(web queue)*
 
 ## 7. Owner decisions
 
@@ -248,15 +258,17 @@ Answered 2026-11-27:
 5. **Starting point:** by city (Sharjah, Dubai, Ajman…), not by where the
    device is now.
 
-Still open:
-6. **Shop locations:** pin, save on arrival, and address backfill — all
-   three, or which?
-7. **Siri wording:** set up the "Give me a route for today" shortcut on each
-   phone, or rename the app for Siri?
-8. **Recently visited:** should a shop visited in the last few days drop down
-   the list unless it is overdue? Without this, the same city can win every
-   day until its shops are cleared.
-9. **The manager's salesman picker on the Planning screen.** It exists today
-   on both apps and lets a manager view any salesman's recommended route.
-   Answer 4 could mean it should go. It stays unless the owner says remove
-   it (rule 1).
+Answered 2026-11-27, second round:
+6. **Shop locations:** "save the location". Saved from the shop itself, by
+   the Pin button or on Arrived. No address backfill job.
+7. **Siri wording:** accepted. The built-in phrases carry the app's name.
+   Anyone who wants the exact words "give me a route for today" sets up the
+   personal Shortcut once. The app is not renamed.
+8. **Recently visited:** a shop drops down only if it was visited in the
+   last 3 days *and* ordered. Overdue shops never drop.
+9. **Managers on Planning:** the salesman picker stays. A manager can still
+   see any salesman's recommended route on the Planning screen. Siri is
+   always the asker's own route.
+
+Engineer's reading, to confirm while building: "3 days" for recently
+visited was the draft's figure, and the owner did not name another.

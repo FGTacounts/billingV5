@@ -6043,3 +6043,16 @@ Siri ('hey Siri, give me a route for today')". Design in
   left out" rule, which could not hold alongside a 200 km route.
 - Flagged, not changed: the existing manager salesman picker on Planning
   stays until the owner says to remove it (rule 1).
+
+2026-11-27 — Route planner: the owner's second answers, folded into
+`docs/ROUTE-PLANNER-DESIGN.md`; the design has no open questions left —
+- Shop locations: "save the location". Saved from the shop itself, by a
+  Pin button or on Arrived. The address-geocoding backfill job is dropped.
+  Until a shop is saved, the planner geocodes its address as it does today.
+- Siri wording accepted. Phrases carry "in FGT Billing", the exact words
+  need a one-time personal Shortcut, and the app is not renamed.
+- A shop drops to the bottom only when it was visited in the last 3 days
+  AND ordered. The reason: the new invoice would otherwise send the
+  salesman straight back to collect it. Overdue never drops. "3 days" is
+  the draft's figure, not one the owner named.
+- The manager's salesman picker on Planning stays; Siri is own-route only.

@@ -6004,3 +6004,24 @@ strings (`nav.openAssistant`, `nav.assistant`). App: the shared
 warehouse dashboard toolbars, so the Mac Catalyst build loses it too. The
 assistant app itself is untouched — it is still at its own address, just no
 longer linked from billing.
+
+## 2026-11-27 — Route planner with Siri: design written, not built
+
+Owner asked for "a route planner… based on the data, not AI… compatible with
+Siri ('hey Siri, give me a route for today')". Design in
+`docs/ROUTE-PLANNER-DESIGN.md`; nothing is built until the owner answers its
+§7 questions. Choices made in the design, for the record:
+- It extends the 2026-09-18 planner (same tiers, hand order still on the
+  device, no `routes` table) rather than starting a second one.
+- One pure `planRoute` per app, checked against shared JSON fixtures. A
+  Postgres `plan_route()` was rejected because it would be a third copy of the
+  aging rules.
+- Siri reads cached data and uses straight-line distance between saved shop
+  locations, so the answer is instant and adds no egress. Apple's live travel
+  times stay a button on the Planning screen.
+- The only schema change proposed is `customers.latitude/longitude`
+  (+ source, set_at). Today no customer has a stored location, and geocoding
+  UAE addresses is the reason routes jump around.
+- Apple will not register a Siri phrase without the app name in it, so the
+  exact words "give me a route for today" need a one-time personal Shortcut
+  (or a shorter app name). This is written down so nobody promises otherwise.

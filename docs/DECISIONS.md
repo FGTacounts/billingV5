@@ -6025,3 +6025,21 @@ Siri ('hey Siri, give me a route for today')". Design in
 - Apple will not register a Siri phrase without the app name in it, so the
   exact words "give me a route for today" need a one-time personal Shortcut
   (or a shorter app name). This is written down so nobody promises otherwise.
+
+2026-11-27 — Route planner: the owner's first answers, folded into
+`docs/ROUTE-PLANNER-DESIGN.md` —
+- No limit on stops. About 10–12 is expected when shops are near.
+- "Nearby" is 50 km, and a whole route stays within 200 km. The draft's
+  15 km was far too small for how the UAE is covered.
+- Siri says no money amounts, and its card shows none (the card can sit on
+  the lock screen). Counts and shop names only.
+- Everyone asks for their own route only. The Siri intent has no salesman
+  parameter.
+- A route is chosen by city (`customers.district`: Sharjah, Dubai, Ajman…),
+  never by the device's position. Engineer's reading: the route starts at
+  its highest-ranked shop, and "Start driving" leaves the way to stop 1 to
+  Apple Maps. A shop more than 200 km from the rest is left for its own
+  city's day, even if overdue. This replaces the draft's "overdue is never
+  left out" rule, which could not hold alongside a 200 km route.
+- Flagged, not changed: the existing manager salesman picker on Planning
+  stays until the owner says to remove it (rule 1).

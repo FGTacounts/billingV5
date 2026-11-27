@@ -1,6 +1,6 @@
 import "server-only";
 import { cache } from "react";
-import { headers } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { createClient } from "@supabase/supabase-js";
 import { supabaseServer } from "./supabase/server";
 import type { AppUser } from "./types/db";
@@ -22,6 +22,28 @@ const USER_COLUMNS =
  * rules apply exactly as they do for the web. A forged or expired token
  * yields null, the same as no token at all.
  */
+/**
+ * Which door an admin came in by (owner, 2026-11-27: "if bilal … selects
+ * warehouse and then signs in, he will have access to the account as a
+ * warehouse user; if he signs in in the salesman's page, he is treated as a
+ * salesman; and if he signs in through the manager, he is treated as an
+ * admin").
+ *
+ * The sign-in form leaves the door in the `fgt-act-as` cookie; the iPhone,
+ * iPad and Mac app send it as an `X-Act-As` header. Only ever a step DOWN,
+ * and only for an account the database says is an admin: anybody else's
+ * claim is ignored, so nobody can talk their way up. Row rules (RLS) still
+ * see the real admin — this decides what the app shows and allows.
+ */
+export const ACT_AS_COOKIE = "fgt-act-as";
+const ACT_AS_ROLES = ["salesman", "warehouse"] as const;
+
+function actingAs(user: AppUser, requested: string | null | undefined): AppUser {
+  if (user.role !== "admin" || !requested) return user;
+  const role = requested.toLowerCase();
+  return (ACT_AS_ROLES as readonly string[]).includes(role) ? { ...user, role: role as AppUser["role"] } : user;
+}
+
 async function callerFromBearerToken(): Promise<AppUser | null> {
   const authorization = headers().get("authorization");
   if (!authorization?.startsWith("Bearer ")) return null;
@@ -49,7 +71,7 @@ async function callerFromBearerToken(): Promise<AppUser | null> {
     .maybeSingle();
 
   if (error || !data || !data.is_active) return null;
-  return data as AppUser;
+  return actingAs(data as AppUser, headers().get("x-act-as"));
 }
 
 // The authenticated caller's `users` row (id, role, name, …), or null if not
@@ -81,7 +103,7 @@ async function readAppUser(): Promise<AppUser | null> {
     .maybeSingle();
 
   if (error || !data || !data.is_active) return null;
-  return data as AppUser;
+  return actingAs(data as AppUser, cookies().get(ACT_AS_COOKIE)?.value);
 }
 
 // True if there's a live Supabase Auth session, regardless of whether it has

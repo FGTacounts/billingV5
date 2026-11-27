@@ -62,3 +62,55 @@ export function trailDistanceMetres(segments: readonly TrailPoint[][]): number {
   }
   return Math.round(total);
 }
+
+/**
+ * Somewhere the device stayed: points that all sit within STOP_METRES of the
+ * first of them, for at least STOP_MINUTES. The device records a point only
+ * after moving ~150 m, so standing still produces no points — the stay runs
+ * from the first point there to the first point recorded after leaving.
+ * If what comes next is a gap (see splitTrail), the stay ends at its own last
+ * point instead: nobody knows when the device left.
+ */
+export const STOP_METRES = 250;
+export const STOP_MINUTES = 5;
+
+export interface Stop {
+  lat: number;
+  lon: number;
+  /** ISO instants: first point there, and when it was seen leaving. */
+  from: string;
+  to: string;
+  minutes: number;
+}
+
+export function findStops(points: readonly TrailPoint[]): Stop[] {
+  const stops: Stop[] = [];
+  let i = 0;
+  while (i < points.length) {
+    const anchor = points[i];
+    let j = i + 1;
+    while (j < points.length && haversineMetres(anchor, points[j]) <= STOP_METRES) j++;
+    // points[i..j-1] are the run; points[j] (if any) is the first one away.
+    const lastHere = points[j - 1];
+    const next = points[j];
+    let leftAt = lastHere.t;
+    if (next) {
+      const minutes = (Date.parse(next.t) - Date.parse(lastHere.t)) / 60_000;
+      const isGap = minutes > GAP_MINUTES && haversineMetres(lastHere, next) > GAP_METRES;
+      if (!isGap) leftAt = next.t;
+    }
+    const minutes = Math.round((Date.parse(leftAt) - Date.parse(anchor.t)) / 60_000);
+    if (minutes >= STOP_MINUTES) {
+      const run = points.slice(i, j);
+      stops.push({
+        lat: run.reduce((n, p) => n + p.lat, 0) / run.length,
+        lon: run.reduce((n, p) => n + p.lon, 0) / run.length,
+        from: anchor.t,
+        to: leftAt,
+        minutes,
+      });
+    }
+    i = j;
+  }
+  return stops;
+}

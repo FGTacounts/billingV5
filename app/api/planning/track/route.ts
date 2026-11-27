@@ -6,17 +6,18 @@ import { t } from "@/lib/i18n";
 
 export const runtime = "nodejs";
 
-// The road one salesman's device drove between two instants — one day on the
-// Planning page (owner, 2026-11-27: "the route path should be logged each
-// day"). The phone writes public.location_points (RUN-ME-46); this only reads.
+// The road one device drove between two instants — one day on the Planning
+// page (owner, 2026-11-27: "the route path should be logged each day … which
+// all locations the user/device has been to … only to the admin"). The app
+// writes public.location_points (RUN-ME-46/48); this only reads.
 //
-// A manager or admin may ask for anybody; a salesman only for themselves.
-// RLS says the same thing — this check is here so the answer is a clear 403
-// rather than an empty route that looks like a day nobody drove.
+// Admins only (RUN-ME-48 took managers off). RLS says the same — this check
+// is here so the answer is a clear 403 rather than an empty route that looks
+// like a day nobody drove.
 //
 // `from` and `to` are ISO instants the browser works out from its own
 // midnight, the same way the visit log does: the server has no idea what day
-// it is where the manager is sitting.
+// it is where the admin is sitting.
 //
 // Until RUN-ME-46 has been run the table is not there: `available: false`,
 // and the page leaves the section out.
@@ -41,30 +42,30 @@ export async function GET(req: NextRequest) {
   if (!user) return NextResponse.json({ error: t("common.notSignedIn") }, { status: 401 });
 
   const params = req.nextUrl.searchParams;
-  const salesmanId = params.get("salesmanId") ?? "";
+  const deviceId = params.get("deviceId") ?? "";
   const from = Date.parse(params.get("from") ?? "");
   const to = Date.parse(params.get("to") ?? "");
-  if (!salesmanId || Number.isNaN(from) || Number.isNaN(to) || to <= from || to - from > MAX_SPAN_MS) {
+  if (!deviceId || Number.isNaN(from) || Number.isNaN(to) || to <= from || to - from > MAX_SPAN_MS) {
     return NextResponse.json({ error: t("planning.trackBadRequest") }, { status: 400 });
   }
 
-  const isManager = user.role === "manager" || user.role === "admin";
-  if (!isManager && salesmanId !== user.id) {
-    return NextResponse.json({ error: t("planning.trackNotAllowed") }, { status: 403 });
+  if (user.role !== "admin") {
+    return NextResponse.json({ error: t("planning.devicesAdminOnly") }, { status: 403 });
   }
 
   const db = supabaseCaller();
   try {
-    // (user_id, recorded_at) is the key, so recorded_at alone is a stable,
-    // unique order inside one person's rows — what paging needs.
+    // One device is used by one person at a time, so recorded_at is unique
+    // within its rows; user_id breaks a tie if two ever shared an instant.
     const rows = await fetchAllPages<PointRow>((lo, hi) =>
       db
         .from("location_points")
-        .select("recorded_at, latitude, longitude, accuracy_m")
-        .eq("user_id", salesmanId)
+        .select("recorded_at, latitude, longitude, accuracy_m, user_id")
+        .eq("device_id", deviceId)
         .gte("recorded_at", new Date(from).toISOString())
         .lt("recorded_at", new Date(to).toISOString())
         .order("recorded_at", { ascending: true })
+        .order("user_id", { ascending: true })
         .range(lo, hi)
     );
     // Short keys: a busy day is a thousand of these.

@@ -37,6 +37,10 @@ export interface RouteMapStop {
   lat: number;
   lon: number;
   tone: MapPinTone;
+  /** What the pin shows. The stop's place in the list (1, 2, 3…) when absent. */
+  glyph?: string;
+  /** Read out instead of "Stop n: name". */
+  accessibilityLabel?: string;
 }
 
 export interface RouteMapOrigin {
@@ -89,6 +93,61 @@ function loadMapKitScript(): Promise<void> {
 
 let initialised = false;
 
+/**
+ * MapKit loaded and initialised, or null when Apple Maps is not configured
+ * or cannot be reached. Shared by the maps and by `placeName`.
+ */
+async function ensureMapKit(): Promise<any | null> {
+  const first = await fetchToken().catch(() => null);
+  if (!first) return null;
+  try {
+    await loadMapKitScript();
+  } catch {
+    return null;
+  }
+  const mapkit = window.mapkit;
+  if (!mapkit) return null;
+  if (!initialised) {
+    initialised = true;
+    mapkit.init({
+      authorizationCallback: (done: (t: string) => void) => {
+        // Called again whenever the token nears expiry, so this asks the
+        // server each time rather than replaying the first one.
+        fetchToken()
+          .then((t) => done(t ?? first))
+          .catch(() => done(first));
+      },
+    });
+  }
+  return mapkit;
+}
+
+/**
+ * A short address for a coordinate ("Al Rigga Rd, Deira"), from Apple's
+ * reverse geocoder, or null. Used for the "Places visited" list.
+ */
+export async function placeName(lat: number, lon: number): Promise<string | null> {
+  const mapkit = await ensureMapKit();
+  if (!mapkit) return null;
+  return new Promise((resolve) => {
+    try {
+      new mapkit.Geocoder({ getsUserLocation: false }).reverseLookup(
+        new mapkit.Coordinate(lat, lon),
+        (error: unknown, data: any) => {
+          const place = !error && data?.results?.length ? data.results[0] : null;
+          if (!place) return resolve(null);
+          const parts = [place.name, place.subLocality ?? place.locality].filter(
+            (part: unknown, i: number, all: unknown[]) => typeof part === "string" && part && all.indexOf(part) === i
+          );
+          resolve(parts.length ? parts.join(", ") : place.formattedAddress ?? null);
+        }
+      );
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
 /** Fetches a fresh developer token every time MapKit asks for one. */
 async function fetchToken(): Promise<string | null> {
   const res = await fetch("/api/planning/mapkit-token");
@@ -110,6 +169,7 @@ export default function RouteMap({
   origin,
   trail,
   finish,
+  connectStops = true,
   ariaLabel,
   className = "",
 }: {
@@ -123,6 +183,11 @@ export default function RouteMap({
    */
   trail?: { lat: number; lon: number }[][];
   finish?: RouteMapOrigin | null;
+  /**
+   * False for pins that are not a journey (where every device is now): no
+   * line between them and no directions asked for.
+   */
+  connectStops?: boolean;
   ariaLabel?: string;
   className?: string;
 }) {
@@ -137,36 +202,13 @@ export default function RouteMap({
     let cancelled = false;
 
     (async () => {
-      const first = await fetchToken().catch(() => null);
+      const mapkit = await ensureMapKit();
       if (cancelled) return;
-      if (!first) {
+      if (!mapkit) {
         setUnavailable(true);
         return;
       }
-
-      try {
-        await loadMapKitScript();
-      } catch {
-        if (!cancelled) setUnavailable(true);
-        return;
-      }
-      if (cancelled) return;
-
-      const mapkit = window.mapkit;
-      if (!mapkit || !containerRef.current) return;
-
-      if (!initialised) {
-        initialised = true;
-        mapkit.init({
-          authorizationCallback: (done: (t: string) => void) => {
-            // Called again whenever the token nears expiry, so this asks the
-            // server each time rather than replaying the first one.
-            fetchToken()
-              .then((t) => done(t ?? first))
-              .catch(() => done(first));
-          },
-        });
-      }
+      if (!containerRef.current) return;
 
       mapRef.current = new mapkit.Map(containerRef.current, {
         colorScheme: currentColorScheme(mapkit),
@@ -208,7 +250,8 @@ export default function RouteMap({
 
   // 3. Pins and the route line. Redrawn whenever the stops or their order
   //    change — dragging a stop up the list moves its number on the map too.
-  const stopsKey = stops.map((s) => `${s.customerId}:${s.lat}:${s.lon}:${s.tone}`).join("|");
+  // Names too: a place's address arrives after its pin is drawn.
+  const stopsKey = stops.map((s) => `${s.customerId}:${s.lat}:${s.lon}:${s.tone}:${s.glyph ?? ""}:${s.name}`).join("|");
   const originKey = origin ? `${origin.lat}:${origin.lon}` : "";
   const finishKey = finish ? `${finish.lat}:${finish.lon}` : "";
   // A day's trail is fetched once per salesman and date; its length and both
@@ -255,10 +298,10 @@ export default function RouteMap({
       annotations.push(
         new mapkit.MarkerAnnotation(coordinate(stop.lat, stop.lon), {
           color: token(TONE_VARIABLE[stop.tone], accent),
-          glyphText: String(i + 1),
+          glyphText: stop.glyph ?? String(i + 1),
           title: stop.name,
           subtitle: stop.subtitle ?? "",
-          accessibilityLabel: t("planning.mapStopLabel", { n: i + 1, name: stop.name }),
+          accessibilityLabel: stop.accessibilityLabel ?? t("planning.mapStopLabel", { n: i + 1, name: stop.name }),
         })
       );
     });
@@ -270,8 +313,8 @@ export default function RouteMap({
 
     const lineStyle = new mapkit.Style({ lineWidth: 3, lineJoin: "round", strokeColor: accent });
 
-    if (trail) {
-      const lines = trail
+    if (trail || !connectStops) {
+      const lines = (trail ?? [])
         .filter((segment) => segment.length >= 2)
         .map((segment) => new mapkit.PolylineOverlay(segment.map((p) => coordinate(p.lat, p.lon)), { style: lineStyle }));
       map.removeAnnotations(map.annotations);
@@ -343,7 +386,7 @@ export default function RouteMap({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, stopsKey, originKey, finishKey, trailKey, reducedMotion]);
+  }, [ready, stopsKey, originKey, finishKey, trailKey, connectStops, reducedMotion]);
 
   // Nothing at all rather than an empty card: with no Apple Maps credentials
   // the page must look exactly the way it looked before there was a map.

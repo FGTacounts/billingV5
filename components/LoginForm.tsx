@@ -11,8 +11,10 @@ import { t } from "@/lib/i18n";
 // it: "I AM A" — Salesman / Manager / Warehouse). Picking one is not
 // decoration: an account registered as one thing cannot sign in as another,
 // so a shared tablet in the warehouse cannot quietly become a manager's
-// session. Admin is the exception, as it always has been — it is a superset
-// of every role.
+// session. Admin is the exception: it may come in by any door, and the door
+// decides what it is for the session (owner, 2026-11-27) — Salesman or
+// Warehouse makes it that role, Manager makes it the full admin. The door is
+// left in the `fgt-act-as` cookie, which lib/auth.ts honours for admins only.
 const ROLES = ["Salesman", "Manager", "Warehouse"] as const;
 type LoginRole = (typeof ROLES)[number];
 const ROLE_MEMORY_KEY = "fgt-login-role";
@@ -110,6 +112,13 @@ export default function LoginForm() {
     } catch {
       // Nothing to remember it with; sign-in still stands.
     }
+
+    // Written for everyone, read for admins only. The Manager door clears it:
+    // an admin who comes in that way is the full admin.
+    const actAs = role === "Manager" ? "" : role.toLowerCase();
+    document.cookie = actAs
+      ? `fgt-act-as=${actAs}; path=/; SameSite=Lax; max-age=${60 * 60 * 24 * 400}`
+      : "fgt-act-as=; path=/; SameSite=Lax; max-age=0";
 
     router.replace("/");
     router.refresh();

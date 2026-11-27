@@ -1,5 +1,30 @@
 # What changed, and what you need to do
 
+## 2026-11-27 — Every device's location, admins only; Ajnaz and Bilal are admins
+
+**Run `scratchpad/RUN-ME-48-admins-and-device-locations.sql` in Supabase**
+(billing project — address bar says `isdeheipdfmwzmmnnidr`). To see what was
+wrong with Bilal's account first, select only section 1 and Run it, and
+send me what it shows; then run the whole file. The last lines should all
+say OK. Then deploy the web app and put the new app build on every iPhone,
+iPad and Mac.
+
+- **Everyone is recorded now**, every role, on iPhone, iPad and Mac, from
+  5 am to midnight while signed in. On each device, allow location
+  ("Always" on iPhone/iPad). A Mac records while the app is open.
+- **Only admins can see it.** Managers no longer can. Planning → "Devices"
+  (web: the card under the filters; app: the ••• menu) shows where every
+  device is now and when the app was last open. Pick one to see its route
+  for a day and the **places it stayed** 5 minutes or more, with addresses.
+- **Ajnaz and Bilal become admins.** The file also repairs Bilal's account
+  if its login was unlinked, switched off or blocked. It does not change
+  passwords: if Bilal still can't sign in, set a new password in
+  Authentication → Users → bilal@fgtbilling.internal → "…".
+- **The sign-in door now decides what an admin is.** Signing in by
+  Warehouse → warehouse screens; by Salesman → salesman screens; by
+  Manager → full admin. To switch, sign out and pick the other door. Device
+  locations only show when signed in by the Manager door.
+
 ## 2026-11-27 — Routes are recorded until midnight, not noon
 
 **Run `scratchpad/RUN-ME-47-route-log-until-midnight.sql` in Supabase**

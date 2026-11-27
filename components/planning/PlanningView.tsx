@@ -16,7 +16,7 @@ import { Pill } from "@/components/ui/Badge";
 import { TextInput } from "@/components/ui/Field";
 import { EmptyState, SkeletonList } from "@/components/ui/Empty";
 import RouteMap, { type RouteMapStop, type RouteMapOrigin } from "./RouteMap";
-import DrivenRoute from "./DrivenRoute";
+import DeviceTracking from "./DeviceTracking";
 
 const TIER_TONE: Record<PriorityTier, "danger" | "accent" | "warning" | "neutral"> = {
   overdue: "danger",
@@ -428,9 +428,11 @@ export default function PlanningView({ user }: { user: AppUser }) {
         {routeError && <div className="mt-2 text-caption text-[--status-danger]">{routeError}</div>}
       </Card>
 
-      {/* The road each salesman's device actually drove, one day at a time
-          (RUN-ME-46). Managers only; absent until that SQL has been run. */}
-      {isManager && <DrivenRoute salesmen={salesmen} />}
+      {/* Where every device with the app is, and where each went on a day
+          (RUN-ME-46/48). Admins only — an admin who came in by the Salesman
+          or Warehouse door is that role for the session and does not see it.
+          Absent until RUN-ME-48 has been run. */}
+      {user.role === "admin" && <DeviceTracking />}
 
       {/* The map (parity with the phone). Appears once the stops have been
           placed on it — before that, and whenever Apple Maps is not set up,

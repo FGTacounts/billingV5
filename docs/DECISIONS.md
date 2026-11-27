@@ -5879,3 +5879,57 @@ correcting the noon reading above. Changed in the database
 re-run does not put noon back) and in the app's fallback for a device that
 has not asked yet. RUN-ME-46 confirmed live the same day (location_points
 present; the hours function answers anon with 42501, not "not found").
+
+2026-11-27 — Device locations: every user, every device, admins only;
+admins are what they signed in as (owner: "record the path of the user from
+5 am to 12am. i should be able to check where the device is. and which all
+locations the user/device has been to. at the end, it should give the data
+only to the admin and not the manager. Also do the same for all devices/user
+types who have our app installed. Make the ajnaz and bilal account admins.
+something happened to bilal's account. Also, if bilal … selects on warehouse
+and then signs in, he will have access … as a warehouse user, … salesman's
+page … salesman, … manager … admin"). RUN-ME-48.
+- **Who is recorded:** anybody signed in to the app, any role, on iPhone,
+  iPad and now Mac (Wi-Fi position; records while the app is open — a Mac
+  app is not relaunched in the background). Mac sandbox needed
+  ENABLE_RESOURCE_ACCESS_LOCATION = YES (Debug + Release). Not the web
+  (nothing is installed) and not the Watch app.
+- **Who reads:** admins only (`current_user_is_admin()`), replacing RUN-ME-46's
+  manager-or-self policy — the owner said "only to the admin", so a person no
+  longer reads their own points either. Nobody writes the tables directly:
+  `log_location_points(p_points, p_device)` is SECURITY DEFINER and stamps
+  `user_id = current_app_user_id()` itself. p_device defaults to null so a
+  first-build phone keeps working (its points just carry no device).
+- **Devices:** `tracked_devices`, one row per Apple identifierForVendor, with
+  who last used it and its newest position (never moved backwards by a late
+  batch) — "where is the device" is one small read. The app checks in at most
+  every 15 minutes while open even with no points, so "app last open" shows a
+  device that is alive but outside the window or without permission.
+- **Places visited:** computed, not stored — `findStops` (lib/routeTrail.ts,
+  RouteTrail.stops in Swift): consecutive points within 250 m of where the
+  device arrived, for 5+ minutes, ending at the first point seen away (or its
+  own last point if what follows is a recording gap). Addresses from Apple's
+  reverse geocoder (MapKit JS / CLGeocoder), one at a time, first 40 only.
+  Not matched to customers: customers carry no coordinates.
+- **Viewer:** Planning → "Devices" (web card, app ••• menu): map of every
+  device's last position, list with person/role/device/last position/app last
+  open; pick one for its day (route, distance, numbered places). Replaces the
+  manager-only "Route driven" card (DrivenRoute.tsx / DrivenRouteSheet.swift
+  deleted).
+- **Bilal's account:** cause unknown from here. RUN-ME-48 section 1 lists both
+  accounts' state (no login / not linked / inactive / banned / unconfirmed)
+  before section 2 relinks the staff row to its login by address, sets admin +
+  active, lifts a ban and confirms the login. The password is not touched.
+  Proven on PGlite with Bilal's row deliberately linked to the wrong login,
+  inactive, salesman and banned: all four fixed.
+- **Sign-in door for admins:** an account the database says is admin becomes
+  salesman or warehouse for the session when it signs in by that door; the
+  Manager door is the full admin. Web: `fgt-act-as` cookie set by LoginForm,
+  honoured in lib/auth.ts `actingAs`, cleared on logout. App: the sign-in
+  screen's remembered door (`fgt-login-role`), applied in BillingApp
+  (ActingRole.swift) and sent to the web API as `X-Act-As`. Only ever a step
+  down, only for real admins — nobody can claim their way up. Applies to every
+  admin, not only Bilal (both admins asked for). RLS still sees the real admin:
+  the door decides what the app shows and its own role checks, not what the
+  database would allow; screens that scope by role (salesman sees own orders)
+  already filter by user id, so the admin-as-salesman sees his own.

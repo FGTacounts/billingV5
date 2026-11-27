@@ -98,7 +98,7 @@ const KNOWN_TABLES = [
   "customer_prices", "customers", "expenses", "grv_allocations", "grv_items", "grv_returns",
   "news_posts", "notifications", "order_items", "order_status_log", "orders",
   "payment_delay_notes", "payment_extension_requests", "payment_orders",
-  "location_points", "payments", "product_warehouse_stock", "products", "purchases", "route_visits",
+  "location_points", "payments", "tracked_devices", "product_warehouse_stock", "products", "purchases", "route_visits",
   "stock_warehouses", "users", "zone_countries", "zones",
 ];
 

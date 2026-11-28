@@ -6133,6 +6133,10 @@ run signed in as a manager and each screen compared with the web.
   on refresh; search, sort, delete to Recently deleted via api/orders/delete;
   drafts kept on the server as the web keeps them, device copy as offline
   net; the web's dashboard widgets; read-only catalogue, no cost read).
+- Display currency converts the dashboard's Sales, Gross profit and Profit
+  only, as the web's DashboardView does; every other amount stays AED.
+  The accent colour reaches the ~30 places that use AppTheme.accent; ~190
+  use the fixed brand teal and were left (a wide rewrite, not asked).
 - The sidebar gear opens Settings in its own sheet (an earlier attempt that
   pushed Settings inside Account did nothing: a destination presented in
   the first frame is ignored).

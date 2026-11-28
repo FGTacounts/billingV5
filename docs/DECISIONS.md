@@ -6149,3 +6149,40 @@ run signed in as a manager and each screen compared with the web.
   A4 — owed); custom product presets and order Adjust view stay on the device.
 - Not run signed in as salesman or warehouse (no password to type); those
   screens were built against the web and compiled, not clicked through.
+
+2026-11-28 — The Mac app looks like the web app (owner: "They should also
+look similar" / "Make the mac app look like the web app"). iOS repo
+2277334..HEAD. Mac and iPad (the wide sidebar layout); the iPhone keeps its
+own look except the accent colour and grouped amounts.
+- **One translation of the web's design** (Billing/WebLook.swift): its
+  tokens (canvas #F2F2F7/#000, surface, ink #14141F, secondary #6B6B76,
+  accent #2FC494/#34D9A8, hairline), its card (30pt corners, hairline edge,
+  one soft shadow), button tiers (primary/tinted/plain/danger/outline),
+  page header, search field, chips, segmented control, pills, tables and
+  summary tiles. Every Mac page draws from it. The web's 30pt card radius
+  is used on the Mac even though CLAUDE.md lists 6/10/16: the web is the
+  reference the owner asked to match, and it already uses 30.
+- **Shell as the web's** (all three roles): sidebar (outline icons, web
+  order — Expense after Sales — pale accent pill, Settings alone at the
+  bottom), top bar (photo/initials, name, role as a menu with Account,
+  Settings, Sign out; Inbox and bell as plain round icons), the page on the
+  canvas. The window title and each page's navigation bar are hidden; pages
+  draw a large left title with their actions on the right instead, as the
+  web does. `\.webChrome` tells a page it is inside this shell.
+- **Brand green = the web's accent** on every screen and device (was
+  #5CC7A6).
+- **Pages**: Dashboard (greeting + month, four tiles, pipeline bar, widget
+  grid with the web's charts), Sales, Orders (switcher card, tables),
+  order editor and new order, Invoices, Customers, Payments, Products,
+  Expense, Reports (Sales widgets board), Planning, the salesman and
+  warehouse pages and pick screen, Settings (left rail like the web),
+  Account, Users, Inbox, Trash and the sign-in screen (centred card).
+  Sheets choose the web look by device, since they sit outside the shell.
+- Kept on purpose where the web differs: the app's own controls the web
+  lacks (Payments filter chips, Sales range row, category chips, warehouse
+  extra tiles) restyled rather than removed; export links read "Export
+  CSV" where the app writes CSV; Orders header and switcher stay fixed
+  while the list scrolls; Reject is plain as in OrderDetail.tsx (its
+  confirm is red); status pills use the web's words ("Accepted").
+- **Amounts** carry thousands separators everywhere ("AED 1,297.00"):
+  AppTheme.money promised it and never did.

@@ -6078,3 +6078,70 @@ in the format "INV-4712-QUEEN GENERAL TRADING LLC.pdf".
   name with nothing left (e.g. Arabic only) → "INV-4712". No invoice number
   yet → "INV-DRAFT-…". A number already stored as "INV4712"/"INV-4712" is
   not doubled to "INV-INV4712".
+
+2026-11-27 — The Mac app made like the web, tested signed in (owner: "Make
+the MacOS app exactly like the web app. every feature and everything. No one
+is using it cause it lacks and has so many bugs ... Test everything").
+The Mac app is the iPhone app's Billing target, so all of this reaches
+iPhone and iPad too unless marked Mac. iOS repo commits 801f522..HEAD on
+2026-11-27. Built for Mac Catalyst and the iOS Simulator; the Mac build was
+run signed in as a manager and each screen compared with the web.
+- **Committed the 2026-10-23 bug sweep (801f522).** It had sat uncommitted
+  for a month in every build; committed as it stood, Swift files only. The
+  owner's Xcode edits (version 7.4.1 build 14, schemes) stay uncommitted.
+- **Sheets on the Mac** opened at their content's size, about 420x360 in a
+  1,500-point window (a statement showed three rows; Account hid Sign Out).
+  All 96 sheets now take most of the window on the Mac, from one place
+  (MacSheetSizing.swift: UIKit's present is wrapped and the sheet's size is
+  held). Alerts, share sheets, file pickers and full-screen covers are
+  untouched; iPhone and iPad unchanged.
+- **Amounts in full on the Mac** ("150,985.93", as the web), shortened
+  ("151K") on iPhone only: AppTheme.amount / amountWithCurrency / amountFit.
+- Order cards were grey with a pale mint total (~1.3:1); the gear opened
+  Account; sidebar icons were named after their SF Symbol for VoiceOver.
+- **Areas brought to the web**, each from the web component as reference
+  (details in each commit message): Orders (manager edits go through
+  manager_edit_order so stock moves; sort and cross-tab search; This month
+  with GP; stage values and Potential total; Adjust view; Export / Import
+  orders; line GP and price-from-margin; subtotal override; "As arranged";
+  reopen packed; confirm Reject and Undo approval; invoice PDF on A4 with
+  logo, line discount, salesman's phone). Dashboard and Sales (month
+  chooser; payments chart from confirmed payments, paged; average-sale range,
+  previous period, Category/Product; salesman drill-down 7d/30d/MTD/YTD with
+  prorated goal; every salesman in the goal table; skeletons not zeros).
+  Customers (summary card; active customers only, as the web; overdue
+  default 90 days not 30; Payments needed / Overdue / No data; delete; code
+  editable; collect through the Payments form; Suggest customer for staff).
+  Products (Sold/Sale/GP/SHD as the web — SHD was months, 30x too small —
+  paged past 1,000; SKU and Active saved; Keep/Add/Replace import; barcode
+  search; low stock; own presets; photo upload; Gallery/Photos/Select →
+  order; Scan invoice with editable review). Payments (kept between visits,
+  skeletons; cheque image from a file on the Mac, uploaded; photo from the
+  row; in-row Confirm and cheque status; cash/cheque switch; paging; Mine
+  only on the server; Export). Warehouse (Waiting/Picking/Packed on iPad and
+  Mac; visible line actions; short pick writes picked_qty via
+  update-picked-qty; offline banner; bell is a glance, tray the Inbox).
+  Reports (Sales widgets board above the tabs; tables use the width; kept
+  120 s between visits; inactive customers "—"). Planning (normal customers
+  kept, all listed and the first 25 routed, visits saved through
+  api/planning/visits, starting point, per-leg distance). Settings, Inbox,
+  Users, Account (light/dark, data downloads and the editable sheet, logo
+  for managers, zones remove/default, no self role change, goal/bonus/offer
+  per salesman, e-mail and photo, Go menu shortcuts; Inbox from the web's
+  sources, no raw order ids, Clear keeps news).
+  Salesman (own orders matched by id — the list used to empty to pending-only
+  on refresh; search, sort, delete to Recently deleted via api/orders/delete;
+  drafts kept on the server as the web keeps them, device copy as offline
+  net; the web's dashboard widgets; read-only catalogue, no cost read).
+- The sidebar gear opens Settings in its own sheet (an earlier attempt that
+  pushed Settings inside Account did nothing: a destination presented in
+  the first frame is ignored).
+- **Caches** (memory only, cleared on sign-out/user change): customers
+  ledger 60 s, reports 120 s, payments per user/door/Mine only — the screens
+  had re-read everything on every visit (Payments ~10 s). No timers.
+- **Deliberately not done:** Scan with AI as a free-standing button
+  (DECISIONS 2026-09-04; the web has none); New order for warehouse (the web
+  hides it); statements stay on Letter (column widths fixed; the web prints
+  A4 — owed); custom product presets and order Adjust view stay on the device.
+- Not run signed in as salesman or warehouse (no password to type); those
+  screens were built against the web and compiled, not clicked through.

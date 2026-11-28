@@ -1,5 +1,10 @@
 # Web → Mac app: what is still owed
 
+**2026-11-27: almost all of the list below was done in one pass (see
+DECISIONS.md 2026-11-27, "The Mac app made like the web"). What remains
+owed is listed in that entry under "Deliberately not done" plus statements
+on A4.**
+
 Owner, 2026-10-12: "Make everything in the web app appear in the macOS
 catalyst app. it should function same. Always remember to do this."
 

@@ -6245,7 +6245,7 @@ widgets should be the same too"). Mac and iPad; the iPhone keeps its cards.
 
 2026-11-28 — Reports: a period on Sales, Balance Sheet, Purchases and GRV
 (owner: "year to date report exports. default dates + custom dates").
-Web only so far; the iPhone/iPad/Mac Reports follow as the next step.
+The iPhone, iPad and Mac app got the same the same day (entry below).
 - Owner's choices, asked: the period applies to all four of those reports;
   the presets are **This month (Month to date), Last month, Year to date**,
   plus Custom From–To; each report **opens on Month to date**, as before.
@@ -6284,3 +6284,29 @@ Web only so far; the iPhone/iPad/Mac Reports follow as the next step.
 - Not checked on screen: the dev server reaches the live database and
   signing in there was not done. TypeScript, lint, production build,
   test:tenancy, test:paging and test:money pass.
+
+2026-11-28 — The same period on the iPhone, iPad and Mac Reports (iOS
+commit f7a19e3). Owner: "Yes, do the app".
+- A "Period" row above Sales, Balance Sheet, Purchases and GRV, with the
+  app's existing DayWindowPicker (the Dashboard's range menu): Month to
+  date (opens), Last month, Year to date, Custom… (from / to, Apply). The
+  period is held for the session, like the tab.
+- `DayWindow.Preset` gained `.lastMonth`, but `allCases` is written out as
+  the four the Dashboard and Sales offer, so their menus are unchanged;
+  `Preset.reports` is Reports' three.
+- Sales by salesman filters the orders already on the device (the app
+  holds every order) — no new read. Balance Sheet: orders from local
+  midnight on the first day to local midnight after the last, expenses by
+  calendar day; this month's figures stay under the cache key the Sales
+  widgets board's GP card reads. Purchases: every receipt in the period,
+  paged, a day either side read and settled on this clock (as the web);
+  it used to be the newest 200. GRV: returns raised in the period, the
+  by-product breakdown likewise, and "Export GRVs" sends the period to
+  /api/grv/excel. Each period is cached on its own; a period changed while
+  a load is on its way does not get the old period's figures.
+- Download names and labels as the web (see entry above).
+- Checked: iPhone simulator and Mac Catalyst builds, and
+  BillingTests/ReportPeriodTests (5 tests: last month's edges, presets
+  recognised, the Dashboard's menu unchanged, Monthly labels only for one
+  month, dated file names). Not looked at on screen: that needs signing in
+  to the live database.

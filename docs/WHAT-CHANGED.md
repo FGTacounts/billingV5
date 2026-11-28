@@ -2,7 +2,8 @@
 
 ## 2026-11-28 — Reports: Year to date, last month, or your own dates
 
-Nothing to run. Deploy the web app. (iPhone, iPad and Mac to follow.)
+Nothing to run. Deploy the web app and put the new app build on devices
+— the iPhone, iPad and Mac app have the same Period menu.
 
 - Reports → **Sales, Balance Sheet, Purchases and GRV** now have a
   **Period** button above them. Pick **Month to date** (what opens),

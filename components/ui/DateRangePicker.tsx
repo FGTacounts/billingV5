@@ -8,10 +8,23 @@ import { localDateKey } from "@/lib/queries/dashboard";
 // presets (Month to date, Year to date) that aren't a fixed day count.
 const MTD = -1;
 const YTD = -2;
-export const SALE_RANGE_PRESETS: { label: string; days: number }[] = [
+const LAST_MONTH = -3;
+export interface RangePreset {
+  label: string;
+  days: number;
+}
+export const SALE_RANGE_PRESETS: RangePreset[] = [
   { label: t("ui.range7Days"), days: 7 },
   { label: t("ui.range30Days"), days: 30 },
   { label: t("ui.rangeMonthToDate"), days: MTD },
+  { label: t("ui.rangeYearToDate"), days: YTD },
+];
+
+// Reports (2026-11-28, owner: "year to date report exports, default dates +
+// custom dates"): this month, the whole of last month, the year so far.
+export const REPORT_RANGE_PRESETS: RangePreset[] = [
+  { label: t("ui.rangeMonthToDate"), days: MTD },
+  { label: t("ui.rangeLastMonth"), days: LAST_MONTH },
   { label: t("ui.rangeYearToDate"), days: YTD },
 ];
 
@@ -23,6 +36,12 @@ export interface SaleRange {
 export function presetToRange(days: number): SaleRange {
   const to = new Date();
   let from: Date;
+  if (days === LAST_MONTH) {
+    return {
+      from: localDateKey(new Date(to.getFullYear(), to.getMonth() - 1, 1)),
+      to: localDateKey(new Date(to.getFullYear(), to.getMonth(), 0)),
+    };
+  }
   if (days === MTD) from = new Date(to.getFullYear(), to.getMonth(), 1);
   else if (days === YTD) from = new Date(to.getFullYear(), 0, 1);
   else {
@@ -35,8 +54,14 @@ export function presetToRange(days: number): SaleRange {
   return { from: localDateKey(from), to: localDateKey(to) };
 }
 
-export function rangeLabel(range: SaleRange): string {
-  const preset = SALE_RANGE_PRESETS.find((p) => {
+// The range as instants on this device's clock: the first day from local
+// midnight, the last day to the end of it. Both ends are included.
+export function rangeInstants(range: SaleRange): { from: Date; to: Date } {
+  return { from: new Date(`${range.from}T00:00:00`), to: new Date(`${range.to}T23:59:59.999`) };
+}
+
+export function rangeLabel(range: SaleRange, presets: RangePreset[] = SALE_RANGE_PRESETS): string {
+  const preset = presets.find((p) => {
     const r = presetToRange(p.days);
     return r.from === range.from && r.to === range.to;
   });
@@ -49,7 +74,15 @@ export function rangeLabel(range: SaleRange): string {
 // can pick directly, with the four common presets offered below it rather
 // than instead of it. Shared by Dashboard's Average sale widget and Sales'
 // adjustable orders/payments widgets.
-export function DateRangePicker({ range, onChange }: { range: SaleRange; onChange: (r: SaleRange) => void }) {
+export function DateRangePicker({
+  range,
+  onChange,
+  presets = SALE_RANGE_PRESETS,
+}: {
+  range: SaleRange;
+  onChange: (r: SaleRange) => void;
+  presets?: RangePreset[];
+}) {
   const [open, setOpen] = useState(false);
   const [draftFrom, setDraftFrom] = useState(range.from);
   const [draftTo, setDraftTo] = useState(range.to);
@@ -65,14 +98,14 @@ export function DateRangePicker({ range, onChange }: { range: SaleRange; onChang
         onClick={() => setOpen((v) => !v)}
         className="flex items-center gap-1.5 px-2.5 py-1 rounded-card border border-hairline text-caption font-semibold text-secondary"
       >
-        {rangeLabel(range)}
+        {rangeLabel(range, presets)}
       </button>
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
           <div className="absolute end-0 mt-2 w-72 glass rounded-card shadow-floating z-50 p-3">
             <div className="grid grid-cols-2 gap-1.5 mb-3">
-              {SALE_RANGE_PRESETS.map((p) => (
+              {presets.map((p) => (
                 <button
                   key={p.label}
                   onClick={() => {

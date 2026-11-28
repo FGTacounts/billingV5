@@ -120,10 +120,16 @@ export default function GrvSection({ user }: { user: AppUser }) {
 
 // The GRV as a spreadsheet: customer details on top, the GRV below
 // (app/api/grv/excel). One return when `grvId` is given, every return otherwise.
-export function GrvExportLink({ label, grvId }: { label: string; grvId?: string }) {
+// `period` narrows "every return" to the returns raised in it (Reports → GRV).
+export function GrvExportLink({ label, grvId, period }: { label: string; grvId?: string; period?: { from: Date; to: Date } }) {
+  const href = grvId
+    ? `/api/grv/excel?grvId=${grvId}`
+    : period
+      ? `/api/grv/excel?from=${encodeURIComponent(period.from.toISOString())}&to=${encodeURIComponent(period.to.toISOString())}`
+      : "/api/grv/excel";
   return (
     <a
-      href={grvId ? `/api/grv/excel?grvId=${grvId}` : "/api/grv/excel"}
+      href={href}
       className="min-h-11 px-3 inline-flex items-center gap-1.5 rounded-card border border-hairline text-caption font-semibold text-secondary hover:text-accent hover:border-accent/50 transition-colors"
     >
       <Download size={14} /> {label}

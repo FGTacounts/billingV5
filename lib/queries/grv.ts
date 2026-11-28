@@ -58,6 +58,13 @@ export function grvCredit(amount: number | null | undefined, linesValue: number)
   return amount != null ? money(amount) : money(linesValue);
 }
 
+export type GrvPeriod = { from: Date; to: Date };
+
+// A return is dated by when it was raised — the date every list prints.
+function inPeriod<Q extends { gte(c: string, v: string): Q; lte(c: string, v: string): Q }>(q: Q, period?: GrvPeriod): Q {
+  return period ? q.gte("created_at", period.from.toISOString()).lte("created_at", period.to.toISOString()) : q;
+}
+
 function returnsChanged() {
   invalidateAging();
   invalidateOrderFacts();
@@ -88,13 +95,13 @@ function fetchItemsOfGrvs(supabase: SupabaseClient, grvIds: string[]): Promise<G
   );
 }
 
-export async function fetchGrvs(supabase: SupabaseClient): Promise<GrvRow[]> {
+// `period` limits the list to returns raised in it (Reports' picker); left
+// out, every return, as Payments → Returns and the phone have always had.
+export async function fetchGrvs(supabase: SupabaseClient, period?: GrvPeriod): Promise<GrvRow[]> {
   const read = (columns: string) =>
     fetchAllPages<GrvReturn>(
       (from, to) =>
-        supabase
-          .from("grv_returns")
-          .select(columns)
+        inPeriod(supabase.from("grv_returns").select(columns), period)
           .order("created_at", { ascending: false })
           .order("id")
           .range(from, to) as never,
@@ -583,9 +590,10 @@ export interface GrvProductRow {
  * Which products came back, and how many — approved returns only, because a
  * pending request is a claim, not goods on the shelf.
  */
-export async function fetchGrvProductReport(supabase: SupabaseClient): Promise<GrvProductRow[]> {
+export async function fetchGrvProductReport(supabase: SupabaseClient, period?: GrvPeriod): Promise<GrvProductRow[]> {
   const grvs = await fetchAllPages<{ id: string }>(
-    (from, to) => supabase.from("grv_returns").select("id").eq("status", "approved").order("id").range(from, to) as never,
+    (from, to) =>
+      inPeriod(supabase.from("grv_returns").select("id").eq("status", "approved"), period).order("id").range(from, to) as never,
     { keyOf: (g) => g.id }
   );
   const ids = grvs.map((g) => g.id);
@@ -657,8 +665,8 @@ export interface GrvExportCustomer {
  * as header, and then the GRV below"): one block per customer, its returns
  * oldest first, each with its products. One return when `grvId` is given.
  */
-export async function fetchGrvExport(supabase: SupabaseClient, grvId?: string): Promise<GrvExportCustomer[]> {
-  const all = await fetchGrvs(supabase);
+export async function fetchGrvExport(supabase: SupabaseClient, grvId?: string, period?: GrvPeriod): Promise<GrvExportCustomer[]> {
+  const all = await fetchGrvs(supabase, grvId ? undefined : period);
   const grvs = grvId ? all.filter((g) => g.id === grvId) : all;
   if (grvs.length === 0) return [];
 

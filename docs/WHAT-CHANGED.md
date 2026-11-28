@@ -1,5 +1,19 @@
 # What changed, and what you need to do
 
+## 2026-11-28 — Reports: Year to date, last month, or your own dates
+
+Nothing to run. Deploy the web app. (iPhone, iPad and Mac to follow.)
+
+- Reports → **Sales, Balance Sheet, Purchases and GRV** now have a
+  **Period** button above them. Pick **Month to date** (what opens),
+  **Last month**, **Year to date**, or type your own From and To dates and
+  press Apply.
+- The figures on screen and every download follow the period you picked —
+  the CSVs and the GRV Excel. The file name carries the dates, e.g.
+  "sales-leaderboard 2026-01-01 to 2026-11-28.csv".
+- Purchases and GRV used to list the newest 100 / every return; they now
+  open on this month too. Pick Year to date or your own dates to see more.
+
 ## 2026-11-28 — Receipt number on every payment
 
 **Run `scratchpad/RUN-ME-49-payment-receipt-numbers.sql`** (Supabase → SQL

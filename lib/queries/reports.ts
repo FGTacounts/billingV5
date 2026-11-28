@@ -1,12 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { billingDateColumn } from "@/lib/billingDate";
 import { BILLED_STATUSES } from "@/lib/billedStatuses";
-import { localDateKey } from "@/lib/queries/dashboard";
-
-function startOfMonthIso(): string {
-  const d = new Date();
-  return new Date(d.getFullYear(), d.getMonth(), 1).toISOString();
-}
+import { localDateKey, monthBounds } from "@/lib/queries/dashboard";
+import { fetchAllPages, fetchAllForIds } from "@/lib/paging";
 
 export interface BalanceSheet {
   monthlySales: number;
@@ -22,41 +18,57 @@ export interface BalanceSheet {
 // / Percentage. Manager-only (needs unit_cost). Sales come straight from
 // orders.subtotal (stored directly now); COGS still needs item-level
 // unit_cost since that's not aggregated onto the order.
-export async function fetchBalanceSheet(supabase: SupabaseClient): Promise<BalanceSheet> {
-  const start = startOfMonthIso();
-  const { data: orders } = await supabase
-    .from("orders")
-    .select("id, subtotal")
-    .in("status", BILLED_STATUSES)
-    .gte(await billingDateColumn(supabase), start);
-  const orderRows = orders ?? [];
+// `period` is the window Reports' picker chose; left out, this month — what
+// the Reports board and every other caller has always had.
+export async function fetchBalanceSheet(
+  supabase: SupabaseClient,
+  period: { from: Date; to: Date } = monthBounds()
+): Promise<BalanceSheet> {
+  const billed = await billingDateColumn(supabase);
+  // Paged: a year's billed orders run past the 1,000 rows one request
+  // returns, and the total would stop short without saying so.
+  const orderRows = await fetchAllPages<{ id: string; subtotal: number | null }>(
+    (from, to) =>
+      supabase
+        .from("orders")
+        .select("id, subtotal")
+        .in("status", BILLED_STATUSES)
+        .gte(billed, period.from.toISOString())
+        .lte(billed, period.to.toISOString())
+        .order("id")
+        .range(from, to) as never,
+    { keyOf: (o) => o.id }
+  );
   const monthlySales = orderRows.reduce((s, o) => s + (o.subtotal ?? 0), 0);
 
-  let cogs = 0;
-  const orderIds = orderRows.map((o) => o.id);
-  if (orderIds.length) {
-    const { data: items } = await supabase
-      .from("order_items_safe")
-      .select("unit_cost, ordered_qty, picked_qty")
-      .in("order_id", orderIds);
-    cogs = (items ?? []).reduce(
-      (s, it) => s + (it.unit_cost ?? 0) * (it.picked_qty ?? it.ordered_qty),
-      0
-    );
-  }
+  // Every line of those orders, cut into chunks short enough for a URL and
+  // each paged in full (it used to be one unpaged request for the month).
+  type CostLine = { id: string; unit_cost: number | null; ordered_qty: number; picked_qty: number | null };
+  const items = await fetchAllForIds<CostLine>(
+    orderRows.map((o) => o.id),
+    (chunk, from, to) =>
+      supabase
+        .from("order_items_safe")
+        .select("id, unit_cost, ordered_qty, picked_qty")
+        .in("order_id", chunk)
+        .order("id")
+        .range(from, to) as never,
+    { keyOf: (it) => it.id }
+  );
+  const cogs = items.reduce((s, it) => s + (it.unit_cost ?? 0) * (it.picked_qty ?? it.ordered_qty), 0);
 
   // Routed through /api/expenses (service-role, Manager-gated) — the
   // `expenses` RLS policy still references the old `users.auth_id` column
   // and 400s on every anon-key query; see app/api/expenses/route.ts.
   const expensesRes = await fetch("/api/expenses");
   const expensesJson = await expensesRes.json();
-  // The 1st as a calendar day here. Slicing the ISO instant gave the last
-  // day of the month before (local midnight is 20:00 UTC the day before in
-  // Dubai), so a month's expenses took in the previous month's last day.
-  const now = new Date();
-  const monthStart = localDateKey(new Date(now.getFullYear(), now.getMonth(), 1));
+  // The period's ends as calendar days here. Slicing the ISO instant gave the
+  // last day of the month before (local midnight is 20:00 UTC the day before
+  // in Dubai), so a month's expenses took in the previous month's last day.
+  const firstDay = localDateKey(period.from);
+  const lastDay = localDateKey(period.to);
   const monthlyExpense = ((expensesJson.expenses ?? []) as { amount: number; date: string }[])
-    .filter((e) => e.date >= monthStart)
+    .filter((e) => e.date >= firstDay && e.date <= lastDay)
     .reduce((s, e) => s + e.amount, 0);
 
   const { data: settings } = await supabase.from("app_settings").select("vat_rate").limit(1).maybeSingle();

@@ -47,7 +47,8 @@ export async function fetchSellers(supabase: SupabaseClient): Promise<Seller[]> 
 
 export async function fetchLeaderboard(
   supabase: SupabaseClient,
-  month?: Month
+  // A calendar month, or any from–to window (Reports' period picker).
+  period?: Month | { from: Date; to: Date }
 ): Promise<LeaderboardEntry[]> {
   // Every user, not just the active salesmen: the totals below have to find
   // a name for whoever is on the order. Someone who has left still sold
@@ -59,7 +60,8 @@ export async function fetchLeaderboard(
 
   // Shares the one fetch of counted orders the rest of the page uses, rather
   // than pulling the whole set again for the leaderboard alone.
-  const orders = await revenueIn(supabase, monthBounds(month));
+  const bounds = period && "from" in period ? period : monthBounds(period);
+  const orders = await revenueIn(supabase, bounds);
 
   const totalsBySalesman = new Map<string, number>();
   for (const o of orders ?? []) {

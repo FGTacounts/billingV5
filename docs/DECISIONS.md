@@ -6242,3 +6242,45 @@ widgets should be the same too"). Mac and iPad; the iPhone keeps its cards.
   not inside each row. Skeletons where the web shows zeros while loading.
 - Owner, asked whether to remove the Team goal card to match the web
   exactly: "Keep it". It stays under the Mac dashboard's widget grid.
+
+2026-11-28 — Reports: a period on Sales, Balance Sheet, Purchases and GRV
+(owner: "year to date report exports. default dates + custom dates").
+Web only so far; the iPhone/iPad/Mac Reports follow as the next step.
+- Owner's choices, asked: the period applies to all four of those reports;
+  the presets are **This month (Month to date), Last month, Year to date**,
+  plus Custom From–To; each report **opens on Month to date**, as before.
+  Customer Aging, Statement Summary, Salesman Statement and Stock are as of
+  now and have no period.
+- One period for the four, held on the Reports page, so switching tabs
+  keeps it. It is the existing DateRangePicker (Dashboard, Sales) with a
+  preset list of its own; "Last month" is new in it. The screen and every
+  download follow the period: the CSVs, and Reports → GRV's "Export GRVs"
+  Excel (`/api/grv/excel?from=&to=`). Download names carry the dates
+  ("sales-leaderboard 2026-01-01 to 2026-11-28.csv", "GRV 01.01.2026 -
+  28.11.2026.xlsx"); the Balance Sheet CSV's first row is the period.
+- Dating, each by what the report already used: Sales and the Balance
+  Sheet by billing date; expenses by their calendar date; purchases by the
+  local day of grn_date (a day either side is read and the edges settled on
+  this clock, since whether grn_date is a date or an instant was not
+  checked); GRVs by created_at, the date every GRV list prints — the
+  by-product table counts approved returns raised in the period.
+- Labels: the Sales column reads "Month-to-date sales" on Month to date and
+  "Sales, Year to date" (or the dates) otherwise. The Balance Sheet keeps
+  "Monthly sales/expense" for any single month and says "Sales"/"Expense"
+  for longer periods.
+- Paged reads (a year passes the 1,000 rows one request returns): the
+  Balance Sheet's orders and their lines (the lines were one unpaged
+  request, raised 2026-10-12 and now fixed for this screen), purchases in a
+  period, and their product names. Purchases without a period still read
+  the newest 100 (no caller left on the web, kept for the default).
+- A failed load now says so ("Couldn't load this report for the period")
+  instead of staying on a skeleton.
+- Consequences to know: Purchases used to show the newest 100 receipts and
+  GRV every return ever; both now open on this month. A pending return
+  older than this month is still on Payments → Returns, or on Reports → GRV
+  under a wider period. Payments → Returns' own "Export GRVs" and the
+  phone's still download every return. The Reports board (widgets above the
+  tabs) is unchanged and stays this month.
+- Not checked on screen: the dev server reaches the live database and
+  signing in there was not done. TypeScript, lint, production build,
+  test:tenancy, test:paging and test:money pass.

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Download } from "lucide-react";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { fetchOutstandingInvoices, summarizeByCustomer, AGING_BUCKETS } from "@/lib/queries/aging";
@@ -19,6 +19,14 @@ import { Card } from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
 import ReportsBoard from "@/components/reports/ReportsBoard";
 import type { SalesmanStatement } from "@/lib/statement";
+import {
+  DateRangePicker,
+  REPORT_RANGE_PRESETS,
+  presetToRange,
+  rangeInstants,
+  rangeLabel,
+  type SaleRange,
+} from "@/components/ui/DateRangePicker";
 
 // §Next Updates Reports: "ability to download each of the reports" — a
 // plain client-side CSV export of whatever's on screen, no server round
@@ -38,6 +46,45 @@ function downloadCsv(filename: string, head: string[], rows: (string | number)[]
   URL.revokeObjectURL(url);
 }
 
+// The reports a period applies to (2026-11-28). Aging, statements and the
+// stock snapshot are as of now and have no period.
+const DATED_TABS = ["Sales", "Balance Sheet", "Purchases", "GRV"] as const;
+type DatedTab = (typeof DATED_TABS)[number];
+const isDated = (tab: Tab): tab is DatedTab => (DATED_TABS as readonly string[]).includes(tab);
+
+// " 2026-01-01 to 2026-11-28" for a download's file name, so two exports of
+// the same report for different periods do not overwrite each other.
+const rangeSuffix = (r: SaleRange) => ` ${r.from} to ${r.to}`;
+
+// A period that starts on the 1st and stays inside that month (this month,
+// last month, or a month picked by hand) — the Balance Sheet keeps its
+// "Monthly" labels for those.
+function isOneMonth(r: SaleRange): boolean {
+  return r.from.endsWith("-01") && r.from.slice(0, 7) === r.to.slice(0, 7);
+}
+
+// Load a report for the period, back to a skeleton while it changes, and
+// say so if it fails rather than sitting on a skeleton for ever.
+function usePeriodLoad<T>(load: () => Promise<T>, range: SaleRange): { data: T | null; failed: boolean } {
+  const [data, setData] = useState<T | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    setData(null);
+    setFailed(false);
+    load()
+      .then((d) => { if (!cancelled) setData(d); })
+      .catch(() => { if (!cancelled) setFailed(true); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [range.from, range.to]);
+  return { data, failed };
+}
+
+function PeriodFailed() {
+  return <div className="text-caption text-[--status-danger]">{t("reports.periodLoadFailed")}</div>;
+}
+
 const TABS = ["Customer Aging", "Statement Summary", "Salesman Statement", "Sales", "Balance Sheet", "Stock", "Purchases", "GRV"] as const;
 type Tab = (typeof TABS)[number];
 // The tab values above are data (state, equality checks); only what the
@@ -55,6 +102,10 @@ const TAB_LABELS: Record<Tab, string> = {
 
 export default function ReportsView({ user }: { user: AppUser }) {
   const [tab, setTab] = useState<Tab>("Customer Aging");
+  // One period for every dated report, so switching from Sales to the
+  // Balance Sheet keeps it. Opens on this month, as these reports always
+  // have (owner, 2026-11-28).
+  const [range, setRange] = useState<SaleRange>(() => presetToRange(REPORT_RANGE_PRESETS[0].days));
 
   return (
     <div className="p-4 md:p-6 max-w-[1600px] mx-auto">
@@ -79,14 +130,21 @@ export default function ReportsView({ user }: { user: AppUser }) {
         ))}
       </div>
 
+      {isDated(tab) && (
+        <div className="flex items-center gap-2 mb-3">
+          <span className="text-caption text-secondary font-semibold">{t("reports.period")}</span>
+          <DateRangePicker range={range} onChange={setRange} presets={REPORT_RANGE_PRESETS} />
+        </div>
+      )}
+
       {tab === "Customer Aging" && <CustomerAgingTab />}
       {tab === "Statement Summary" && <StatementSummaryTab />}
       {tab === "Salesman Statement" && <SalesmanStatementTab />}
-      {tab === "Sales" && <SalesTab />}
-      {tab === "Balance Sheet" && <BalanceSheetTab />}
+      {tab === "Sales" && <SalesTab range={range} />}
+      {tab === "Balance Sheet" && <BalanceSheetTab range={range} />}
       {tab === "Stock" && <StockTab />}
-      {tab === "Purchases" && <PurchasesTab />}
-      {tab === "GRV" && <GrvTab user={user} />}
+      {tab === "Purchases" && <PurchasesTab range={range} />}
+      {tab === "GRV" && <GrvTab user={user} range={range} />}
     </div>
   );
 }
@@ -193,14 +251,19 @@ function StatementSummaryTab() {
   );
 }
 
-function SalesTab() {
-  const [rows, setRows] = useState<LeaderboardEntry[] | null>(null);
-  useEffect(() => { fetchLeaderboard(supabaseBrowser()).then(setRows); }, []);
+function SalesTab({ range }: { range: SaleRange }) {
+  const { data: rows, failed } = usePeriodLoad<LeaderboardEntry[]>(
+    () => fetchLeaderboard(supabaseBrowser(), rangeInstants(range)),
+    range
+  );
+  if (failed) return <PeriodFailed />;
   if (!rows) return <SkeletonList rows={5} />;
+  const label = rangeLabel(range, REPORT_RANGE_PRESETS);
+  const isMtd = label === REPORT_RANGE_PRESETS[0].label;
   return (
     <Table
-      filename="sales-leaderboard.csv"
-      head={[t("nav.role.salesman"), t("reports.monthToDateSales")]}
+      filename={`sales-leaderboard${rangeSuffix(range)}.csv`}
+      head={[t("nav.role.salesman"), isMtd ? t("reports.monthToDateSales") : t("reports.salesInPeriod", { range: label })]}
       rows={rows.map((r) => [r.name, formatAed(r.total)])}
     />
   );
@@ -215,10 +278,15 @@ function MetricTile({ label, value }: { label: string; value: string }) {
   );
 }
 
-function BalanceSheetTab() {
-  const [data, setData] = useState<BalanceSheet | null>(null);
-  useEffect(() => { fetchBalanceSheet(supabaseBrowser()).then(setData); }, []);
+function BalanceSheetTab({ range }: { range: SaleRange }) {
+  const { data, failed } = usePeriodLoad<BalanceSheet>(
+    () => fetchBalanceSheet(supabaseBrowser(), rangeInstants(range)),
+    range
+  );
+  if (failed) return <PeriodFailed />;
   if (!data) return <SkeletonList rows={4} />;
+  const salesLabel = isOneMonth(range) ? t("reports.monthlySales") : t("reports.periodSales");
+  const expenseLabel = isOneMonth(range) ? t("reports.monthlyExpense") : t("reports.periodExpense");
   return (
     <div>
       <div className="flex justify-end mb-2">
@@ -227,12 +295,13 @@ function BalanceSheetTab() {
           className="flex items-center gap-1.5"
           onClick={() =>
             downloadCsv(
-              "balance-sheet.csv",
+              `balance-sheet${rangeSuffix(range)}.csv`,
               [t("reports.metric"), t("reports.value")],
               [
-                [t("reports.monthlySales"), formatAed(data.monthlySales)],
+                [t("reports.period"), t("ui.dateRange", { from: range.from, to: range.to })],
+                [salesLabel, formatAed(data.monthlySales)],
                 [t("reports.cogs"), formatAed(data.cogs)],
-                [t("reports.monthlyExpense"), formatAed(data.monthlyExpense)],
+                [expenseLabel, formatAed(data.monthlyExpense)],
                 [t("reports.provision"), formatAed(data.provision)],
                 [t("reports.profitLoss"), formatAed(data.profit)],
                 [t("reports.margin"), `${(data.percentage * 100).toFixed(1)}%`],
@@ -244,9 +313,9 @@ function BalanceSheetTab() {
         </Button>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        <MetricTile label={t("reports.monthlySales")} value={formatAed(data.monthlySales)} />
+        <MetricTile label={salesLabel} value={formatAed(data.monthlySales)} />
         <MetricTile label={t("reports.cogs")} value={formatAed(data.cogs)} />
-        <MetricTile label={t("reports.monthlyExpense")} value={formatAed(data.monthlyExpense)} />
+        <MetricTile label={expenseLabel} value={formatAed(data.monthlyExpense)} />
         <MetricTile label={t("reports.provision")} value={formatAed(data.provision)} />
         <MetricTile label={t("reports.profitLoss")} value={formatAed(data.profit)} />
         <MetricTile label={t("reports.margin")} value={`${(data.percentage * 100).toFixed(1)}%`} />
@@ -268,13 +337,16 @@ function StockTab() {
   );
 }
 
-function PurchasesTab() {
-  const [rows, setRows] = useState<PurchaseRow[] | null>(null);
-  useEffect(() => { fetchPurchases(supabaseBrowser()).then(setRows); }, []);
+function PurchasesTab({ range }: { range: SaleRange }) {
+  const { data: rows, failed } = usePeriodLoad<PurchaseRow[]>(
+    () => fetchPurchases(supabaseBrowser(), undefined, rangeInstants(range)),
+    range
+  );
+  if (failed) return <PeriodFailed />;
   if (!rows) return <SkeletonList rows={5} />;
   return (
     <Table
-      filename="purchases.csv"
+      filename={`purchases${rangeSuffix(range)}.csv`}
       head={[t("reports.date"), t("reports.sku"), t("sales.name"), t("reports.qty"), t("reports.totalCost")]}
       rows={rows.map((r) => [
         new Date(r.grn_date).toLocaleDateString(),
@@ -419,29 +491,41 @@ function SalesmanStatementTab() {
   );
 }
 
-function GrvTab({ user }: { user: AppUser }) {
+function GrvTab({ user, range }: { user: AppUser; range: SaleRange }) {
   const [rows, setRows] = useState<GrvRow[] | null>(null);
+  const [failed, setFailed] = useState(false);
   const [viewingId, setViewingId] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
   // Which products came back — approved returns only. This is what the
   // products a manager enters on a return request are for.
   const [products, setProducts] = useState<GrvProductRow[] | null>(null);
+  const period = useMemo(() => rangeInstants(range), [range]);
   useEffect(() => {
+    let cancelled = false;
     const supabase = supabaseBrowser();
-    fetchGrvs(supabase).then(setRows);
-    fetchGrvProductReport(supabase).then(setProducts).catch(() => setProducts([]));
-  }, [reload]);
+    setRows(null);
+    setProducts(null);
+    setFailed(false);
+    fetchGrvs(supabase, period)
+      .then((r) => { if (!cancelled) setRows(r); })
+      .catch(() => { if (!cancelled) setFailed(true); });
+    fetchGrvProductReport(supabase, period)
+      .then((p) => { if (!cancelled) setProducts(p); })
+      .catch(() => { if (!cancelled) setProducts([]); });
+    return () => { cancelled = true; };
+  }, [reload, period]);
+  if (failed) return <PeriodFailed />;
   if (!rows) return <SkeletonList rows={5} />;
   return (
     <div>
       <div className="flex justify-end gap-2 mb-2">
-        {rows.length > 0 && <GrvExportLink label={t("payments.grvExportAll")} />}
+        {rows.length > 0 && <GrvExportLink label={t("payments.grvExportAll")} period={period} />}
         <Button
           tier="plain"
           className="flex items-center gap-1.5"
           onClick={() =>
             downloadCsv(
-              "grv.csv",
+              `grv${rangeSuffix(range)}.csv`,
               [t("reports.customer"), t("reports.date"), t("reports.status"), t("reports.grvCredit")],
               rows.map((g) => [
                 g.customer?.name ?? t("common.notSet"),
@@ -490,7 +574,7 @@ function GrvTab({ user }: { user: AppUser }) {
             className="flex items-center gap-1.5"
             onClick={() =>
               downloadCsv(
-                "grv-products.csv",
+                `grv-products${rangeSuffix(range)}.csv`,
                 [t("reports.sku"), t("reports.product"), t("reports.grvQtyReturned"), t("reports.grvReturns"), t("reports.grvValue")],
                 products.map((p) => [p.sku, p.name, String(p.qty), String(p.returns), p.value.toFixed(2)])
               )

@@ -6240,3 +6240,5 @@ widgets should be the same too"). Mac and iPad; the iPhone keeps its cards.
   goal card under the dashboard grid; the Sales page's 7D/Month/YTD row;
   the Target card's caption line. Goal/bonus/offer are edited in a sheet,
   not inside each row. Skeletons where the web shows zeros while loading.
+- Owner, asked whether to remove the Team goal card to match the web
+  exactly: "Keep it". It stays under the Mac dashboard's widget grid.

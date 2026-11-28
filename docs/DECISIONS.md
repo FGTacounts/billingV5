@@ -6215,3 +6215,28 @@ collector should type them: "Typed in (receipt book)".
   discounts.
 - No new RLS: the column is on `payments`, whose policies already decide
   who reads and writes the row.
+
+2026-11-28 — The Mac's widgets are the web's widgets (owner: "all the
+widgets should be the same too"). Mac and iPad; the iPhone keeps its cards.
+- **One widget system as the web's** (Billing/WebWidgets.swift): Full /
+  Half / Quarter on the web's 4-column grid, the web's Arrange mode (minus
+  to hide, drag to reorder, size per widget, a gallery from the bottom with
+  This page and the catalogue by category), and the 8 catalogue widgets
+  (cat:saleTrend … cat:expense) borrowable onto any page.
+- **Same widget lists and defaults as the web**: Dashboard (stats, pipeline,
+  avgSale, payments, expense, leaderboard, categorySales hidden by default),
+  Sales (stats, trend, goal, gp, ordersPayments, monthlyDetail), Reports
+  board (monthlyAverage, targetProgress, monthSummary, weeklyReport and
+  categoryBreakdown hidden by default, gpCalculation — new on the Mac),
+  salesman dashboard (stats, newOrder, pipeline, payments3, target, trend,
+  monthly; order only, as the web). The warehouse has no widgets on the web
+  and none here.
+- **The arrangement is shared with the web**: read from and written to the
+  same users.preferences keys (dashboardLayout/Sizes/Hidden, salesLayout/
+  Sizes, reportsLayout/Sizes/Hidden), only changed keys, merged. Arranging
+  on the Mac moves the web's widgets and the other way round (read at
+  sign-in). Manager and salesman share dashboardLayout, as on the web.
+- Kept although the web lacks them (rule 1, owner to decide): the Team
+  goal card under the dashboard grid; the Sales page's 7D/Month/YTD row;
+  the Target card's caption line. Goal/bonus/offer are edited in a sheet,
+  not inside each row. Skeletons where the web shows zeros while loading.

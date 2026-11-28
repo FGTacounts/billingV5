@@ -15,11 +15,14 @@ const BASE_SELECT =
 // discount_amount arrives with scratchpad/RUN-ME-25. PostgREST refuses a whole
 // request over one unknown column, so the list asks for it, and asks again
 // without it on a database that has not had the file run.
+// receipt_number arrives with scratchpad/RUN-ME-49 and is dropped the same way.
 const SELECT = `${BASE_SELECT}, discount_amount`;
+const SELECT_WITH_RECEIPT = `${SELECT}, receipt_number`;
 
 type PaymentQuery = PromiseLike<{ data: unknown; error: unknown }>;
 async function selectPayments(build: (columns: string) => PaymentQuery): Promise<Payment[]> {
-  let { data, error } = await build(SELECT);
+  let { data, error } = await build(SELECT_WITH_RECEIPT);
+  if (error) ({ data, error } = await build(SELECT));
   if (error) ({ data, error } = await build(BASE_SELECT));
   if (error) throw error;
   return ((data as Payment[]) ?? []).map((p) => ({ ...p, discount_amount: p.discount_amount ?? 0 }));
@@ -119,6 +122,8 @@ export async function createPayment(
     cheque_date?: string | null;
     cheque_photo_ref?: string | null;
     payer_details?: string | null;
+    // Number on the paper receipt handed over (RUN-ME-49). Optional.
+    receipt_number?: string | null;
     notes?: string | null;
     // payment_orders.allocated_amount is NOT NULL (a payment can span
     // multiple orders, §6) — the caller works out how much of the payment
@@ -147,9 +152,15 @@ export async function createPayment(
   // the generated DB types don't know about this optional column yet.
   // discount_amount (RUN-ME-25) is optional in the same way. Tried richest
   // first; each retry drops one column the database may not have yet.
+  // receipt_number (RUN-ME-49) the same: tried with everything first, then
+  // without it, so a database that has not had the file run still saves the
+  // payment.
   const discount = money(input.discount_amount ?? 0);
+  const receipt = input.receipt_number?.trim() || null;
   const extras: Record<string, unknown>[] = [];
   const withPayer = input.payer_details ? { payer_details: input.payer_details } : {};
+  const withDiscount = discount > 0 ? { discount_amount: discount } : {};
+  if (receipt) extras.push({ ...withPayer, ...withDiscount, receipt_number: receipt });
   if (discount > 0) extras.push({ ...withPayer, discount_amount: discount });
   if (input.payer_details) extras.push(withPayer);
   extras.push({});
@@ -244,6 +255,8 @@ export async function updatePayment(
     cheque_number?: string | null;
     cheque_date?: string | null;
     notes?: string | null;
+    // Only when changed; null clears it. RUN-ME-49.
+    receipt_number?: string | null;
     // Only when changed. Moving a payment to another customer takes its
     // slices with it: the re-cut below runs against the new customer's
     // invoices, and the old customer's are released.
@@ -268,6 +281,7 @@ export async function updatePayment(
     cheque_bank: patch.bank || null,
     cheque_date: patch.cheque_date || null,
     notes: patch.notes || null,
+    ...(patch.receipt_number !== undefined ? { receipt_number: patch.receipt_number?.trim() || null } : {}),
   };
   // A payment that stops being a cheque loses its cheque status; one that
   // stays a cheque keeps whatever status it had.
@@ -281,6 +295,20 @@ export async function updatePayment(
   // No discount column yet (RUN-ME-25 not run): save the rest rather than
   // refusing the whole edit.
   if (error && discount !== undefined) ({ error } = await supabase.from("payments").update(core).eq("id", id));
+  if (error) {
+    // No receipt_number column yet (RUN-ME-49 not run): the same again
+    // without it.
+    const code = (error as { code?: string }).code;
+    if ("receipt_number" in core && (code === "42703" || code === "PGRST204")) {
+      const { receipt_number: _dropped, ...rest } = core;
+      void _dropped;
+      ({ error } = await supabase
+        .from("payments")
+        .update(discount === undefined ? rest : { ...rest, discount_amount: discount })
+        .eq("id", id));
+      if (error && discount !== undefined) ({ error } = await supabase.from("payments").update(rest).eq("id", id));
+    }
+  }
   if (error) throw error;
 
   await reallocatePayment(supabase, id, settledNow(patch.amount, discount ?? 0), patch.orderIds, discount ?? 0);

@@ -6186,3 +6186,32 @@ own look except the accent colour and grouped amounts.
   confirm is red); status pills use the web's words ("Accepted").
 - **Amounts** carry thousands separators everywhere ("AED 1,297.00"):
   AppTheme.money promised it and never did.
+
+## 2026-11-28 — A receipt number on every payment (typed, from the receipt book)
+
+Owner: "in the payments collection page, Make option for receipt number for
+each of the receipts." Asked whether the app should number them or the
+collector should type them: "Typed in (receipt book)".
+
+- `payments.receipt_number text`, nullable (scratchpad/RUN-ME-49). Plain
+  text, not a number: receipt books are printed with prefixes and leading
+  zeros ("A-00412"). A check refuses an empty or all-space value, so a
+  blank is always null.
+- NOT unique and NOT generated — Rejected: a database sequence (like
+  CN/GRV numbers). The owner chose the printed book, and two salesmen can
+  carry books that both start at 001, so a unique index would refuse real
+  collections.
+- Optional on the collect sheet (web Log Payment; phone Payments → Add and
+  the customer's collect sheet), for cash and cheque alike, placed above
+  Notes. Editable on the edit sheet by whoever may edit the payment, as the
+  web's edit sheet already lets the collector change everything else they
+  typed. Shown on each payment row as "Receipt A-00412" (web, phone, Mac
+  table and web-look rows) and as a "Receipt No" column in the Payments
+  Excel export.
+- Both apps work before RUN-ME-49 is run: the list asks for the column and
+  asks again without it; a save with a receipt number retries without it;
+  an edit sends it only when it changed. Until the file is run a typed
+  number is silently not kept — the same trade-off RUN-ME-25 made for
+  discounts.
+- No new RLS: the column is on `payments`, whose policies already decide
+  who reads and writes the row.

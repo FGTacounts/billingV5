@@ -124,6 +124,7 @@ export async function GET(req: NextRequest) {
       { header: "Customer", key: "customer", width: 30 },
       { header: "Amount", key: "amount", width: 14 },
       { header: "Method", key: "method", width: 12 },
+      { header: "Receipt No", key: "receipt", width: 14 },
       { header: "Status", key: "status", width: 12 },
     ];
     const payments = await fetchPayments(supabase);
@@ -133,6 +134,7 @@ export async function GET(req: NextRequest) {
         customer: p.customer?.name ?? "",
         amount: p.amount,
         method: p.cheque_number ? "Cheque" : "Cash",
+        receipt: p.receipt_number ?? "",
         status: p.status,
       });
     }

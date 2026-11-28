@@ -69,6 +69,9 @@ export default function LogPaymentSheet({
   const [chequeDate, setChequeDate] = useState(localDateKey(new Date()));
   const [chequePhoto, setChequePhoto] = useState<Blob | null>(null);
   const [notes, setNotes] = useState("");
+  // The number printed on the paper receipt handed to the customer — typed,
+  // optional, for cash and cheque alike (DECISIONS 2026-11-28).
+  const [receiptNumber, setReceiptNumber] = useState("");
   const [scanning, setScanning] = useState(false);
   const [saving, setSaving] = useState(false);
   const [confirmPartial, setConfirmPartial] = useState(false);
@@ -216,6 +219,7 @@ export default function LogPaymentSheet({
           cheque_date: paymentType === "cheque" ? chequeDate || null : null,
           cheque_photo_ref: chequePhotoRef,
           payer_details: paymentType === "cheque" ? payerDetails || null : null,
+          receipt_number: receiptNumber.trim() || null,
           notes: combinedNotes || null,
           allocations,
         });
@@ -606,6 +610,14 @@ export default function LogPaymentSheet({
           </div>
         </div>
       )}
+
+      <Label>{t("payments.receiptNumber")}</Label>
+      <TextInput
+        placeholder={t("payments.receiptNumberPlaceholder")}
+        value={receiptNumber}
+        onChange={(e) => setReceiptNumber(e.target.value)}
+        autoComplete="off"
+      />
 
       <Label>{t("payments.notes")}</Label>
       <textarea

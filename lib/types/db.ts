@@ -300,6 +300,9 @@ export interface Payment {
   cheque_date: string | null;
   cheque_status: ChequeStatus | null;
   cheque_photo_ref: string | null; // Drive file reference
+  // Number on the paper receipt the collector handed over, as typed
+  // (scratchpad/RUN-ME-49). Optional; undefined before that file is run.
+  receipt_number?: string | null;
   notes: string | null;
   created_at: string;
   updated_at: string;

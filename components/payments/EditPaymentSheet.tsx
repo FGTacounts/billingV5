@@ -50,6 +50,7 @@ export default function EditPaymentSheet({
   const [chequeNumber, setChequeNumber] = useState(payment.cheque_number ?? "");
   const [chequeDate, setChequeDate] = useState(payment.cheque_date ?? localDateKey(new Date()));
   const [notes, setNotes] = useState(payment.notes ?? "");
+  const [receiptNumber, setReceiptNumber] = useState(payment.receipt_number ?? "");
   const [receivedOn, setReceivedOn] = useState(localDay(payment.created_at));
   const [customer, setCustomer] = useState<Pick<Customer, "id" | "name" | "code"> | null>(payment.customer);
   const [changingCustomer, setChangingCustomer] = useState(false);
@@ -126,6 +127,10 @@ export default function EditPaymentSheet({
         cheque_number: paymentType === "cheque" ? chequeNumber || null : null,
         cheque_date: paymentType === "cheque" ? chequeDate || null : null,
         notes: notes || null,
+        // Sent only when it changed, so an edit on a database without the
+        // column (RUN-ME-49 not run) never mentions it.
+        receipt_number:
+          receiptNumber.trim() !== (payment.receipt_number ?? "") ? receiptNumber.trim() || null : undefined,
       });
       onSaved();
     } catch (e) {
@@ -312,6 +317,14 @@ export default function EditPaymentSheet({
           <TextInput type="date" value={chequeDate} onChange={(e) => setChequeDate(e.target.value)} className="!w-auto" />
         </div>
       )}
+
+      <Label>{t("payments.receiptNumber")}</Label>
+      <TextInput
+        placeholder={t("payments.receiptNumberPlaceholder")}
+        value={receiptNumber}
+        onChange={(e) => setReceiptNumber(e.target.value)}
+        autoComplete="off"
+      />
 
       <Label>{t("payments.notes")}</Label>
       <textarea

@@ -161,6 +161,12 @@ export default function PaymentsView({ user }: { user: AppUser }) {
                     {p.cheque_number
                       ? `${t("payments.chequeNumbered", { number: p.cheque_number })}${p.cheque_bank ? ` · ${p.cheque_bank}` : ""}`
                       : t("payments.cash")}
+                    {p.receipt_number && (
+                      <>
+                        {" · "}
+                        <span className="tabular-nums">{t("payments.receiptNumbered", { number: p.receipt_number })}</span>
+                      </>
+                    )}
                     {" · "}
                     {new Date(p.created_at).toLocaleDateString()}
                     {p.collector?.full_name ? ` · ${p.collector.full_name}` : ""}

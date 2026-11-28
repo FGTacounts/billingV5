@@ -1,5 +1,20 @@
 # What changed, and what you need to do
 
+## 2026-11-28 — Receipt number on every payment
+
+**Run `scratchpad/RUN-ME-49-payment-receipt-numbers.sql`** (Supabase → SQL
+Editor; check the address bar says isdeheipdfmwzmmnnidr). The last result
+should be one row: receipt_number / text / YES. Then deploy the web app and
+put the new app build on devices.
+
+- Collecting a payment now has a **Receipt number** field (optional) —
+  type the number printed on the paper receipt you gave the customer. It
+  works for cash and cheque.
+- Each payment in the list shows it ("Receipt A-00412"), you can correct it
+  from the payment's edit sheet, and the Payments Excel export has a
+  "Receipt No" column.
+- Until the SQL is run the field shows but the number is not kept.
+
 ## 2026-11-27 — Order PDF and Excel file names: INV-4712-CUSTOMER NAME
 
 Nothing to run. Deploy the web app and put the new app build on devices.
